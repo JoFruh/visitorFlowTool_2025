@@ -1,0 +1,267 @@
+#Automatically generate Area of Interest (AoI or Zielgebiete)
+
+#inputs: network (nodes and edges: tbl_graph format) with attractiveness information,
+          #raster of AoI areas
+
+#outputs: modified network and collection of polygons (sf)
+# library(concaveman)
+
+#source C FUNCTIONS
+# Rcpp::sourceCpp("R/utlities/CPP_FUNCTIONS.cpp")
+
+#' @importFrom dplyr %>%
+generateAoI2 <- function(network, minThresh,
+                         DULN = NULL, DULN_all = NULL){
+
+  sf::sf_use_s2(TRUE)
+  #avoid problems when combining polygons
+  polygons <- sf::st_sfc(crs = 4326) #list of final generated sf polygons #
+
+
+  networkPts <- terra::vect(network %>% tidygraph::activate(nodes) %>% dplyr::as_tibble() %>% sf::st_as_sf())
+
+  # networkEdgs <- terra::vect(network %>% tidygraph::activate(edges) %>% dplyr::as_tibble() %>% sf::st_as_sf())
+  #get vertices above selected threshold (Areas of Interest)
+
+  #nodes <- igraph::V(network)$nodeID[igraph::V(network)$DULN > minThresh]
+  #instead, get vertices within selected raster
+  rasterSel <- DULN_all
+  rasterSel[rasterSel < minThresh] <- NA
+  rasterSel[rasterSel >= minThresh] <- 1
+  # rasterSel <- terra::buffer(rasterSel, 10)
+  rasterSel <- terra::as.polygons(rasterSel , aggregate = TRUE , na.rm = TRUE) #TRUE
+  rasterSel <- terra::disagg(rasterSel)
+
+
+  ##### OLDER: SELECT NODES AND MAKE POLYGONS WITH NODES ####
+  #
+
+  nodes <- networkPts[terra::intersect(networkPts ,rasterSel)]$nodeID
+  nodes <- nodes[!is.na(nodes)]
+
+#
+#
+#   # edgs <- networkEdgs[terra::intersect(networkEdgs ,rasterSel)]$edgeID
+#   # edgs <- edgs[!is.na(edgs)]
+#
+#   # nodes <- network %>% tidygraph::activate(edges) %>% igraph::ends(edgs) %>% as.vector() %>% unique()
+  #grow nodes selection by one node?
+  # allNodes <- igraph::ego(network, order = 1, nodes)
+  # newSelectionNodes <- unique(unlist(allNodes))
+
+
+
+  #using nodes to create polygons
+
+#decompose into components (groups of vertices that are inter-connected)
+AOINetwork <- igraph::subgraph(network, nodes)#newSelectionNodes
+AOIComponents <- igraph::components(AOINetwork)
+#for each component, create polygons
+print( unique(AOIComponents$membership))
+largeComponents <- which(AOIComponents$csize > 10)
+for(comp in largeComponents){
+
+  pts <- igraph::V(AOINetwork)$geometry[AOIComponents$membership == comp]
+
+  #create polygon
+  poly <- concaveman::concaveman(pts %>% dplyr::as_tibble( )%>% sf::st_as_sf(), concavity = 1)
+  if(!is.na(dplyr::as_tibble(poly)) ){
+    #make sure isValid is not NA (causes bug)
+    isValid <- sf::st_is_valid(poly)
+    if(is.na(isValid)){isValid <- FALSE}
+    if( isValid == FALSE  ){
+      poly <- sf::st_make_valid(sf::st_set_precision(poly, 1e6))
+      }
+
+      if(as.numeric( sf::st_area(poly) ) >   10000){# m^2
+
+         #when polys are valid and of right size
+        #give poly a DULN value
+        poly$DULN <- mean(igraph::V(AOINetwork)$DULN[AOIComponents$membership == comp])
+
+        #grow polygons slightly to better contain vertices
+        poly <- sf::st_buffer(poly, dist = 50)
+
+        #append to list
+      # browser()
+        # if(terra::crs(poly) != terra::crs(polygons)){poly <- terra::project(poly, "EPSG:3857")}
+        polygons <- rbind(polygons, poly)
+
+        # plot(poly, add = TRUE, lwd = 3)
+        print("AREA")
+        print(sf::st_area(poly))
+      }
+
+  }
+  # poly <- st_cast(st_combine(pts), "POLYGON")
+}
+
+
+#CHECK FOR OVERLAPS, UNIONISE IF SO
+#repeat this process twice (as a single run through may create overlaps)
+for(polyProcess in 1:2){
+  intersectingPolys <- sf::st_overlaps(polygons, sparse = FALSE)
+  diag(intersectingPolys) <- TRUE
+  # diag(intersectingPolys) <- FALSE
+  #determine which polygons intersect with others
+  sizeIntrPoly <- rowSums(intersectingPolys)
+
+  #if there are true overlaps, not only with themselves -> c(1, 1, 1 etc..)
+  if(prod(sizeIntrPoly) != 1){
+    #get indices of order, while ignoring 0s
+    ordIntrPoly <- order(sizeIntrPoly, decreasing = TRUE)
+    #cut off tail of 0s
+    ordIntrPoly <- ordIntrPoly[1:sum(sizeIntrPoly > 1)]
+    oldOrdPoly <- ordIntrPoly
+    #get number of polygons involved
+    nPolyToTreat <- length(ordIntrPoly)
+    newPolygons <- sf::st_sfc(crs = 4326) #list of final generated sf polygons #
+    newPolygons$DULN <- NULL
+
+    #simplify table to have all grouped polygons together
+    #go through rows, when 1 row has multiple "TRUE"s, multiply these columns together and remove them but 1
+    rowNb <- 0
+    print(intersectingPolys)
+    rowsToTreat <- which(rowSums(intersectingPolys) > 1)
+    for(rowNb in rowsToTreat){
+print(paste0("rowNb:", rowNb))
+      if(sum(intersectingPolys[,rowNb]) > 0){
+        # if(sum(intersectingPolys[rowNb,]) > 1){
+        colToRemove <- which(intersectingPolys[rowNb,])[-1]
+        colToKeep <- which(intersectingPolys[rowNb,])[1]
+        intersectingPolys[, colToKeep] <- apply(intersectingPolys[, c(colToKeep, colToRemove)], MARGIN = 1, FUN = any)
+        intersectingPolys[, colToRemove] <- FALSE
+
+      }
+    }
+    intersectingPolys <- intersectingPolys[, colSums(intersectingPolys) > 1]
+
+    #double check single TRUEs per row (problematic ones have more than one TRUE per row)
+    #     problematicRows <- which(rowSums(intersectingPolys) > 1)
+    #
+    #     #within problematicRows, which ones overlap (columns with TRUES in these rows need to be combined)
+    #     # colSumPrbRow <- which(colSums(intersectingPolys[problematicRows,]) > 1)
+    #
+    #     #for each overlap
+    #     browser()
+    #     if(length(problematicRows) > 0){
+    #       colsToRemove <- c()
+    #       while(length(problematicRows) > 0){
+    #
+    #         # determine other rows with TRUEs overlapping within columns
+    #         otherRows <- which(colSums(intersectingPolys) > 1)
+    #
+    #         #keep other rows that overlap with first row
+    #         otherRows <- otherRows[otherRows %in% which(intersectingPolys[problematicRows[1], ])]
+    #         #remove first problematicRow from otherRows
+    #         otherRows <- otherRows[-1]
+    #         #generate a new single row
+    #         newRowSeq <- apply(intersectingPolys[c(problematicRows[1], otherRows),], 2, any)
+    #         #replace original
+    #         intersectingPolys[problematicRows[1],] <- newRowSeq
+    #
+    #
+    #         #save them to have columns removed later
+    #         colsToRemove <- c(colsToRemove, otherRows)
+    #         browser()
+    #
+    #         # combine all columns that share at least one TRUE on a row
+    #         randomCol <- sample(which(intersectingPolys[problematicRows[1],]), 1 )
+    #         intersectingPolys[problematicRows[1],] <- FALSE
+    #         intersectingPolys[problematicRows[1],randomCol] <- TRUE
+    #
+    #         #remove all treated rows from problematicRows
+    #         problematicRows <- problematicRows[-c(1, otherRows)]
+    #       }
+    #
+    #     }
+    # browser()
+    print(intersectingPolys)
+
+    #as long as polygons need to be treated
+    cols <- ncol(intersectingPolys)
+    if(is.null(cols)){
+      cols <- 1
+      intersectingPolys <- matrix(intersectingPolys, ncol = 1)
+    }
+
+    for(i in 1:cols){
+print(paste0("i: ", i))
+      #determine column of next poly, always take first as used ones are eliminated
+      # polyCol <- ordIntrPoly[1]
+
+      # nPolyTreated <- sum(intersectingPolys[polyCol,])+1
+      #determine polygons to combine, including current (i)
+      # polyToCombine <- c(polyCol, which(intersectingPolys[polyCol,]))
+      #combine polygons and append
+      newPoly <- sf::st_as_sf(sf::st_union(polygons[intersectingPolys[,i],], by_feature = FALSE, is_coverage = FALSE)  )
+
+      #keep only polygons
+      newPoly <- newPoly[sf::st_geometry_type(newPoly) == "POLYGON",]
+      if(!sf::st_is_valid(newPoly)){
+        #if problem with poly, switch off use s2 to avoid bug
+        sf::sf_use_s2(FALSE)
+        newPoly <- sf::st_as_sf(sf::st_union(polygons[intersectingPolys[,i],], by_feature = FALSE, is_coverage = FALSE)  )
+        sf::sf_use_s2(TRUE) #turn back on
+        if(!sf::st_is_valid(newPoly)){newPoly <- sf::st_make_valid(sf::st_set_precision(newPoly, 1e6))}
+      }
+
+      # if(is.na(nPolyToTreat)){browser()}
+      # if(currentPoly > 100){browser()}#in case things go wrong
+      values <- terra::extract(DULN$all, newPoly)
+      newPoly$DULN <- mean(values$all[values$all > -20], na.rm = TRUE) #get mean while avoiding symbolic values such as -20, -50, -100
+      newPolygons <- rbind(newPolygons, newPoly)
+
+      # #remove involved polys from ordered polys
+      # ordIntrPoly <- ordIntrPoly[!ordIntrPoly %in% polyToCombine]
+      # #remove other polygons from count
+      # nPolyToTreat <- nPolyToTreat - nPolyTreated
+    }
+    #get DULN of newPolygons
+    # newPolygons$DULN <- mean(terra::extract(envBase$DULN, newPolygons))
+    #remove intersecting polys and replaced with combined polys
+    polygons <- polygons[-oldOrdPoly,]
+    sf::st_geometry(newPolygons) <- "polygons"
+    polygons <- rbind(polygons, newPolygons)
+
+    # intersectingPolys <- which(diag(sf::st_intersects(polygons, sparse = FALSE)) )
+    #
+    # newPoly <- sf::st_as_sf(sf::st_union(c(poly$polygons, polygonEnv$polygonsList[intersectingPolys,]$polygons) ) )
+
+  }
+
+  #repeat this process twice (as a single run through may create overlaps)
+}
+
+
+
+
+
+print("POLYGONS")
+print(polygons)
+#detect polygons within others
+polygonsWithin <- sf::st_within(polygons, sparse = FALSE)
+
+#if TRUE, except for diagonal, remove polygon
+diag(polygonsWithin) <- FALSE
+
+#determine polygon to remove (row numbers with TRUE in it)
+indexToRemove <- which(apply(polygonsWithin, 1, any))
+#remove index
+if(length(indexToRemove) > 0){
+  polygons <- polygons[-indexToRemove,]
+}
+  # polygons <- sf::st_as_sf( rasterSel)
+  #
+  # sizes <- sf::st_area(polygons)
+  #
+  # polygons <- polygons[as.numeric(sizes) > 100000, ]
+  #
+  # values <- terra::extract(envBase$DULN$all, polygons, fun = mean)
+  #
+  # #ADD DULN VALUES
+  # polygons$DULN <- values$all
+  # polygons <- polygons[,-1]
+
+  return(polygons)
+}
