@@ -1,3 +1,16 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+src/*.o
+src/*.so
+src/*.dll
+swissborders.dbf
+swissborders.prj
+swissborders.shp
+swissborders.shx
+visitorFlowTool.Rproj
+
 inventory_db.sqlite
 inventory_db.sqlite-shm
 inventory_db.sqlite-wal
