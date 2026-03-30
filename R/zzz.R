@@ -20,8 +20,10 @@ NULL
 
 
 
-  if(path.expand("~") == "C:/Users/frueh/Documents"){
+  if(getwd() == "C:/Users/frueh/Documents/visitorFlowTool_final"){
     shiny::addResourcePath("www", "C:/Users/frueh/Documents/visitorFlowTool_final/inst/app/www")
+  }else if(getwd() == "C:/Users/frueh/VScode_GitClones/visitorFlowTool_2025"){
+    shiny::addResourcePath("www", "C:/Users/frueh/VScode_GitClones/visitorFlowTool_2025/inst/app/www")
   }else if(path.expand("~") == "/home/frueh"){
     shiny::addResourcePath("www", "/home/frueh/ShinyApps/visitorFlowTool/inst/app/www")
   }

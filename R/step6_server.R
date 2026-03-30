@@ -187,7 +187,7 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
           name <- "visitorFlow_pathsDownload.zip"
         }
 
-        return(name)
+        return(name) # nolint: return_linter.
       },
       content = function(file){
         # print("COPYING FILE")
