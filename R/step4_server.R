@@ -115,22 +115,14 @@ step4_server <- function(id, network, shape, confirm, i18n, currentLang,
     pathMap <- sf::st_transform(pathMap, 4326)
 
     basemap <- terra::project(basemap, "epsg:4326")
-#
-#     basemap_col <- terra::colorize(basemap, to="col")
 
-    # maxVal <- minmax(DULN)$minmax[2]
+    # Pre-crop the basemap once (vectExt is constant for this session)
+    vectShape_init <- terra::vect(shape_wgs)
+    vectExt_init   <- as.vector(terra::ext(terra::buffer(vectShape_init, 100)))
+    basemap_cropped <- terra::crop(basemap, vectExt_init)
 
-    #### UPDATE UI ####
-    # output$bannerUI <- shiny::renderUI({
-    #   if(r$isImported == FALSE){
-    #     imageMap(NS(id, "banner"), 'www/step3.png' , list(A = "0,0,0,100,70,100,70,0", B = "70,0,70,100,160,100,160,0") )
-    #
-    #   }else{
-    #     imageMap(NS(id, "banner"), 'www/step3.png' , list() )
-    #
-    #   }
-    # })
-
+    # Debounce the slider so renderPlot only fires 400ms after the user stops dragging
+    debouncedSlider <- shiny::debounce(shiny::reactive(input$AOISlider), 400)
 
     #### FUNCTIONS ####
 
@@ -139,23 +131,15 @@ step4_server <- function(id, network, shape, confirm, i18n, currentLang,
 
       plotUpdate()
 
-      #if plotting attractivity
-      # if(shiny::isolate(input$naturalAreasCheck == FALSE)){
-
-        r$x <- as.numeric(input$AOISlider)
+        r$x <- as.numeric(debouncedSlider())
         AOIBreaks <- c(145, r$x, 0) #TODO: 11 for now, get maxVal automatically later
-        # bb <- st_bbox(shape)
 
         vectShape <- terra::vect(shape_wgs)
         vectExt <- as.vector(terra::ext(terra::buffer(vectShape, 100)))
-        cat(file = stderr(), paste0("basemap: ", basemap, "\n") )
-        cat(file = stderr(), paste0("vectExt: ", vectExt, "\n") )
-        # basemap <- get_map(location = bb, maptype = 'terrain', source = 'google')
+        cat(file = stderr(), paste0("basemap: ", basemap_cropped, "\n") )
+        cat(file = stderr(), paste0("vectExt: ", vectExt_init, "\n") )
 
-        basemap <- terra::crop(basemap, vectExt)
-        # terra::ext(DULN_all) <- vectExt
-
-        terra::plotRGB(basemap, reset = FALSE)
+        terra::plotRGB(basemap_cropped, reset = FALSE)
         # cat(file = stderr(), "PLOT1")
 
         terra::plot(DULN_all, alpha = 0.3, col = c("white", "red3"),

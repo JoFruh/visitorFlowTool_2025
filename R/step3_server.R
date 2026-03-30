@@ -214,8 +214,11 @@ step3_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE
       return(spChoices)
     }
 
-    #read file
-    speciesData <- utils::read.csv2("www/data/tables/speciesInformation_SDMapsCH.csv")
+    # Cache species table — same file for every user, load only once per R session
+    if (!exists(".vft_speciesData", envir = .GlobalEnv)) {
+      .GlobalEnv$.vft_speciesData <- utils::read.csv2("www/data/tables/speciesInformation_SDMapsCH.csv")
+    }
+    speciesData <- .GlobalEnv$.vft_speciesData
 
 
 
@@ -503,43 +506,6 @@ step3_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE
 
         # Drop corresponding layers
         sdmLayer <- sdmLayer[[df_spInfo$sdm]]
-
-        progress$set(value = 4/4)
-
-
-
-          sdmLayer <- terra::rast("www/data/maps/species_new/SDM/SDMapsCH_100m_binary_4326_COG.tif")
-          # sdmLayer <- sdmLayer[[-116]]
-          sdmLayer <- terra::crop(sdmLayer, terra::vect(shp_WGS84))
-
-          #mask with values of 0 (NA may not work when wrapped)
-          sdmLayer <- terra::mask(sdmLayer, terra::vect(shp_WGS84), updatevalue = 0)
-
-          progress$set(value = 1/4)
-
-          non_empty <- terra::minmax(sdmLayer)[2, ] != 0
-          sdmLayer  <- sdmLayer[[non_empty]]
-          progress$set(value = 2/4)
-
-          cover_vals <- terra::global(sdmLayer, fun = "sum", na.rm = TRUE)$sum
-          names(cover_vals) <- names(sdmLayer)
-          progress$set(value = 3/4)
-
-          df_spInfo <- data.frame(
-            species   = gsub("[.]", " ", names(sdmLayer)),
-            sdm       = names(sdmLayer),
-            sdm_cover = cover_vals,
-            row.names = NULL,
-            stringsAsFactors = FALSE
-          )
-
-          df_spInfo <- df_spInfo[df_spInfo$sdm_cover > 0, ]
-          sdmLayer  <- sdmLayer[[df_spInfo$sdm]]
-
-        # } else {
-        #   print("RELOAD SAVED DATA")
-        #   df_spInfo <- df_spInfo_old
-        # }
 
         progress$set(value = 4/4)
         progress$close()
@@ -1959,54 +1925,60 @@ print("CHOSEN")
       }
         print("SMUPDATE")
       if(SMUpdate() > 0){
-        #get max value of both SM_pres and SM_noPres
-        r$maxVal <- terra::minmax(r$SM_pres)["max",]
-        if(r$maxVal < 12){r$maxVal <- 12}
-print(paste0("maxVal: ", r$maxVal))
-        #if no SM_pres, than just plot SM_noPres
+
+#expose reactive to refreshing plot
+       input$minValThreshold
+
+shiny::isolate({
+  #get max value of both SM_pres and SM_noPres
+  r$maxVal <- terra::minmax(r$SM_pres)["max",]
+  #make legend relative
+  r$minVal <- input$minValThreshold / 100 * r$maxVal
+  if (r$maxVal < 12) { r$maxVal <- 12 }
+
+  #if no SM_pres, than just plot SM_noPres
 
 #simply ignore noPres (simple solution for now)
 
-        # if(!is.null(SM_noPres)){
-        #   SMcolors <<- c("#FFFFFF00", grDevices::colorRampPalette(c("#FFD70080", "#FF8C0080", "#FF303080", "#9A32CD80", "#68228B80", "#3b035780"), alpha = TRUE)(maxVal))
-        #
-        #   # colorIntervals <- data.frame(from = 0:12, to = c(1:12, 1000), col = colors)
-        #
-        #   #plot map: range and colNA help set threshold
-        #   terra::plot(x= SM_noPres, col  = SMcolors, box = FALSE, axes = FALSE, colNA = "#3b035780",  type = "continuous", range = c(0, maxVal), add = TRUE, mar = c(6.1, 0, 0, 0), plg = list(ext = legExt, loc = "bottom", title = "Artenzahl", pax = list(side = 1)))
-        #   terra::lines(x = terra::vect(shp_WGS84), col = "black", lwd = 2)
-        #
-        # }
-        # basemap <- basemaps::basemap_raster(ext = st_bbox(shp_WebMerc))
+          # if(!is.null(SM_noPres)){
+          #   SMcolors <<- c("#FFFFFF00", grDevices::colorRampPalette(c("#FFD70080", "#FF8C0080", "#FF303080", "#9A32CD80", "#68228B80", "#3b035780"), alpha = TRUE)(maxVal))
+          #
+          #   # colorIntervals <- data.frame(from = 0:12, to = c(1:12, 1000), col = colors)
+          #
+          #   #plot map: range and colNA help set threshold
+          #   terra::plot(x= SM_noPres, col  = SMcolors, box = FALSE, axes = FALSE, colNA = "#3b035780",  type = "continuous", range = c(0, maxVal), add = TRUE, mar = c(6.1, 0, 0, 0), plg = list(ext = legExt, loc = "bottom", title = "Artenzahl", pax = list(side = 1)))
+          #   terra::lines(x = terra::vect(shp_WGS84), col = "black", lwd = 2)
+          #
+          # }
+          # basemap <- basemaps::basemap_raster(ext = st_bbox(shp_WebMerc))
 
-        #make legend relative
-        r$minVal <- input$minValThreshold/100 * r$maxVal
+          
 
-        if(!is.null(r$SM_pres)){
-          r$SMcolors <- c("#FFFFFF00", grDevices::colorRampPalette(c("#FFD700", "red", "red4"), alpha = TRUE)(r$maxVal-r$minVal))
+          if(!is.null(r$SM_pres)){
+            r$SMcolors <- c("#FFFFFF00", grDevices::colorRampPalette(c("#FFD700", "red", "red4"), alpha = TRUE)(r$maxVal-r$minVal))
 
-          # colorIntervals <- data.frame(from = 0:12, to = c(1:12, 1000), col = colors)
+            # colorIntervals <- data.frame(from = 0:12, to = c(1:12, 1000), col = colors)
 
-          #plot map: range and colNA help set threshold
-          if(r$currentLang == "de"){
-            terra::plot(x= r$SM_pres, box = FALSE, axes = FALSE, col  = r$SMcolors, colNA = "black",  type = "continuous", range = c(r$minVal, r$maxVal), fill_range = TRUE,
-                        add = TRUE, mar = c(6.1, 0, 0, 0), plg = list(x = "bottom", horiz = TRUE, title = "Sensitivität", title.adj = -1, pax = list(side = 1)))
-          }else if(r$currentLang == "fr"){
-            terra::plot(x= r$SM_pres, box = FALSE, axes = FALSE, col  = r$SMcolors, colNA = "black",  type = "continuous", range = c(r$minVal, r$maxVal), fill_range = TRUE,
-                        add = TRUE, mar = c(6.1, 0, 0, 0), plg = list(x = "bottom", horiz = TRUE, title = "Sensibilité", title.adj = -1, pax = list(side = 1)))
-          }else if(r$currentLang == "en"){
-            terra::plot(x= r$SM_pres, box = FALSE, axes = FALSE, col  = r$SMcolors, colNA = "black",  type = "continuous", range = c(r$minVal, r$maxVal), fill_range = TRUE,
-                        add = TRUE, mar = c(6.1, 0, 0, 0), plg = list(x = "bottom",horiz = TRUE, title = "Sensitivity", title.adj = -1, pax = list(side = 1)))
+            #plot map: range and colNA help set threshold
+            if(r$currentLang == "de"){
+              terra::plot(x= r$SM_pres, box = FALSE, axes = FALSE, col  = r$SMcolors, colNA = "black",  type = "continuous", range = c(r$minVal, r$maxVal), fill_range = TRUE,
+                          add = TRUE, mar = c(6.1, 0, 0, 0), plg = list(x = "bottom", horiz = TRUE, title = "Sensitivität", title.adj = -1, pax = list(side = 1)))
+            }else if(r$currentLang == "fr"){
+              terra::plot(x= r$SM_pres, box = FALSE, axes = FALSE, col  = r$SMcolors, colNA = "black",  type = "continuous", range = c(r$minVal, r$maxVal), fill_range = TRUE,
+                          add = TRUE, mar = c(6.1, 0, 0, 0), plg = list(x = "bottom", horiz = TRUE, title = "Sensibilité", title.adj = -1, pax = list(side = 1)))
+            }else if(r$currentLang == "en"){
+              terra::plot(x= r$SM_pres, box = FALSE, axes = FALSE, col  = r$SMcolors, colNA = "black",  type = "continuous", range = c(r$minVal, r$maxVal), fill_range = TRUE,
+                          add = TRUE, mar = c(6.1, 0, 0, 0), plg = list(x = "bottom", horiz = TRUE, title = "Sensitivity", title.adj = -1, pax = list(side = 1)))
+            }
+            terra::lines(x = terra::vect(shp_WGS84), col = "black", lwd = 2)
+
           }
-          terra::lines(x = terra::vect(shp_WGS84), col = "black", lwd = 2)
 
-        }
+          # add_legend(x = 0, y = -10, legend = 1:12, horiz = TRUE, title = "Artenzahl", title.adj = 0.5)
 
-print(r$SM_pres)
-        # add_legend(x = 0, y = -10, legend = 1:12, horiz = TRUE, title = "Artenzahl", title.adj = 0.5)
-
-        # basemap <- basemaps::basemap_raster(ext = st_bbox(shp_WebMerc))
-        terra::plot(basemap, 1, col = "#000000",legend = FALSE,  add = TRUE, alpha = alphaMap *0.7 )
+          # basemap <- basemaps::basemap_raster(ext = st_bbox(shp_WebMerc))
+          terra::plot(basemap, 1, col = "#000000",legend = FALSE,  add = TRUE, alpha = alphaMap *0.7 )
+        }) # end isolate
 
       }else if (SMUpdate() == 0){
         #plot empty area (correction: plot empty map)
@@ -2070,6 +2042,10 @@ print(r$SM_pres)
       # return(list(SM_pres = shiny::reactive(r$SM_pres), SMcolors = shiny::reactive(SMcolors), toSelectSpAfter = shiny::reactive(toSelectSpAfter), confirm = shiny::reactive({r3$confirm}), needHelp = reactive({r$needHelp}),
       #             groupSave_all = shiny::reactive(r$groupSave_all), groupSave_sens = shiny::reactive(r$groupSave_sens), groupSave_type = shiny::reactive(r$groupSave_type), groupSave_class = shiny::reactive(r$groupSave_class), checkboxSave = shiny::reactive(r$checkboxSave),
       #             filterList = shiny::reactive(r$filterList), weightInputs = shiny::reactive(r$weightInputs), weightNames = shiny::reactive(r$weightNames)) )
+    return(list(SM_pres = shiny::reactive(r$SM_pres), SMcolors = shiny::reactive(r$SMcolors), toSelectSpAfter = shiny::reactive(toSelectSpAfter), confirm = shiny::reactive({r3$confirm}), needHelp = reactive({r$needHelp}),
+                groupSave_all = shiny::reactive(r$groupSave_all), groupSave_sens = shiny::reactive(r$groupSave_sens), groupSave_type = shiny::reactive(r$groupSave_type), groupSave_class = shiny::reactive(r$groupSave_class), checkboxSave = shiny::reactive(r$checkboxSave),
+                filterList = shiny::reactive(r$filterList), weightInputs = shiny::reactive(r$weightInputs), weightNames = shiny::reactive(r$weightNames), species = shiny::reactive(r$keptSpecies),
+                currentLang = shiny::reactive(i18n()$get_translation_language()), minCutThresh = shiny::reactive(input$minValThreshold) ) )
     }, ignoreInit = TRUE)
 
     obsSelectAfter <- shiny::observeEvent(input$selectSpAfter, {

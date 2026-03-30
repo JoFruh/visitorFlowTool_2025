@@ -264,22 +264,14 @@ app_server <- function(input, output, session){
         if(exists("envBase_minCutThresh")){r$minCutThresh <- envBase_minCutThresh}
 
 
-        #get r$DULN
-        r$DULN <- terra::rast("www/data/maps/attr/allAttrs_COG_final.tif" )
-
-        #rename layers
-
-
-        #grow shape slightly
-        shape <- terra::vect(sf::st_buffer(r$shape, dist = 1000))
-        #crop
-        r$DULN <- terra::crop(r$DULN, terra::project(terra::vect(r$shape), "EPSG:4326"))
-
+        #get r$DULN — use global session cache (populated by sf_to_tidygraph or on first restore)
+        if (!exists(".vft_DULN_full", envir = .GlobalEnv)) {
+          .GlobalEnv$.vft_DULN_full     <- terra::rast("www/data/maps/attr/allAttrs_COG_final.tif")
+          .GlobalEnv$.vft_DULN_all_full <- terra::rast("www/data/maps/DULN/DULN_nat_majMaxMeanAGGBlur.tif")
+        }
+        r$DULN <- terra::crop(.GlobalEnv$.vft_DULN_full, terra::project(terra::vect(r$shape), "EPSG:4326"))
         names(r$DULN) <- c("jog", "dogNat", "ebikeNat", "walkNat","dogProx","walkSoc","bikerSport")
-        # r$DULN_all <- terra::focal(r$DULN$all, w=matrix(1, 3, 3), mean)
-        # r$DULN_all <- terra::aggregate(r$DULN_all, fact = 2)
-        r$DULN_all <- terra::rast("www/data/maps/DULN/DULN_nat_majMaxMeanAGGBlur.tif")
-        r$DULN_all <- terra::crop(r$DULN_all, sf::st_transform(r$shape, "epsg:4326"))
+        r$DULN_all <- terra::crop(.GlobalEnv$.vft_DULN_all_full, sf::st_transform(r$shape, "epsg:4326"))
 
         r$currentLang <- step1return$currentLang()
 
@@ -309,7 +301,7 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
           triggerStep6(1)
         }
       }
-    })
+    }, once = TRUE)
   }, ignoreInit = FALSE, ignoreNULL = FALSE)
   #
   #
@@ -407,7 +399,7 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
           restartSteps(restartSteps() + 1)
         }
       }
-    })
+    },ignoreInit = TRUE, once = TRUE)
   })
 
   #STEP 4:
@@ -519,7 +511,7 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
 
         triggerStep5(-1)
       }
-    })
+    }, once = TRUE)
 
     shiny::observeEvent(step4return$skip(), {
       if(step4return$isSkip() > 0 ){
@@ -532,7 +524,7 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
 
         triggerStep5(-1)
       }
-    })
+    }, once = TRUE)
 
 
   })
@@ -655,7 +647,7 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
 
         # restartSteps(restartSteps() + 1)
       }
-    })
+    }, once = TRUE)
   })
 
   #STEP 6
@@ -720,7 +712,7 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
         # isolate(triggerStep6(0)) #reset value without trigger
 
       }
-    }, ignoreInit = TRUE)
+    }, ignoreInit = TRUE, once = TRUE)
 
 
 
@@ -743,7 +735,6 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
         r$versionsUI <- step6return$versionsUI()
         r$networkList <- step6return$networkList()
         r$shp_PA <- step6return$shp_PA()
-browser()
         r$step <- 7
         shinyjs::click("downloadSave", asis = FALSE)
 
@@ -815,7 +806,7 @@ browser()
         }
         # restartSteps(restartSteps() + 1)
       }
-    }, ignoreInit = TRUE)
+    }, ignoreInit = TRUE, once = TRUE)
 
   })
 
@@ -1011,7 +1002,7 @@ browser()
         }
         # restartSteps(restartSteps() + 1)
       }
-    })
+    }, once = TRUE)
   })
 
 
