@@ -75,23 +75,18 @@ background: url('infoIcon.png');  background-size: cover; background-position: c
 
                               shinyjs::disabled(
                                 shiny::tagList(
-                                  shiny::uiOutput(shiny::NS(id, "agentCheckbox_ui"))
 
-                                  ,
-                                  shiny::h5( shiny::strong(i18n$t("Andere Informationen anzeigen"))
-                                  ),
-                                  shiny::checkboxInput(shiny::NS(id, "onlyAOIcheckbox"), i18n$t("Innerhalb Zielgebiete")
-                                  ),
-                                  shiny::checkboxInput(shiny::NS(id, "SMcheckbox"), i18n$t("Sensitivitäts-Matrix")
-                                  ),
-                                  shiny::checkboxInput(shiny::NS(id, "startingCheckbox"), i18n$t("Agenten Ausgangspunkte")
-                                  ),
-                                  shiny::checkboxInput(shiny::NS(id, "aoi"), i18n$t("Zielgebiete")
-                                  ),
-                                  shiny::checkboxInput(shiny::NS(id, "ParkingCheckbox"), i18n$t("Parking")
-                                  ),
-                                  shiny::checkboxInput(shiny::NS(id, "ResidentialCheckbox"), i18n$t("Neue Wohngebiete")
-                                  ),
+                                  shiny::uiOutput(shiny::NS(id, "agentCheckbox_ui")),
+
+                                  shiny::h5( shiny::strong(i18n$t("Andere Informationen anzeigen"))),
+
+                                  shiny::checkboxInput(shiny::NS(id, "SMcheckbox"), i18n$t("Sensitivitäts-Matrix")),
+                                  shiny::checkboxInput(shiny::NS(id, "aoi"), i18n$t("Zielgebiete")),
+                                  shiny::checkboxInput(shiny::NS(id, "onlyAOIcheckbox"), i18n$t("Innerhalb Zielgebiete")),
+                                  shiny::checkboxInput(shiny::NS(id, "startingCheckbox"), i18n$t("Agenten Ausgangspunkte")),
+                                  shiny::checkboxInput(shiny::NS(id, "PA_Checkbox"), i18n$t("Schutzgebiete")),
+                                  shiny::checkboxInput(shiny::NS(id, "ParkingCheckbox"), i18n$t("Parking")),
+                                  shiny::checkboxInput(shiny::NS(id, "ResidentialCheckbox"), i18n$t("Neue Wohngebiete")),
                                   shinyjs::useShinyjs()
                                   # shinyjs::disabled(shiny::checkboxInput(shiny::NS(id, "frictionCheckbox"), shiny::HTML(as.character(i18n$t(":Überlappung:")))))
                                 )
@@ -111,10 +106,12 @@ background: url('infoIcon.png');  background-size: cover; background-position: c
                                 tags$style(
                                   ".leaflet .legend { text-align: left;font-size: 15px;}"
                                 )),
-                       # leaflet::leafletOutput(shiny::NS(id, "pathUsageMap"), height = 500px)
-                       leaflet::leafletOutput(NS(id, "mapAreaLeaflet"), height = 0),
-                       shiny::uiOutput(NS(id, "mapArea"), height = 500),
-                       shiny::uiOutput(NS(id, "mapScript"), height = 0),
+                              div(style = "display: flex; justify-content: center;",
+                                  div(style = "width: 884px;height:600px;",
+                                    # leaflet::leafletOutput(shiny::NS(id, "pathUsageMap"), height = 500px)
+                                    shiny::uiOutput(NS(id, "mapArea_UI"), height = 500)
+                                  )
+                              ),
 
 
                        # download buttons ####

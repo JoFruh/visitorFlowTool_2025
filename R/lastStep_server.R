@@ -174,13 +174,13 @@ lastStep_server <- function(id, networkList , versionsUI ,
           }
 
           proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet"
-          )%>%
+          )|>
             leaflet::clearGroup(group = "paths")
 
           #update map with new version polylines
-          passageTable <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(r$result$pathUsage %>% tidygraph::activate(edges) ) ), drop = T, what = "ZM")
+          passageTable <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(edges) ) ), drop = T, what = "ZM")
           pal <- leaflet::colorNumeric(c("grey", colorRampPalette(c("yellow2", "orange2", "red2", "purple", "purple3"))(max(passageTable$passage)-1)), domain = c(0,max(passageTable$passage)) )
-          proxy %>% leaflet::addPolylines(data = passageTable,
+          proxy |> leaflet::addPolylines(data = passageTable,
                                           stroke = TRUE,
                                           weight = 2 + (as.numeric(passageTable[,agentTypePassage,drop = TRUE]) / max(as.numeric(passageTable[,"passage",drop = TRUE])) ) *2,
                                           color = ~pal(as.numeric(passageTable[,agentTypePassage,drop = TRUE])),
@@ -245,25 +245,25 @@ lastStep_server <- function(id, networkList , versionsUI ,
         # first print blank usageMap (with white color)
         #this is to set plot parameters. Above which a sensitivity matrix can be first plotted if needed
         # pathUsageColor <- c("white", "white")
-        passageTable <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(r$result$pathUsage %>% tidygraph::activate(edges) ) ), drop = T, what = "ZM")
+        passageTable <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(edges) ) ), drop = T, what = "ZM")
 
-        vertexTable <- dplyr::as_tibble(r$result$pathUsage %>% tidygraph::activate(nodes) )
+        vertexTable <- dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(nodes) )
         startingPoints <- sf::st_coordinates(sf::st_as_sf( vertexTable[vertexTable$nodeID %in% r$result$dayPop$startV , ]) )
 
         #test (not run)
         # leaflet::previewColors(pa<l, values = passageTable$passage)
         pal <- leaflet::colorNumeric(c("grey",colorRampPalette(c("yellow3", "orange2", "red2", "purple"))(max(passageTable$passage)-1) ), domain = c(0,max(passageTable$passage)) )
-        map <- leaflet::leaflet(data = passageTable, options = leaflet::leafletOptions(doubleClickZoom = FALSE, preferCanvas = TRUE), height = 500 ) %>%
-          leaflet::addMapPane("layer_SM", zIndex = 405)%>%
-          leaflet::addMapPane("layer1", zIndex = 410)%>% leaflet::addMapPane("layer2", zIndex = 420)%>% leaflet::addMapPane("layer3", zIndex = 450) %>%
-          leaflet::addProviderTiles("OpenStreetMap.CH", options = leaflet::providerTileOptions(opacity = 0.5, zIndex = 400)) %>%
+        map <- leaflet::leaflet(data = passageTable, options = leaflet::leafletOptions(doubleClickZoom = FALSE, preferCanvas = TRUE), height = 500 ) |>
+          leaflet::addMapPane("layer_SM", zIndex = 405)|>
+          leaflet::addMapPane("layer1", zIndex = 410)|> leaflet::addMapPane("layer2", zIndex = 420)|> leaflet::addMapPane("layer3", zIndex = 450) |>
+          leaflet::addProviderTiles("OpenStreetMap.CH", options = leaflet::providerTileOptions(opacity = 0.5, zIndex = 400)) |>
           leaflet::addPolylines(stroke = TRUE,
                                 weight = 2 + (passageTable$passage / max(passageTable$passage) ) *4,
                                 color = pal(passageTable$passage),
                                 fill = FALSE,
                                 opacity = 1,
                                 options = leaflet::pathOptions(pane = "layer2"),
-                                group = "paths")%>%
+                                group = "paths")|>
           leaflet::addPolygons(data = finalPolygons,
                                weight = 3,
                                color = "green",
@@ -272,17 +272,17 @@ lastStep_server <- function(id, networkList , versionsUI ,
                                stroke = TRUE,
                                options = leaflet::pathOptions(pane = "layer1"),
                                opacity = 0.3,
-                               fillOpacity = 0.1)%>%
+                               fillOpacity = 0.1)|>
           leaflet::addPolygons(data = sf::st_geometry(r$networkList[[r$selectedNetwork_position]]$parking), stroke = TRUE, fill = TRUE,
-                               fillColor = "steelblue", opacity = 1, fillOpacity = 0.3)%>%
-        # %>%
+                               fillColor = "steelblue", opacity = 1, fillOpacity = 0.3)|>
+        # |>
         #   leaflegend::addLegendImage(position = "topright",title = "Formen:", images = c("www/AOI.png", "www/parking.png", "www/Start.png"), labels = c("Zielgebiete","parkplatz", "Startposition des Agenten"),
-        #                              labelStyle = "font-size: 15px; text-align: left")%>%
-        #   leaflet::addLegend(title = "Wegnutzung:", position = "topright", labels = c("kein", "niedrigste", "mittlere", "hohe", "höchste") , colors = c("grey", "#dec402", "#de9802", "#e00417", "purple"))%>%
+        #                              labelStyle = "font-size: 15px; text-align: left")|>
+        #   leaflet::addLegend(title = "Wegnutzung:", position = "topright", labels = c("kein", "niedrigste", "mittlere", "hohe", "höchste") , colors = c("grey", "#dec402", "#de9802", "#e00417", "purple"))|>
 
           leaflet.extras::setMapWidgetStyle(list(background = "white"))
 
-        map <- map %>% leaflet::addPolygons(data= sf::st_zm(sf::st_transform(shape, "epsg:4326"), drop = TRUE, what = "ZM" ), stroke = TRUE, fill = FALSE, color = "black",
+        map <- map |> leaflet::addPolygons(data= sf::st_zm(sf::st_transform(shape, "epsg:4326"), drop = TRUE, what = "ZM" ), stroke = TRUE, fill = FALSE, color = "black",
                                             weight = 5, options = leaflet::pathOptions(pane = "layer2"))
 
         output$mapArea <- shiny::renderUI({
@@ -319,10 +319,10 @@ lastStep_server <- function(id, networkList , versionsUI ,
 
         # PLOT ALL PASSAGE
 
-        # usageLvls <- nrow( unique(dplyr::as_tibble(result$result$pathUsage %>% tidygraph::activate(edges) ) ["passage"]) )
+        # usageLvls <- nrow( unique(dplyr::as_tibble(result$result$pathUsage |> tidygraph::activate(edges) ) ["passage"]) )
         # pathUsageColor <- c("dark grey", grDevices::colorRampPalette(c( "yellow", "red", "red4", "purple"))(usageLvls-1) )
         #
-        # # passageTable <- st_as_sf(as_tibble(result$pathUsage %>% activate(edges) ) )
+        # # passageTable <- st_as_sf(as_tibble(result$pathUsage |> activate(edges) ) )
         #
         # bboxUsage <- sf::st_bbox(passageTable["passage"]$`_ogr_geometry_`)
         #
@@ -332,7 +332,7 @@ lastStep_server <- function(id, networkList , versionsUI ,
         #                nbreaks = usageLvls,
         #                add = TRUE)
         #
-        #           vertexTable <- dplyr::as_tibble(result$result$pathUsage %>% tidygraph::activate(nodes) )
+        #           vertexTable <- dplyr::as_tibble(result$result$pathUsage |> tidygraph::activate(nodes) )
         #
         #           dayPop <- result$result$dayPop
         #
@@ -348,10 +348,10 @@ lastStep_server <- function(id, networkList , versionsUI ,
         # #
         # #           #PLOT ONLY AOI PASSAGE
         # #
-        # #           usageLvls <- nrow( unique(dplyr::as_tibble(result$result$pathUsage %>% tidygraph::activate(edges) ) ["passageAOI"]) )
+        # #           usageLvls <- nrow( unique(dplyr::as_tibble(result$result$pathUsage |> tidygraph::activate(edges) ) ["passageAOI"]) )
         # #           pathUsageColor <- c("grey", grDevices::colorRampPalette(c( "yellow", "red", "red4", "purple"))(usageLvls-1) )
         # #
-        # #           # passageTable <- st_as_sf(as_tibble(result$pathUsage %>% activate(edges) ) )
+        # #           # passageTable <- st_as_sf(as_tibble(result$pathUsage |> activate(edges) ) )
         # #
         # #           bboxUsage <- dplyr::as_tibble(passageTable["passage"]$`_ogr_geometry_`)
         # #
@@ -361,7 +361,7 @@ lastStep_server <- function(id, networkList , versionsUI ,
         # #                nbreaks = usageLvls,
         # #                add = TRUE)
         # #
-        # #           vertexTable <- dplyr::as_tibble(result$result$pathUsage %>% tidygraph::activate(nodes) )
+        # #           vertexTable <- dplyr::as_tibble(result$result$pathUsage |> tidygraph::activate(nodes) )
         # #
         # #           dayPop <- result$dayPop
         # #           cat(file = stderr(), "TEST14")

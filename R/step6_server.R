@@ -2,7 +2,7 @@
 
 # Define server logic
 step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, confirm, i18n, currentLang, isFirstRun_stp6, finalPolygons = NULL, versionsUI = list(), triggerStp6 = 0,
-                         basemap = NULL, needHelp = FALSE, species = NULL){
+                         basemap = NULL, needHelp = FALSE, species = NULL, minCutThresh = NULL){
 
 
   shiny::moduleServer(id, function(input, output, session) {
@@ -52,6 +52,13 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
       })
     }
 
+
+    #LOAD PROTECTED AREAS DATA ####
+    bbox <- sf::st_bbox(shape)
+    shp_PA <-  sf::st_read( "www/data/maps/protectedAreas/PA_all.gpkg", wkt_filter = sf::st_as_text(sf::st_as_sfc(bbox)))
+
+    shp_PA <- sf::st_crop(shp_PA, shape)
+
     # Activate outputUI checkbox at start
     # if(currentLang == "de"){
     #
@@ -94,8 +101,8 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
     #                                                 query = 'SELECT * FROM "parkingShapes"',
     #                                                 wkt_filter = wkt
     #           )
-    #           r$parkingShapes <-  r1$parkingShapes %>%
-    #             dplyr::rename(polygons = .data$`_ogr_geometry_`) %>%
+    #           r$parkingShapes <-  r1$parkingShapes |>
+    #             dplyr::rename(polygons = .data$`_ogr_geometry_`) |>
     #             dplyr::select(.data$polygons)
     #           r$parkingShapes$id <- as.character(1:nrow(r1$parkingShapes))
     #           r$parkingShapes$isNew <- 0
@@ -176,52 +183,71 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
         name <- "visitorFlow_heruntergeladenWege.zip"
         }else if(r$currentLang == "fr"){
           name <- "visitorFlow_cheminsTelecharges.zip"
+        }else if(r$currentLang == "en"){
+          name <- "visitorFlow_pathsDownload.zip"
         }
 
         return(name)
       },
       content = function(file){
-        print("COPYING FILE")
+        # print("COPYING FILE")
         #save current version paths as file
         pathUsage <- r$networkList[[selectedNetwork_position]]$pathUsage
         dayPop <- r$networkList[[selectedNetwork_position]]$dayPop
 
+
         # first print blank usageMap (with white color)
         #this is to set plot parameters. Above which a sensitivity matrix can be first plotted if needed
         # pathUsageColor <- c("white", "white")
-        passageTable <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(pathUsage %>% tidygraph::activate(edges) ) ), drop = T, what = "ZM")
+        passageTable <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(pathUsage |> tidygraph::activate(edges) ) ), drop = T, what = "ZM")
 
-        vertexTable <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(pathUsage %>% tidygraph::activate(nodes) ) ) )
+        vertexTable <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(pathUsage |> tidygraph::activate(nodes) ) ) )
         startingPoints <- sf::st_geometry(sf::st_as_sf(vertexTable[vertexTable$nodeID %in% r$result$dayPop$startV , ]))
-        tempGDB_paths <- tempfile(pattern = "paths_" , fileext = ".gpkg")
-        sf::st_write(passageTable[,c("passage", "passageAOI", "passageWalk", "passageWalkAOI", "passageDog",
-                                     "passageDogAOI", "passageBike", "passageBikeAOI", "passageJogAOI", "passageAOI2")], dsn = tempGDB_paths )
 
-        tempGDB_startPts <- tempfile(pattern = "startPts_", fileext = ".gpkg")
-        sf::st_write(startingPoints, dsn = tempGDB_startPts , driver = "GPKG")
+        # Create a dedicated temp folder with a clean name
+        tmpDir <- tempfile(pattern = "paths_download")
+        dir.create(tmpDir)
+
+        # Define clean file names inside that folder
+        pathFile  <- file.path(tmpDir, "paths.gpkg")
+        startFile  <- file.path(tmpDir, "startingPoints.gpkg")
+        perimeterFile  <- file.path(tmpDir, "perimeter.gpkg")
+        aoiFile  <- file.path(tmpDir, "AOIs.gpkg")
+
+        txtFile  <- file.path(tmpDir, "INFO_paths_and_aois.txt")
+
+        # tempGDB_paths <- tempfile(pattern = "paths_" , fileext = ".gpkg")
+        sf::st_write(passageTable[,c("passage", "passageAOI", "passageWalk", "passageWalkAOI", "passageDog",
+                                     "passageDogAOI", "passageBike", "passageBikeAOI", "passageJogAOI", "passageAOI2")], dsn = pathFile )
+
+        # tempGDB_startPts <- tempfile(pattern = "startPts_", fileext = ".gpkg")
+        sf::st_write(startingPoints, dsn = startFile , driver = "GPKG")
 
         #put outline as file
-        tempGDB_outline <- tempfile(pattern = "outline_", fileext = ".gpkg")
-        sf::st_write(shape, dsn = tempGDB_outline , driver = "GPKG")
+        # tempGDB_outline <- tempfile(pattern = "outline_", fileext = ".gpkg")
+        sf::st_write(shape, dsn = perimeterFile , driver = "GPKG")
 
         #put areas of interest
-        tempGDB_aoi <- tempfile(pattern = "zielgebiet_", fileext = ".gpkg")
-        sf::st_write(finalPolygons, dsn = tempGDB_aoi , driver = "GPKG")
+        # tempGDB_aoi <- tempfile(pattern = "zielgebiet_", fileext = ".gpkg")
+        sf::st_write(finalPolygons, dsn = aoiFile , driver = "GPKG")
 
 
         #include a INFO.txt
-        tempTXT_info <- tempfile(pattern = "INFO_", fileext = ".txt")
-        fileConn<-file(tempTXT_info)
-        writeLines("This is a test,
-        Looking at how this text works.
-        Need to put information about files.
-        outline_... is the precised contours of the study.
-        paths_... are the simulated path usages with various passage information:
-        passage: general usage etc..", fileConn)
-        close(fileConn)
+        # tempTXT_info <- tempfile(pattern = "INFO_", fileext = ".txt")
+
+        # fileConn<-file(tempTXT_info)
+        writeLines("outline is the precised contours of the study.
+        paths are the simulated path usages with various passage information.
+        Aois are the determined Areas of Interest for recreation.", txtFile)
+        # close(fileConn)
+
+        # Zip using relative paths by setting wd to tmpDir
+        oldWd <- setwd(tmpDir)
+        on.exit(setwd(oldWd), add = TRUE)  # always restore wd
+
 
         #zip both
-        utils::zip(file, c(tempGDB_paths, tempGDB_startPts, tempGDB_outline, tempGDB_aoi, tempTXT_info), flags = NULL)
+        utils::zip(file, c("paths.gpkg", "startingPoints.gpkg", "perimeter.gpkg", "AOIs.gpkg", "INFO_paths_and_aois.txt"))
 
       }
     )
@@ -232,31 +258,48 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
       filename = function(){
 
         if(r$currentLang == "de"){
-          name <- "visitorFlow_SM.zip"
+          name <- "visitorFlow_SensitivitaetMatrix.zip"
         }else if(r$currentLang == "fr"){
-          name <- "visitorFlow_MdS.zip"
+          name <- "visitorFlow_MatriceDeSensibilite.zip"
+        }else if(r$currentLang == "en"){
+          name <- "visitorFlow_SensitivityMatrix.zip"
         }
 
         return(name)
       },
       content = function(file){
 
-      tempTIF_SM <- tempfile(pattern = "SM_", fileext = ".tif")
-      terra::writeRaster(SM_pres, filename = tempTIF_SM, filetype = "GTiff")
+        # Create a dedicated temp folder with a clean name
+        tmpDir <- tempfile(pattern = "SM_download")
+        dir.create(tmpDir)
+
+        tiffFile <- file.path(tmpDir, "SM.tif")
+
+      # tempTIF_SM <- tempfile(pattern = "SM_", fileext = ".tif")
+      terra::writeRaster(SM_pres, filename = tiffFile, filetype = "GTiff")
 
       #text info
-      tempTXT_info <- tempfile(pattern = "INFO_", fileext = ".txt")
-      fileConn<-file(tempTXT_info)
+      txtFile  <- file.path(tmpDir, "INFO_SM.txt")
+
+
+      # tempTXT_info <- tempfile(pattern = "INFO_", fileext = ".txt")
+      # fileConn<-file(tempTXT_info)
       writeLines(c("Information about the sensitivity matrix.",
                    "Values represent sensitivity (number of considered species present * weight given",
                    "ex: if a pixel has 3 species with weight of 1, and 3 species with weight of 2, it would have a sensitivity of 9",
+                   "---",
+                   ifelse(minCutThresh == 0,"", paste0("Important: This Sensitivity Matrix only shows the top ", minCutThresh, "% sensitivity values")),
                    "The species included are:",
                    paste(species)
-                   ), fileConn)
-      close(fileConn)
+                   ), txtFile)
+      # close(fileConn)
+
+      # Zip using relative paths by setting wd to tmpDir
+      oldWd <- setwd(tmpDir)
+      on.exit(setwd(oldWd), add = TRUE)  # always restore wd
 
       #zip both
-      utils::zip(file, c(tempTIF_SM, tempTXT_info), flags = NULL)
+      utils::zip(file, c("SM.tif", "INFO_SM.txt"), flags = NULL)
 
 
       }
@@ -438,9 +481,9 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
           # first print blank usageMap (with white color)
           #this is to set plot parameters. Above which a sensitivity matrix can be first plotted if needed
           # pathUsageColor <- c("white", "white")
-          passageTable <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(r$result$pathUsage %>% tidygraph::activate(edges) ) ), drop = T, what = "ZM")
+          passageTable <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(edges) ) ), drop = T, what = "ZM")
 
-          vertexTable <- dplyr::as_tibble(r$result$pathUsage %>% tidygraph::activate(nodes) )
+          vertexTable <- dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(nodes) )
           startingPoints <- sf::st_coordinates(sf::st_as_sf( vertexTable[vertexTable$nodeID %in% r$result$dayPop$startV , ]) )
 
 
@@ -494,36 +537,43 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
           #if there is no map, make one. If there is, update it
           if(!is.null(r$mapPresent)){
           if(r$mapPresent == FALSE | r$refreshMap == TRUE){
-          map <- leaflet::leaflet(data = passageTable, options = leaflet::leafletOptions(doubleClickZoom = FALSE, preferCanvas = TRUE), height = 500 ) %>%
-            leaflet::addMapPane("layer_SM", zIndex = 415)%>%
-            leaflet::addMapPane("layer1", zIndex = 410)%>% leaflet::addMapPane("layer2", zIndex = 420)%>% leaflet::addMapPane("layer3", zIndex = 450) %>%
+          map <- leaflet::leaflet(data = passageTable, options = leaflet::leafletOptions(doubleClickZoom = FALSE, preferCanvas = TRUE), height = 500 ) |>
+            leaflet::addMapPane("layer_SM", zIndex = 415)|>
+            leaflet::addMapPane("layer1", zIndex = 410)|> leaflet::addMapPane("layer2", zIndex = 420)|> leaflet::addMapPane("layer3", zIndex = 450) |>
             leaflet::addProviderTiles("OpenStreetMap.CH", options = leaflet::providerTileOptions(opacity = 0.5, zIndex = 400))
 
-            map <- map %>%
-              leaflegend::addLegendImage(position = "topright",title = i18n()$t("Formen:"), images = c("www/AOI.png", "www/parking.png", "www/bewohnen.png", "www/Start.png"), labels = c(i18n()$t("Zielgebiete"),i18n()$t("Parkplatz"), i18n()$t("Neue Wohngebiete"), i18n()$t("Agenten Ausgangspunkte")),
-                                         labelStyle = "font-size: 15px; text-align: left")%>%
-              leaflet::addLegend(title = i18n()$t("Wegnutzung:"), position = "topright", labels = c(i18n()$t("kein"), i18n()$t("niedrigste"), i18n()$t("mittlere"), i18n()$t("hohe"), i18n()$t("höchste")) , colors = c("darkgrey", "lightblue", "steelblue", "#182db5", "#37046e"))%>%
+            map <- map |>
+              leaflegend::addLegendImage(position = "topright",title = i18n()$t("Formen:"),
+                                         images = c("www/AOI.png", "www/parking.png", "www/bewohnen.png", "www/Start.png",
+                                                    "www/PA_1.png", "www/PA_2.png", "www/PA_3.png"),
+                                         labels = c(i18n()$t("Zielgebiete"),i18n()$t("Parkplatz"), i18n()$t("Neue Wohngebiete"), i18n()$t("Agenten Ausgangspunkte"),
+                                                    i18n()$t("Schutzgebiete – streng"), i18n()$t("Schutzgebiete – umfassend"), i18n()$t("Schutzgebiete – teilweise")),
+                                         labelStyle = "font-size: 15px; text-align: left")|>
+              leaflet::addLegend(title = i18n()$t("Wegnutzung:"), position = "topright", labels = c(i18n()$t("kein"), i18n()$t("niedrigste"), i18n()$t("mittlere"), i18n()$t("hohe"), i18n()$t("höchste")) , colors = c("darkgrey", "lightblue", "steelblue", "#182db5", "#37046e"))|>
               leaflet.extras::setMapWidgetStyle(list(background = "white"))
 
           }else{
-            map <- leaflet::leafletProxy("mapAreaLeaflet")%>%
-              leaflet::clearShapes()%>%leaflet::clearGeoJSON()%>%leaflet::clearImages()
+            map <- leaflet::leafletProxy("mapAreaLeaflet")|>
+              leaflet::clearShapes()|>leaflet::clearGeoJSON()|>leaflet::clearImages()
           }
           }else{
             #create map if null
-            map <- leaflet::leaflet(data = passageTable, options = leaflet::leafletOptions(doubleClickZoom = FALSE, preferCanvas = TRUE), height = 500 ) %>%
-              leaflet::addMapPane("layer_SM", zIndex = 415)%>%
-              leaflet::addMapPane("layer1", zIndex = 410)%>% leaflet::addMapPane("layer2", zIndex = 420)%>% leaflet::addMapPane("layer3", zIndex = 450) %>%
+            map <- leaflet::leaflet(data = passageTable, options = leaflet::leafletOptions(doubleClickZoom = FALSE, preferCanvas = TRUE), height = 500 ) |>
+              leaflet::addMapPane("layer_SM", zIndex = 415)|>
+              leaflet::addMapPane("layer1", zIndex = 410)|> leaflet::addMapPane("layer2", zIndex = 420)|> leaflet::addMapPane("layer3", zIndex = 450) |>
               leaflet::addProviderTiles("OpenStreetMap.CH", options = leaflet::providerTileOptions(opacity = 0.5, zIndex = 400))
 
-            map <- map %>%
-              leaflegend::addLegendImage(position = "topright",title = "Formen:", images = c("www/AOI.png", "www/parking.png", "www/bewohnen.png", "www/Start.png"), labels = c("Zielgebiete","Parkplatz", "Neue Wohngebiete", "Startposition des Agenten"),
-                                         labelStyle = "font-size: 15px; text-align: left")%>%
-              leaflet::addLegend(title = "Wegnutzung:", position = "topright", labels = c("kein", "niedrigste", "mittlere", "hohe", "höchste") , colors = c("darkgrey", "lightblue", "steelblue", "#182db5", "#37046e"))%>%
+            map <- map |>
+              leaflegend::addLegendImage(position = "topright",title = "Formen:", images = c("www/AOI.png", "www/parking.png", "www/bewohnen.png", "www/Start.png",
+                                                                                             "www/PA_1.png", "www/PA_2.png", "www/PA_3.png"),
+                                         labels = c(i18n()$t("Zielgebiete"),i18n()$t("Parkplatz"), i18n()$t("Neue Wohngebiete"), i18n()$t("Agenten Ausgangspunkte"),
+                                                    i18n()$t("Schutzgebiete – streng"), i18n()$t("Schutzgebiete – umfassend"), i18n()$t("Schutzgebiete – teilweise")),
+                                         labelStyle = "font-size: 15px; text-align: left")|>
+              leaflet::addLegend(title = "Wegnutzung:", position = "topright", labels = c(i18n()$t("kein"), i18n()$t("niedrigste"), i18n()$t("mittlere"), i18n()$t("hohe"), i18n()$t("höchste")) , colors = c("darkgrey", "lightblue", "steelblue", "#182db5", "#37046e"))|>
               leaflet.extras::setMapWidgetStyle(list(background = "white"))
             }
 
-            map <- map%>%leaflet::addPolylines(stroke = TRUE,
+            map <- map|>leaflet::addPolylines(stroke = TRUE,
                                   weight = 2 + (as.numeric(passageTable[,agentTypePassage,drop = TRUE]) / max(as.numeric(passageTable[,"passageAOI",drop = TRUE])) ) *2,
                                   color = ~pal(as.numeric(passageTable[,agentTypePassage,drop = TRUE])),
                                   fill = FALSE,
@@ -531,44 +581,57 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
                                   options = leaflet::pathOptions(pane = "layer2"),
                                   group = "paths",
                                   data = passageTable)
-          if(input$aoi == TRUE){
-            map <- map %>% leaflet::addPolygons(data = finalPolygons,
-                                                weight = 3,
-                                                color = "green4",
-                                                fillColor = "green",
-                                                fill = TRUE,
-                                                stroke = TRUE,
-                                                options = leaflet::pathOptions(pane = "layer1"),
-                                                opacity = 0.3,
-                                                fillOpacity = 0.1,
-                                                group = "AOI")
-          }
+            if(input$aoi == TRUE){
+              map <- map |> leaflet::addPolygons(data = finalPolygons,
+                                                  weight = 3,
+                                                  color = "green4",
+                                                  fillColor = "green",
+                                                  fill = TRUE,
+                                                  stroke = TRUE,
+                                                  options = leaflet::pathOptions(pane = "layer1"),
+                                                  opacity = 0.3,
+                                                  fillOpacity = 0.1,
+                                                  group = "AOI")
+            }
+
+            if(input$PA_Checkbox == TRUE){
+              map <- map |> leaflet::addPolygons(data = shp_PA,
+                                                  weight = 5,
+                                                  color = "green4",
+                                                  fillColor = NA,
+                                                  fill = FALSE,
+                                                  stroke = TRUE,
+                                                  options = leaflet::pathOptions(pane = "layer1"),
+                                                  opacity = 1,
+                                                  group = "PA")
+            }
+
 
 
             if(input$SMcheckbox == 1){
-              map <- map %>% leaflet::addRasterImage(raster::raster(SM_pres),
+              map <- map |> leaflet::addRasterImage(raster::raster(SM_pres),
                                            colors = SMcolors,
                                            opacity = 1,
                                            group = "SM")
             }
 
           if(input$ParkingCheckbox == TRUE){
-            map <- map%>%
+            map <- map|>
               leaflet::addPolygons(data = sf::st_geometry(r$networkList[[selectedNetwork_position]]$parking), stroke = TRUE, fill = TRUE,
                                    fillColor = "blue", opacity = 1, fillOpacity = 0.3, group = "parking")
           }
 
           if(input$ResidentialCheckbox == TRUE & length(r$networkList[[selectedNetwork_position]]$residential) > 0 ){
-            map <- map%>%
+            map <- map|>
               leaflet::addPolygons(data = sf::st_geometry(r$networkList[[selectedNetwork_position]]$residential), stroke = TRUE, fill = TRUE,
                                    fillColor = "#8a722b", opacity = 1, fillOpacity = 0.3, group = "residential")
           }
 
-          map <- map %>% leaflet::addPolygons(data= sf::st_zm(sf::st_transform(shape, "epsg:4326"), drop = TRUE, what = "ZM" ), stroke = TRUE, fill = FALSE, color = "black",
+          map <- map |> leaflet::addPolygons(data= sf::st_zm(sf::st_transform(shape, "epsg:4326"), drop = TRUE, what = "ZM" ), stroke = TRUE, fill = FALSE, color = "black",
                                               weight = 5, options = leaflet::pathOptions(pane = "layer2"))
 
           if(input$startingCheckbox == TRUE){
-            map <- map %>% leaflet::addCircleMarkers(lng = startingPoints[,"X"], lat = startingPoints[,"Y"] , group = "startingPoints",
+            map <- map |> leaflet::addCircleMarkers(lng = startingPoints[,"X"], lat = startingPoints[,"Y"] , group = "startingPoints",
                                                      color = "red", fill = FALSE, stroke = TRUE, opacity = 1,
                                                      options = leaflet::markerOptions(pane = "layer1"), weight = 2,
                                                      radius = 3)
@@ -581,17 +644,19 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
             #   leaflet::leafletOutput(NS(id, "mapAreaLeaflet"), height = 500)
             #
             # })
-            output$mapScript <- renderUI({
-              tags$script(HTML(paste0(
-                'document.getElementById("step6-mapAreaLeaflet").style.height="500px";',
-                'document.getElementById("step6-mapArea").style.height="0px";'
-              )))
+            # output$mapScript <- renderUI({
+            #   tags$script(HTML(paste0(
+            #     'document.getElementById("step6-mapAreaLeaflet").style.height="500px";',
+            #     'document.getElementById("step6-mapArea").style.height="0px";'
+            #   )))
+            # })
+            # output$mapArea <- renderUI({return(NULL)})
+            output$mapArea_UI <- renderUI({
+              leaflet::leafletOutput(NS(id, "mapAreaLeaflet"), height = 600, width = 884)
             })
-            output$mapArea <- renderUI({return(NULL)})
 
             output$mapAreaLeaflet <- leaflet::renderLeaflet({
               map
-
             })
           }
           }else{
@@ -601,19 +666,21 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
             #   leaflet::leafletOutput(NS(id, "mapAreaLeaflet"), height = 500)
             #
             # })
-            output$mapScript <- renderUI({
-              tags$script(HTML(paste0(
-                'document.getElementById("step6-mapAreaLeaflet").style.height="500px";',
-                'document.getElementById("step6-mapArea").style.height="0px";'
-              )))
+            # output$mapScript <- renderUI({
+            #   tags$script(HTML(paste0(
+            #     'document.getElementById("step6-mapAreaLeaflet").style.height="500px";',
+            #     'document.getElementById("step6-mapArea").style.height="0px";',
+            #     'document.getElementById("step6-mapAreaLeaflet").style.width="884px";',
+            #     'document.getElementById("step6-mapArea").style.width="0px";'
+            #   )))
+            # })
+            output$mapArea_UI <- renderUI({
+                leaflet::leafletOutput(NS(id, "mapAreaLeaflet"), height = 600, width = 884)
             })
-            output$mapArea <- renderUI({return(NULL)})
-
-
             output$mapAreaLeaflet <- leaflet::renderLeaflet({
               map
-
             })
+
           }
 
 
@@ -636,6 +703,8 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
 
 
       }else{
+
+
         # Not plot available
 
         # #DISABLE checkboxes:
@@ -658,30 +727,37 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
           noSimPic <- png::readPNG( "www/noSimYet_de.png")
         }else if(r$currentLang == "fr"){
           noSimPic <- png::readPNG( "www/noSimYet_fr.png")
+        }else if(r$currentLang == "en"){
+          noSimPic <- png::readPNG( "www/noSimYet_en.png")
         }
 
-        output$mapScript <- shiny::renderUI({
-          tags$script(HTML(paste0(
-            'document.getElementById("step6-mapAreaLeaflet").style.height="0px";',
-            'document.getElementById("step6-mapArea").style.height="500px";'
-
-          )))
-        })
+        # output$mapScript <- shiny::renderUI({
+        #   tags$script(HTML(paste0(
+        #     'document.getElementById("step6-mapAreaLeaflet").style.height="0px";',
+        #     'document.getElementById("step6-mapArea").style.height="600px";',
+        #     'document.getElementById("step6-mapAreaLeaflet").style.width="0px";',
+        #     'document.getElementById("step6-mapArea").style.width="884x";'
+        #
+        #   )))
+        # })
           #plot an image of empty simulation
-          output$mapArea <- shiny::renderUI({
+          # output$mapArea <- shiny::renderUI({})
 
-            shiny::renderPlot({
+        output$mapArea_UI <- renderUI({
+
+          shiny::plotOutput(NS(id, "mapArea"), height = 600, width = 884)
+
+        })
+          output$mapArea <- shiny::renderPlot({
 
               plot(1, type = "n", xlab = "",
                    ylab = "", xlim = c(0, 10),
                    ylim = c(0, 10), bty ="n",axes=F,frame.plot=F, xaxt='n', ann=FALSE, yaxt='n')
 
-              graphics::rasterImage(noSimPic,1,1,9,9)
+              graphics::rasterImage(noSimPic,0,0,10,10)
 
               print("EMPTY RENDERPLOT")
-            }, height = 600)
-
-          })
+            }, height = 600, width = 884)
 
           r$mapPresent <- FALSE
       }
@@ -909,7 +985,8 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
         #treat next step 6 as first run
         r$step6FirstRun <- TRUE
 
-        return(list(pathUsage = shiny::reactive({r$pathUsage}), networkList = shiny::reactive({r$networkList}), confirm = shiny::reactive({r$confirm}), newVersions = shiny::reactive({input$newVersionsButton}), trigger = shiny::reactive(r$triggerStp6), versionsUI = shiny::reactive(versionsUI) ) )
+        return(list(pathUsage = shiny::reactive({r$pathUsage}), networkList = shiny::reactive({r$networkList}), confirm = shiny::reactive({r$confirm}), newVersions = shiny::reactive({input$newVersionsButton}), trigger = shiny::reactive(r$triggerStp6), versionsUI = shiny::reactive(versionsUI) ,
+                    shp_PA = shiny::reactive(shp_PA)) )
 
         #trigger return to past (return with specific confirm value?)
       }, ignoreInit = TRUE)
@@ -942,6 +1019,16 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
 
             })
 
+          }else if(currentLang == "en"){
+            output$agentCheckbox_ui <- shiny::renderUI({
+
+              shiny::radioButtons(shiny::NS(id, "agentCheckbox"), "Type d'agent à afficher",
+                                  choices = c("all" = "1", "Walkers" = "2", "Cyclists" = "3", "Dog Walkers" = "4", "Joggers" = "5") ,
+                                  selected = 1
+              )
+
+            })
+
           }
 
           #...enable checkboxes
@@ -952,6 +1039,7 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
           shinyjs::enable(id = "startingCheckbox" )
           shinyjs::enable(id = "aoi")
           shinyjs::enable(id =  "ParkingCheckbox")
+          shinyjs::enable(id =  "PA_Checkbox")
           shinyjs::enable(id =  "ResidentialCheckbox")
           shinyjs::enable(id = "Bewohnen")
           shinyjs::enable(id = "newVersionsButton")
@@ -1007,6 +1095,7 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
           shiny::updateCheckboxInput(inputId = "startingCheckbox", value = FALSE)
           shiny::updateCheckboxInput(inputId = "aoi", value = FALSE)
           shiny::updateCheckboxInput(inputId = "ParkingCheckbox", value = FALSE)
+          shiny::updateCheckboxInput(inputId = "PA_Checkbox", value = FALSE)
           shiny::updateCheckboxInput(inputId = "ResidentialCheckbox", value = FALSE)
           shiny::updateCheckboxInput(inputId = "Bewohnen", value = FALSE)
 
@@ -1016,6 +1105,7 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
           shinyjs::disable(id = "SMcheckbox" )
           shinyjs::disable(id = "startingCheckbox" )
           shinyjs::disable(id = "aoi")
+          shinyjs::disable(id =  "PA_Checkbox")
           shinyjs::disable(id =  "ParkingCheckbox")
           shinyjs::disable(id =  "ResidentialCheckbox")
           shinyjs::disable(id = "Bewohnen")
@@ -1143,7 +1233,7 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
       obsUsage <- shiny::observeEvent(input$onlyAOIcheckbox, {
         if(input$onlyAOIcheckbox == 1){
           proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet"
-          )%>%
+          )|>
             leaflet::clearGroup(group = "paths")
 
           #determine agent to focus on
@@ -1158,9 +1248,9 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
           }else if(input$agentCheckbox == "5"){
             agentTypePassage <- "passageJogAOI"
           }
-          passageTable <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(r$result$pathUsage %>% tidygraph::activate(edges) ) ), drop = T, what = "ZM")
+          passageTable <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(edges) ) ), drop = T, what = "ZM")
           pal <- leaflet::colorNumeric(c("darkgrey", colorRampPalette(c("lightblue", "steelblue", "#182db5", "#37046e"))(max(passageTable$passageAOI)-1)), domain = c(0,max(passageTable$passageAOI)) )
-          proxy %>% leaflet::addPolylines(data = passageTable,
+          proxy |> leaflet::addPolylines(data = passageTable,
                                           stroke = TRUE,
                                           weight = 2 + (as.numeric(passageTable[,agentTypePassage,drop = TRUE]) / max(as.numeric(passageTable[,"passageAOI",drop = TRUE])) ) *2,
                                           color = ~pal(as.numeric(passageTable[,agentTypePassage,drop = TRUE])),
@@ -1170,7 +1260,7 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
                                           group = "paths")
         }else{
           proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet"
-          )%>%
+          )|>
             leaflet::clearGroup(group = "paths")
 
           #determine agent to focus on
@@ -1185,10 +1275,10 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
           }else if(input$agentCheckbox == "5"){
             agentTypePassage <- "passageJog"
           }
-          passageTable <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(r$result$pathUsage %>% tidygraph::activate(edges) ) ), drop = T, what = "ZM")
+          passageTable <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(edges) ) ), drop = T, what = "ZM")
           pal <- leaflet::colorNumeric(c("darkgrey", colorRampPalette(c("lightblue", "steelblue", "#182db5", "#37046e"))(max(passageTable$passage)-1)), domain = c(0,max(passageTable$passage)) )
 
-          proxy %>% leaflet::addPolylines(data = passageTable,
+          proxy |> leaflet::addPolylines(data = passageTable,
                                           stroke = TRUE,
                                           weight = 2 + (as.numeric(passageTable[,agentTypePassage,drop = TRUE]) / max(as.numeric(passageTable[,"passage",drop = TRUE])) ) *2,
                                           color = ~pal(as.numeric(passageTable[,agentTypePassage,drop = TRUE])),
@@ -1207,7 +1297,7 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
 
           if(input$onlyAOIcheckbox == 1){
             proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet"
-            )%>%
+            )|>
               leaflet::clearGroup(group = "paths")
 
             #determine agent to focus on
@@ -1222,9 +1312,9 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
             }else if(input$agentCheckbox == "5"){
               agentTypePassage <- "passageJogAOI"
             }
-            passageTable <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(r$result$pathUsage %>% tidygraph::activate(edges) ) ), drop = T, what = "ZM")
+            passageTable <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(edges) ) ), drop = T, what = "ZM")
             pal <- leaflet::colorNumeric(c("darkgrey", colorRampPalette(c("lightblue", "steelblue", "#182db5", "#37046e"))(max(passageTable$passageAOI)-1)), domain = c(0,max(passageTable$passageAOI)) )
-            proxy %>% leaflet::addPolylines(data = passageTable,
+            proxy |> leaflet::addPolylines(data = passageTable,
                                             stroke = TRUE,
                                             weight = 2 + (as.numeric(passageTable[,agentTypePassage,drop = TRUE]) / max(as.numeric(passageTable[,"passageAOI",drop = TRUE])) ) *2,
                                             color = ~pal(as.numeric(passageTable[,agentTypePassage,drop = TRUE])),
@@ -1247,12 +1337,12 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
               agentTypePassage <- "passageJog"
             }
             proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet"
-            )%>%
+            )|>
               leaflet::clearGroup(group = "paths")
 
-            passageTable <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(r$result$pathUsage %>% tidygraph::activate(edges) ) ), drop = T, what = "ZM")
+            passageTable <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(edges) ) ), drop = T, what = "ZM")
             pal <- leaflet::colorNumeric(c("darkgrey", colorRampPalette(c("lightblue", "steelblue", "#182db5", "#37046e"))(max(passageTable$passage)-1)), domain = c(0,max(passageTable$passage)) )
-            proxy %>% leaflet::addPolylines(data = passageTable,
+            proxy |> leaflet::addPolylines(data = passageTable,
                                             stroke = TRUE,
                                             weight = 2 + (as.numeric(passageTable[,agentTypePassage,drop = TRUE]) / max(as.numeric(passageTable[,"passage",drop = TRUE])) ) *2,
                                             color = ~pal(as.numeric(passageTable[,agentTypePassage,drop = TRUE])),
@@ -1270,7 +1360,7 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
       obsAOI <- shiny::observeEvent(input$aoi, {
         if(input$aoi == TRUE){
           proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet"
-          )%>%leaflet::addPolygons(data = finalPolygons,
+          )|>leaflet::addPolygons(data = finalPolygons,
                                         weight = 3,
                                         color = "green",
                                         fillColor = "green",
@@ -1282,7 +1372,35 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
                                         group = "AOI")
         }else{
           proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet"
-          ) %>% leaflet::clearGroup("AOI")
+          ) |> leaflet::clearGroup("AOI")
+        }
+
+      }, ignoreInit = TRUE)
+
+      #observe PA ####
+      obsPA <- shiny::observeEvent(input$PA_Checkbox, {
+        if(input$PA_Checkbox == TRUE){
+
+          # Define color palette for each value
+          pal <- leaflet::colorFactor(
+            palette = c("#a2e08a", "#4a8636", "#105200"),
+            levels = c(3, 2, 1)
+          )
+
+          proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet"
+          )|>leaflet::addPolygons(data = shp_PA,
+                                   weight = 5,
+                                   color = ~pal(PA_type),
+                                   fillColor = "white",
+                                   fill = TRUE,
+                                   stroke = TRUE,
+                                   options = leaflet::pathOptions(pane = "layer1"),
+                                   opacity = 1,
+                                   fillOpacity = 0.2,
+                                   group = "PA")
+        }else{
+          proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet"
+          ) |> leaflet::clearGroup("PA")
         }
 
       }, ignoreInit = TRUE)
@@ -1290,16 +1408,17 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
       #observe SM ####
       obsSM <- shiny::observeEvent(input$SMcheckbox, {
         print("OBS SM")
+
         if(input$SMcheckbox == 1){
           proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet"
-          )%>% leaflet::addRasterImage(raster::raster(SM_pres),
+          )|> leaflet::addRasterImage(raster::raster(SM_pres),
                                        colors = SMcolors,
                                           opacity = 1,
                                           group = "SM")
 
         }else{
           proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet"
-          )%>%leaflet::clearGroup(group = "SM")
+          )|>leaflet::clearGroup(group = "SM")
         }
 
 
@@ -1311,11 +1430,11 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
         if(length(r$networkList[[selectedNetwork_position]]$parking) > 0){
 
           if(input$ParkingCheckbox == TRUE){
-            proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet")%>%
+            proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet")|>
               leaflet::addPolygons(data = sf::st_geometry(r$networkList[[selectedNetwork_position]]$parking), stroke = TRUE, fill = TRUE,
                                    color = "steelblue", opacity = 1, fillOpacity = 0.3, group = "parking")
           }else{
-            proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet")%>%
+            proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet")|>
               leaflet::clearGroup("parking")
           }
         }
@@ -1326,11 +1445,11 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
 
         if(length(r$networkList[[selectedNetwork_position]]$residential) > 0){
           if(input$ResidentialCheckbox == TRUE){
-            proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet")%>%
+            proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet")|>
               leaflet::addPolygons(data = sf::st_geometry(r$networkList[[selectedNetwork_position]]$residential), stroke = TRUE, fill = TRUE,
                                    color = "#8a722b", opacity = 1, fillOpacity = 0.3, group = "residential")
           }else{
-            proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet")%>%
+            proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet")|>
               leaflet::clearGroup("residential")
           }
         }
@@ -1339,18 +1458,18 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
 
       #observe agent starting points ####
       obsAgentStart <- shiny::observeEvent(input$startingCheckbox, {
-        vertexTable <- dplyr::as_tibble(r$result$pathUsage %>% tidygraph::activate(nodes) )
+        vertexTable <- dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(nodes) )
         startingPoints <- sf::st_coordinates(sf::st_as_sf( vertexTable[vertexTable$nodeID %in% r$result$dayPop$startV , ]) )
 
         if(input$startingCheckbox == TRUE){
           proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet"
-          ) %>% leaflet::addCircleMarkers(lng = startingPoints[,"X"], lat = startingPoints[,"Y"] , group = "startingPoints",
+          ) |> leaflet::addCircleMarkers(lng = startingPoints[,"X"], lat = startingPoints[,"Y"] , group = "startingPoints",
                                                    color = "red", fill = FALSE, stroke = TRUE, opacity = 1,
                                                    options = leaflet::markerOptions(pane = "layer1"), weight = 2,
                                                    radius = 3)
         }else{
           proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet"
-          ) %>% leaflet::clearGroup("startingPoints")
+          ) |> leaflet::clearGroup("startingPoints")
         }
 
       }, ignoreInit = TRUE)
@@ -1361,8 +1480,9 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
 
         #Modal asking for image name
         shiny::showModal(
-          shiny::modalDialog(shiny::textInput(NS(id,"nameInput"), label = "Bild Name:"),
-            footer = actionButton(inputId = shiny::NS(id, "confirmName"), label = "Name bestätigen")
+          shiny::modalDialog(shiny::textInput(NS(id,"nameInput"), label = i18n()$t("Bild Name:") ),
+            footer = shiny::tagList(shiny::actionButton(inputId = shiny::NS(id, "dismissModal"), label = i18n()$t("Stornieren") ),
+                       shiny::actionButton(inputId = shiny::NS(id, "confirmName"), label = i18n()$t("Name bestätigen"), style = "background-color:#006268; color:#ffffff"  ) )
           )
         )
 
@@ -1387,6 +1507,7 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
         legendNb <- sum(
                         input$SMcheckbox,
                         input$startingCheckbox,
+                        input$PA_Checkbox,
                         (input$aoi |
                         input$ParkingCheckbox |
                         input$ResidentialCheckbox )
@@ -1411,9 +1532,9 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
                  widths = c(5, 1.5, 1))
         }
 
-        passageTable <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(r$result$pathUsage %>% tidygraph::activate(edges) ) ), drop = T, what = "ZM")
+        passageTable <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(edges) ) ), drop = T, what = "ZM")
 
-        vertexTable <- dplyr::as_tibble(r$result$pathUsage %>% tidygraph::activate(nodes) )
+        vertexTable <- dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(nodes) )
         # startingPoints <- sf::st_geometry(sf::st_coordinates(sf::st_as_sf( vertexTable[vertexTable$nodeID %in% r$result$dayPop$startV , ]) ) )
 
         cat(file = stderr(), "AOI\n")
@@ -1510,7 +1631,7 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
         cat(file = stderr(), "starting\n")
 
         if(input$startingCheckbox){
-          vertexTable <- dplyr::as_tibble(r$result$pathUsage %>% tidygraph::activate(nodes) )
+          vertexTable <- dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(nodes) )
           startingPoints <- sf::st_as_sf( vertexTable[vertexTable$nodeID %in% r$result$dayPop$startV , ])
 
           terra::plot(x = sf::st_geometry(startingPoints), add = TRUE, col = "red")
@@ -1525,17 +1646,17 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
         # leaflet::previewColors(pa<l, values = passageTable$passage)
         # pal <- leaflet::colorNumeric(c("grey",colorRampPalette(c("yellow3", "orange2", "red2", "purple"))(max(passageTable$passage)-1) ), domain = c(0,max(passageTable$passage)) )
         #
-        # map <- leaflet::leaflet(data = passageTable, options = leaflet::leafletOptions(doubleClickZoom = FALSE, preferCanvas = TRUE), height = 500 ) %>%
-        #   leaflet::addMapPane("layer_SM", zIndex = 415)%>%
-        #   leaflet::addMapPane("layer1", zIndex = 410)%>% leaflet::addMapPane("layer2", zIndex = 420)%>% leaflet::addMapPane("layer3", zIndex = 450) %>%
-        #   leaflet::addProviderTiles("OpenStreetMap.CH", options = leaflet::providerTileOptions(opacity = 0.5, zIndex = 400)) %>%
+        # map <- leaflet::leaflet(data = passageTable, options = leaflet::leafletOptions(doubleClickZoom = FALSE, preferCanvas = TRUE), height = 500 ) |>
+        #   leaflet::addMapPane("layer_SM", zIndex = 415)|>
+        #   leaflet::addMapPane("layer1", zIndex = 410)|> leaflet::addMapPane("layer2", zIndex = 420)|> leaflet::addMapPane("layer3", zIndex = 450) |>
+        #   leaflet::addProviderTiles("OpenStreetMap.CH", options = leaflet::providerTileOptions(opacity = 0.5, zIndex = 400)) |>
         #   leaflet::addPolylines(stroke = TRUE,
         #                         weight = 2 + (as.numeric(passageTable[,agentTypePassage,drop = TRUE]) / max(as.numeric(passageTable[,"passageAOI",drop = TRUE])) ) *2,
         #                         color = ~pal(as.numeric(passageTable[,agentTypePassage,drop = TRUE])),
         #                         fill = FALSE,
         #                         opacity = 1,
         #                         options = leaflet::pathOptions(pane = "layer2"),
-        #                         group = "paths")%>%
+        #                         group = "paths")|>
         #   leaflet::addPolygons(data = finalPolygons,
         #                        weight = 3,
         #                        color = "green",
@@ -1544,21 +1665,21 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
         #                        stroke = TRUE,
         #                        options = leaflet::pathOptions(pane = "layer1"),
         #                        opacity = 0.3,
-        #                        fillOpacity = 0.1)%>%
+        #                        fillOpacity = 0.1)|>
         #
         #   leaflet::addPolygons(data = sf::st_geometry(r$networkList[[selectedNetwork_position]]$parking), stroke = TRUE, fill = TRUE,
-        #                        fillColor = "steelblue", opacity = 1, fillOpacity = 0.3)%>%
+        #                        fillColor = "steelblue", opacity = 1, fillOpacity = 0.3)|>
         #   leaflegend::addLegendImage(position = "topright",title = "Formen:", images = c("www/AOI.png", "www/parking.png", "www/Start.png"), labels = c("Zielgebiete","parkplatz", "Startposition des Agenten"),
-        #                              labelStyle = "font-size: 15px; text-align: left")%>%
-        #   leaflet::addLegend(title = "Wegnutzung:", position = "topright", labels = c("kein", "niedrigste", "mittlere", "hohe", "höchste") , colors = c("grey", "#dec402", "#de9802", "#e00417", "purple"))%>%
+        #                              labelStyle = "font-size: 15px; text-align: left")|>
+        #   leaflet::addLegend(title = "Wegnutzung:", position = "topright", labels = c("kein", "niedrigste", "mittlere", "hohe", "höchste") , colors = c("grey", "#dec402", "#de9802", "#e00417", "purple"))|>
         #
         #   leaflet.extras::setMapWidgetStyle(list(background = "white"))
         #
-        # map <- map %>% leaflet::addPolygons(data= sf::st_zm(sf::st_transform(shape, "epsg:4326"), drop = TRUE, what = "ZM" ), stroke = TRUE, fill = FALSE, color = "black",
+        # map <- map |> leaflet::addPolygons(data= sf::st_zm(sf::st_transform(shape, "epsg:4326"), drop = TRUE, what = "ZM" ), stroke = TRUE, fill = FALSE, color = "black",
         #                                     weight = 5, options = leaflet::pathOptions(pane = "layer2"))
         #
         # if(input$startingCheckbox == TRUE){
-        #   map <- map %>% leaflet::addCircleMarkers(lng = startingPoints[,"X"], lat = startingPoints[,"Y"] , group = "startingPoints",
+        #   map <- map |> leaflet::addCircleMarkers(lng = startingPoints[,"X"], lat = startingPoints[,"Y"] , group = "startingPoints",
         #                                            color = "red", fill = FALSE, stroke = TRUE, opacity = 1,
         #                                            options = leaflet::markerOptions(pane = "layer1"), weight = 2,
         #                                            radius = 3)
@@ -1622,6 +1743,7 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
               points = c(points, 2)
             }
 
+
             #parking
             if(input$ParkingCheckbox == 1){
               colors = c(colors, "#3289a880")
@@ -1631,7 +1753,7 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
             }
 
             #residential
-            if(input$aoi == 1){
+            if(input$ResidentialCheckbox == 1){
               colors = c(colors, "#8a722b80")
               borders = c(borders, "#8a722b")
               legends = c(legends, "Neue Wohngebiete")
@@ -1652,6 +1774,18 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
             mtext("Formen:", cex = 1.5,  adj = 0)
           }
 
+          # protected areas
+          if(input$PA_Checkbox == 1){
+            plot.new()
+            legend("topleft",
+                   legend = c("streng", "umfassend", "teilweise"),
+                   border = c("#a2e08a", "#4a8636", "#105200"),
+                   cex = 2,
+                   bty = "n",
+                   inset = 0)
+            mtext("Schutzgebiete:", cex = 1.5,  adj = 0)
+          }
+
           #SM
           if(input$SMcheckbox == 1){
             plot.new()
@@ -1662,7 +1796,8 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
                    cex = 2,
                    bty = "n",
                    inset = 0)
-            mtext("Sensitivitätsmatrix:", cex = 1.5,  adj = 0)
+            mtext(ifelse(minCutThresh != 0, paste0("Sensitivitätsmatrix\n(oberer ", minCutThresh,"%):"),
+                         "Sensitivitätsmatrix:"), cex = 1.5,  adj = 0)
           }
 
           # Add Map information (scale bare etc.)
@@ -1749,7 +1884,7 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
             }
 
             #residential
-            if(input$aoi == 1){
+            if(input$ResidentialCheckbox == 1){
               colors = c(colors, "#8a722b80")
               borders = c(borders, "#8a722b")
               legends = c(legends, "Nouvelle zone d'habitation")
@@ -1770,6 +1905,18 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
             mtext("Formen:", cex = 1.5,  adj = 0)
           }
 
+          # protected areas
+          if(input$PA_Checkbox == 1){
+            plot.new()
+            legend("topleft",
+                   legend = c("stricte", "compréhensif", "partiel"),
+                   border = c("#a2e08a", "#4a8636", "#105200"),
+                   cex = 2,
+                   bty = "n",
+                   inset = 0)
+            mtext("Zones protégées:", cex = 1.5,  adj = 0)
+          }
+
           #SM
           if(input$SMcheckbox == 1){
             plot.new()
@@ -1780,7 +1927,8 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
                    cex = 2,
                    bty = "n",
                    inset = 0)
-            mtext("Matrice de sensibilité:", cex = 1.5,  adj = 0)
+            mtext(ifelse(minCutThresh != 0, paste0("Matrice de sensibilité\n(", minCutThresh,"% supérieurs):"),
+                         "Matrice de sensibilité:"), cex = 1.5,  adj = 0)
           }
 
           # Add Map information (scale bare etc.)
@@ -1796,6 +1944,136 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
             #write species names on right hand side
             lineSpace <- 1
             text(0, lineSpace, labels = "Espèces incluses:", adj = 0, font = 2)
+            for(sp in species){
+              lineSpace <- lineSpace - 0.02
+              text(0, lineSpace, labels = paste(sp, sep = "\n"), adj = 0, font = 3)
+            }
+
+
+
+          }
+        }else if(r$currentLang == "en"){
+
+          legend("topleft",
+                 legend = c("none", "minimum", "medium", "high", "maximum"),
+                 col = c("darkgrey", "lightblue", "steelblue", "#182db5", "#37046e"),
+                 lty = 1,
+                 lwd = 3,
+                 cex = 2,
+                 bty = "n",
+                 inset = 0)
+
+
+
+          mtext("Path usage:", cex = 1.5,  adj = 0)
+
+          par(mar = c(0, 0, 0, 0))
+
+          #starting points
+          if(input$startingCheckbox == TRUE){
+            plot.new()
+
+            legend("topleft",
+                   legend = "Agent starting points",
+                   col = "red",
+                   pch = 1,
+                   cex = 2,
+                   bty = "n",
+                   inset = 0)
+            mtext("Agents:", cex = 1.5,  adj = 0)
+
+
+          }
+
+          #parking, starting, residential, aoi
+          if(sum(input$aoi,
+                 input$ParkingCheckbox,
+                 input$ResidentialCheckbox ) > 0){
+            plot.new()
+
+            colors = c()
+            borders = c()
+            legends = c()
+            points = c()
+
+
+            #aoi
+            if(input$aoi == 1){
+              colors = c(colors, "#29ed1f30")
+              borders = c(borders, "#0b630650")
+              legends = c(legends, "Area of Interest")
+              points = c(points, 2)
+            }
+
+            #parking
+            if(input$ParkingCheckbox == 1){
+              colors = c(colors, "#3289a880")
+              borders = c(borders, "#3289a8")
+              legends = c(legends, "Parking")
+              points = c(points, 2)
+            }
+
+            #residential
+            if(input$ResidentialCheckbox == 1){
+              colors = c(colors, "#8a722b80")
+              borders = c(borders, "#8a722b")
+              legends = c(legends, "New Residential Area")
+              points = c(points, 2)
+            }
+
+            legend("topleft",
+                   legend = legends,
+                   pt.bg = colors,
+                   col = borders,
+                   pch = 22,
+                   pt.lwd = 3,
+                   pt.cex = 3,
+                   cex = 2,
+                   bty = "n",
+                   inset = 0)
+
+            mtext("Shapes:", cex = 1.5,  adj = 0)
+          }
+
+          # protected areas
+          if(input$PA_Checkbox == 1){
+            plot.new()
+            legend("topleft",
+                   legend = c("strict", "comprehensive", "partial"),
+                   border = c("#a2e08a", "#4a8636", "#105200"),
+                   cex = 2,
+                   bty = "n",
+                   inset = 0)
+            mtext("Protected areas:", cex = 1.5,  adj = 0)
+          }
+
+          #SM
+          if(input$SMcheckbox == 1){
+            plot.new()
+            legend("topleft",
+                   legend = c("minimum", "medium", "high", "maximum"),
+                   fill = c("#FFD700FF", "#FF8800FF", "#F40000FF", "#8B0000FF"),
+                   border = c("#FFD700FF", "#FF8800FF", "#F40000FF", "#8B0000FF"),
+                   cex = 2,
+                   bty = "n",
+                   inset = 0)
+            mtext(ifelse(minCutThresh != 0, paste0("Sensitivity Matrix\n(Top ", minCutThresh,"%):"),
+                         "Sensitivity Matrix:"), cex = 1.5,  adj = 0)
+          }
+
+          # Add Map information (scale bare etc.)
+          plot.new()
+
+
+
+
+          # species names (if SM active)####
+          if(input$SMcheckbox == TRUE){
+            plot.new()
+
+            #write species names on right hand side
+            lineSpace <- 1
+            text(0, lineSpace, labels = "Included species:", adj = 0, font = 2)
             for(sp in species){
               lineSpace <- lineSpace - 0.02
               text(0, lineSpace, labels = paste(sp, sep = "\n"), adj = 0, font = 3)
@@ -1900,7 +2178,7 @@ cat(file = stderr(), "FINISHED TIFF\n")
         #no confirm button pressed
         r$confirm <- 0
         return(list(pathUsage = shiny::reactive({r$pathUsage}), networkList = shiny::reactive({r$networkList}), confirm = shiny::reactive({r$confirm}), newVersions = shiny::reactive({input$newVersionsButton}), trigger = shiny::reactive(r$triggerStp6), versionsUI = shiny::reactive(versionsUI),
-                    currentLang = shiny::reactive(i18n()$get_translation_language()) ) )
+                    currentLang = shiny::reactive(i18n()$get_translation_language()), shp_PA = shiny::reactive(shp_PA) ) )
 
       }, ignoreInit = TRUE, once = TRUE)
 
@@ -1940,7 +2218,7 @@ cat(file = stderr(), "FINISHED TIFF\n")
 #no confirmation at first
     r$confirm <- 0
     return(list(pathUsage = shiny::reactive(r$result$pathUsage), networkList = shiny::reactive(r$networkList), confirm = shiny::reactive({r$confirm}), newVersions = shiny::reactive(input$newVersionsButton), trigger = shiny::reactive(r$triggerStp6), versionsUI = shiny::reactive(r$versionsUI),
-                currentLang = shiny::reactive(i18n()$get_translation_language()) ) )
+                currentLang = shiny::reactive(i18n()$get_translation_language()), shp_PA = shiny::reactive( shp_PA) ) )
 
   })
 }

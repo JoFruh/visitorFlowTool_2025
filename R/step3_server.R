@@ -2,7 +2,9 @@
 # Define server logic
 #' @importFrom promises %...>%
 #' @importFrom promises %...!%
-step3_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE, df_spInfo_old = NULL,
+#'
+# df_spInfo_old = NULL,
+step3_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE,
                          filterList = NULL, checkboxSave = NULL){
 
   #shape is the submitted shapefile, or shape produced by submitted coordinates
@@ -37,7 +39,7 @@ step3_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE
 
     r <- shiny::reactiveValues()
 
-    r$df_spInfo <- df_spInfo_old
+    r$df_spInfo <- NULL #df_spInfo_old
     r$needHelp <- needHelp
     r$filterList <- filterList
     r$checkboxSave <- checkboxSave
@@ -58,7 +60,7 @@ step3_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE
     SMUpdate <- shiny::reactiveVal(0)
     triggerUpdate <- shiny::reactiveVal()
     SM <- NULL
-    SMcolors <- NULL
+    r$SMcolors <- NULL
     r$SM_pres <- NULL
     SM_noPres <- NULL
     toSelectSpAfter <- FALSE
@@ -107,22 +109,10 @@ step3_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE
 
     #INTERNAL FUNCTIONS ####
 
-  #   imageMap <- function(inputId, imgsrc, opts) {
-  #     areas <- lapply(names(opts), function(n)
-  #       shiny::tags$area(title=n, coords=opts[[n]],
-  #                        href="#", shape="poly"))
-  #     js <- paste0("$(document).on('click', 'map area', function(evt) {
-  # evt.preventDefault();
-  # var val = evt.target.title;
-  # Shiny.onInputChange('", inputId, "', val);})")
-  #     list(
-  #       shiny::tags$img(height = 70,src=imgsrc, usemap=paste0("#", inputId),
-  #                       shiny::tags$head(tags$script(shiny::HTML(js)))),
-  #       shiny::tags$map(name=inputId, areas))
-  #   }
-
-
     buildHTMLList <- function(speciesList, speciesData, language){
+
+      #TODO:
+      # if(length(r3$spChoices > 0)){
 
       spChoice_names <- c()
 
@@ -130,19 +120,21 @@ step3_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE
       #cycle through all species
       for(sp in 1:length(speciesList)){
 
-        #TEMPORARY: skip missing species TODO:determine why they are missing in final dataset
         # if(!speciesList[sp] %in% c("Castor fiber", "Corvus monedula") ){
           print(speciesList[sp])
           latinN <- speciesList[[sp]]
+
+
+          #only 1 link for now (not language dependent)
+          link <- speciesData[speciesData$latinN == latinN, "link"]
+
+          #variable germanN used as contextual language vulgar name
           if(language == "de"){
             germanN <- speciesData[speciesData$latinN == latinN, "germanN"]
-            link <- speciesData[speciesData$latinN == latinN, "link_de"]
           }else if(language == "fr"){
             germanN <- speciesData[speciesData$latinN == latinN, "frenchN"]
-            link <- speciesData[speciesData$latinN == latinN, "link_fr"]
           }else if(language == "en"){
             germanN <- speciesData[speciesData$latinN == latinN, "englishN"]
-            link <- speciesData[speciesData$latinN == latinN, "link_en"]
           }
 
 
@@ -151,6 +143,8 @@ step3_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE
           }else{
             textTag <- paste0( "<p style = 'display: table-cell'><em>", latinN, "</em>")
           }
+
+
           #add vernacular name if present
           if(germanN != "" & !is.na(germanN)){
             textTag <- paste0(textTag, "<br/>", germanN, "</p>")
@@ -161,20 +155,20 @@ step3_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE
 
           #columns 7:11 could also give images (priority, umbrella etc.)
           imageTags <- ""
-          for(imageCol in 6:9){
+          for(imageCol in c("responsibility", "threat", "emerald", "ch.priority")){
             img <- speciesData[speciesData$latinN == latinN, imageCol]
 
             #if an image is required
             if(!is.na(img) & img != ""){
 
               #interpret international priority
-              if(imageCol == 6){
-                if(img %in% c(3, 4)){
-                  #high responsibility
+              if(imageCol == "responsibility"){
+                if(img %in% c(1, 2)){
+                  #very high / unique responsibility
                   imageTag <- paste0("<img src = 'www/HIR.png' style = 'display: inline-block;float: right; vertical-align: bottom; width: 35px; margin: 0 0 0 5px'>" )
 
-                }else if (img %in% c(1, 2)){
-                  #medium responsibility
+                }else if (img %in% c(3)){
+                  #high responsibility
                   imageTag <- paste0("<img src = 'www/MIR.png' style = 'display: inline-block ;float: right; vertical-align: bottom; width: 35px; margin: 0 0 0 5px'>" )
 
                 }else{
@@ -182,6 +176,13 @@ step3_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE
                   imageTag <- NULL
                 }
 
+              }else if(imageCol == "ch.priority"){
+
+                if(img %in% 1:4){
+                  imageTag <- paste0("<img src = 'www/", paste0("PR", img),".png' style = 'display: inline-block ;float: right; vertical-align: bottom; width: 35px; margin: 0 0 0 5px'>" )
+                }else{
+                  imageTag <- NULL
+                }
               }else{
                 #filename defined by img
                 imageTag <- paste0("<img src = 'www/",img , ".png' style = 'display: inline-block;float: right; vertical-align: bottom; width: 35px; margin: 0 0 0 5px'>" )
@@ -205,419 +206,383 @@ step3_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE
       spChoices <- sprintf("c%d",1:length(spChoice_names))
       names(spChoices) <- spChoice_names
 
-
+      # }
+# TODO:       else{
+#   spChoices <- p("No species for this filter.")
+# }
 
       return(spChoices)
     }
 
     #read file
-    speciesData <- utils::read.csv2("www/data/tables/speciesInformation_final3.csv")
+    speciesData <- utils::read.csv2("www/data/tables/speciesInformation_SDMapsCH.csv")
 
-    #LOAD EVERYTHING
-    #sdmLayers and df_spInfo
+
+
+    # OLD METHOD ###
+    ################
+    #
+    # #LOAD EVERYTHING
+    # #sdmLayers and df_spInfo
+    # shiny::observeEvent(NULL, {
+    #   cat(file = stderr(), paste0("PROMISE ABOUT TO START" ) )
+    #
+    #   df_spInfo <- r$df_spInfo
+    #
+    #   progress <- ipc::AsyncProgress$new(message = i18n()$t(":aufbereitung:"),
+    #                                      detail = paste0(i18n()$t("Dies sollte weniger als "), 30, i18n()$t(" Sekunden dauern")),
+    #                                      queue = ipc::shinyQueue(),
+    #                                      millis = 1000)
+    #   future::future({
+    #
+    #
+    #     cat(file = stderr(), paste0("PROMISE STARTED" ) )
+    #
+    #
+    # #LOAD DATA (IF NOT ALREADY EXISTING)
+    # #PREPARE SPECIES DATA AND MAPS####
+    #
+    # if( is.null(df_spInfo_old) ){
+    #
+    # # ABMprogress <- shiny::Progress$new()
+    # # Make sure it closes when we exit this reactive, even if there's an error
+    # # on.exit(ABMprogress$close())
+    # progress$set(value = 0 )
+    #
+    #   #prepare data to keep information
+    #   df_spInfo <- dplyr::tibble(species = character(), sdm = character(), sdm_cover = numeric() ) #, sdm_pres = list(), sdm_pres_cover = numeric()
+    #
+    #   #Prepare Raster Baseline (Need to remove first layer afterwards)
+    #   sdmLayer <- terra::rast()
+    #   sdmLayers_pres <- terra::rast()
+    #   sdmLayers_noPres <- terra::rast()
+    #
+    #   #SWITCH TO USE OLD SDMs (more) or current SDMs
+    #   # terra::add(sdmLayers) <- terra::rast("www/data/maps/species/SDM/proj_currentEM_Aira.caryophyllea_ensemble.tif")
+    #
+    #   #OLDER WAY OF DOING IT (NOT COG)
+    #   # terra::add(sdmLayers) <- terra::rast("www/data/maps/species/SDM/lowRes/Aphanes.australis_sdmLR.tif")
+    #
+    #   #load COG
+    #
+    #   sdmLayer <- terra::rast("www/data/maps/species_new/SDM/allSDMs_binary_COG.tif")
+    #
+    #     #TEMPORARY (remove lissotriton vulgaris double)
+    #     sdmLayer <- sdmLayer[[-116]]
+    #
+    #     #SWITCH (activate) when using old or new SDMs
+    #     # terra::crs(sdmLayers) <- "epsg:3395"
+    #
+    #     #SWITCH between old and recent SDMs
+    #     # sdmLayers <- terra::crop(sdmLayers, terra::vect(shp_otherWGS), mask = TRUE)
+    #     sdmLayer <- terra::crop(sdmLayer, terra::vect(shp_WGS84), mask = TRUE)
+    #
+    #     progress$set(value = 1/4)
+    #
+    #     # sdmLayers <-terra::project(sdmLayers, "epsg:4326")
+    #     # layerNames <- c()
+    #     # layerNames_pres <- c()
+    #     # layerNames_noPres <- c()
+    #     #
+    #     # sdmLayers_pres <- terra::deepcopy( sdmLayers)
+    #     # sdmLayers_noPres <- terra::deepcopy(sdmLayers)
+    #     #
+    #     # #create empty layer to add when maps is empty
+    #     # empty_layer <- terra::rast(terra::ext(sdmLayers), resolution = terra::res(sdmLayers))
+    #     # empty_layer <- terra::subst(empty_layer, NaN, 0)
+    #
+    #     #remove all empty ones
+    #     sdmLayer <- sdmLayer[[terra::minmax(sdmLayer)[2,] != 0]]
+    #
+    #
+    #
+    #
+    #   #load all sdm presences
+    #   sdmPres <- sfarrow::read_sf_dataset( arrow::open_dataset("www/data/maps/species_new/presence/sfarrow/"))
+    #   sdmPres <- sf::st_transform(sdmPres, "EPSG:4326")
+    #   sdmPres <- sf::st_crop(sdmPres, shp_WGS84)
+    #
+    #   progress$set(value = 2/4)
+    #
+    #   #load all species SDM and presence files
+    #   spNb <- 0
+    #   for(sp in names(sdmLayer)){
+    #
+    #     # # if(sp == "Turdus torquatus"){browser()}
+    #     #
+    #     spNb <- spNb + 1
+    #     progress$set( (value = 2/4) + ((spNb/length(names(sdmLayer)))/2 ) )
+    #
+    #     #only save sp reference (name)
+    #     #use that to reference sdmLayer later (this way only sdmLayer needs to be wrapped)
+    #     # sdm <- sdmLayer[[sp]]
+    #     sdm <- sp
+    #
+    #     sdm_cover <- sum(terra::values(sdmLayer[[sp]], na.rm = TRUE))
+    #
+    #
+    #     sdm_cover <- sum(terra::values(sdmLayer[[sp]], na.rm = TRUE))
+    #
+    #     # USING PRESENCE POLYGONS ####
+    #
+    #     # PRESENCE POLYGONS
+    #     # This removes presences?
+    #     #sdmPres
+    #
+    #     if(!is.null(sdmLayer[[sp]])){
+    #
+    #       sp_ <- sdmPres[[gsub("[.]", "_", sp)]]
+    #       pres <- sdmPres[sdmPres$species == sp_]
+    #
+    #       if(length(sf::st_intersects(shp_WGS84, pres)[[1]]) > 0 |
+    #          length(sf::st_contains(shp_WGS84, pres)[[1]]) > 0){
+    #         #get intersection of presence and sdm (crop)
+    #
+    #         sdm_pres <- terra::mask(sdmLayer[[sp]], pres[1]) #only mask, extents remain same, NAs inserted
+    #         sdm_noPres <- terra::mask(sdmLayer[[sp]], pres[1], inverse = TRUE) #only mask, extents remain same, NAs inserted
+    #
+    #         #ext(sdm_pres) <- ext(vect(shp_WGS84))
+    #         #replace all NAs with 0
+    #         sdm_pres[is.na(sdm_pres)] <- 0
+    #         sdm_noPres[is.na(sdm_noPres)] <- 0
+    #
+    #         sdm_pres_cover <- sum(terra::values(sdm_pres, na.rm = TRUE))
+    #
+    #         #check resolution
+    #
+    #         #save sdm as layer
+    #         #INSTEAD: replace existing sdmLayers
+    #         if(!is.null(sdm_pres)){
+    #           # terra::add(sdmLayers_pres) <- sdm_pres
+    #           sdmLayer[[sp]] <- sdm_pres
+    #         }else{
+    #           # terra::add(sdmLayers_pres) <- empty_layer
+    #           sdmLayer <- sdmLayer[[-sp]]
+    #         }
+    #
+    #       }else{
+    #         #if shape and presence polygons don't overlap or intersect
+    #
+    #         # terra::add(sdmLayers_noPres) <- sdm
+    #         # terra::add(sdmLayers_pres) <- empty_layer
+    #         sdmLayer <- sdmLayer[[-sp]]
+    #
+    #
+    #         # layerNames_noPres <- c(layerNames_noPres, gsub(" ", "_", speciesData[sp, "latinN"]) )
+    #         # layerNames_pres <- c(layerNames_pres, gsub(" ", "_", speciesData[sp, "latinN"]) )
+    #
+    #         sdm_pres_cover <- 0
+    #         sdm_pres <- NULL
+    #       }
+    #
+    #     }else{
+    #       #if file doesn't exist
+    #       print("ERROR: file does not exist")
+    #
+    #       sdmLayer <- sdmLayer[[-sp]]
+    #
+    #       sdm_pres <- NULL
+    #       sdm_pres_cover <- 0
+    #     }
+    #
+    #     #save information
+    #
+    #     df_spInfo <- dplyr::add_row(df_spInfo,
+    #
+    #                                 species = gsub("[.]", " ", sp),
+    #                                 sdm = sdm,
+    #                                 sdm_cover = sdm_cover#, sdm_pres_cover = sdm_pres_cover
+    #     )
+    #
+    #   }
+    #   progress$set(value = 4/4 )
+    #
+    #   #transform to df due to subsetting issues
+    #   df_spInfo <- as.data.frame(df_spInfo)
+    #
+    #   #filter out species with no presence
+    #   df_spInfo <- df_spInfo[df_spInfo$sdm_cover > 0,]
+    #
+    # }else{
+    #
+    #   #reload saved data ####
+    #   print("RELOAD SAVED DATA")
+    #   df_spInfo <- df_spInfo_old
+    #
+    # }
+    #     allResults <- list(df_spInfo, terra::wrap(sdmLayer))
+    #
+    #     progress$close()
+    #
+    #     allResults
+    #     }, seed = TRUE) %...>% (function(allResults){
+    #
+    #       cat(file = stderr(), paste0("PROMISE COMPLETED" ) )
+    #
+    #       # cat(file = stderr(), paste0("ALLRESULTS = ", allResults ) )
+    #       r$df_spInfo <- allResults[[1]]
+    #       r$sdmLayer <- terra::unwrap(allResults[[2]])
+    #
+    #       cat(file = stderr(), paste0("names(r$sdmLayer) = ", names(r$sdmLayer) ) )
+    #
+    #   #sort based on cover
+    #   #order sdm_presence and order sdm, then concatenate them. (sdm_pres first, then sdm)
+    #   spOrder <-order(r$df_spInfo$sdm_cover, decreasing = TRUE)
+    #
+    #   r$spChc <- r$df_spInfo[spOrder, "species"]
+    #
+    #   #create a table with ordered and subset species for current area
+    #   r3$thisSpeciesData <- speciesData[match(r$spChc, speciesData$latinN),]
+    #
+    #   r3$speciesOrder <- r$spChc
+    #
+    #
+    #   #try to update checkboxes
+    #   #default: VU-CR red list with all species selected
+    #   shinyjs::delay(600, shiny::updateSelectInput(inputId = "filterList", selected = "s8") )
+    #   shinyjs::delay(1500, shiny::updateCheckboxInput(inputId = "groupCheckbox_all", value = TRUE) )
+    #
+    # })
+    #
+    # }, once = TRUE, ignoreInit = FALSE, ignoreNULL = FALSE, priority = 12)
+
+### END OF OLD METHOD #####
+
+    # NEW METHOD ##
+
     shiny::observeEvent(NULL, {
-      cat(file = stderr(), paste0("PROMISE ABOUT TO START" ) )
 
-      df_spInfo <- r$df_spInfo
+        cat(file = stderr(), paste0("PROMISE ABOUT TO START" ) )
 
-      progress <- ipc::AsyncProgress$new(message = i18n()$t(":aufbereitung:"),
-                                         detail = paste0(i18n()$t("Dies sollte weniger als "), 30, i18n()$t(" Sekunden dauern")),
-                                         queue = ipc::shinyQueue(),
-                                         millis = 1000)
+        df_spInfo <- r$df_spInfo
+
+        progress <- ipc::AsyncProgress$new(message = i18n()$t(":aufbereitung:"),
+                                           detail = paste0(i18n()$t("Dies sollte weniger als "), 30, i18n()$t(" Sekunden dauern")),
+                                           queue = ipc::shinyQueue(),
+                                           millis = 1000)
+
       future::future({
 
+        # if(is.null(df_spInfo_old)){
 
-        cat(file = stderr(), paste0("PROMISE STARTED" ) )
-
-
-    #LOAD DATA (IF NOT ALREADY EXISTING)
-    #PREPARE SPECIES DATA AND MAPS####
-
-    if( is.null(df_spInfo_old) ){
-
-    # ABMprogress <- shiny::Progress$new()
-    # Make sure it closes when we exit this reactive, even if there's an error
-    # on.exit(ABMprogress$close())
-    progress$set(value = 0 )
-
-
-      #prepare data to keep information
-      df_spInfo <- dplyr::tibble(species = character(), sdm = character(), sdm_cover = numeric() ) #, sdm_pres = list(), sdm_pres_cover = numeric()
-
-      #Prepare Raster Baseline (Need to remove first layer afterwards)
-      sdmLayer <- terra::rast()
-      sdmLayers_pres <- terra::rast()
-      sdmLayers_noPres <- terra::rast()
-
-      #SWITCH TO USE OLD SDMs (more) or current SDMs
-      # terra::add(sdmLayers) <- terra::rast("www/data/maps/species/SDM/proj_currentEM_Aira.caryophyllea_ensemble.tif")
-
-      #OLDER WAY OF DOING IT (NOT COG)
-      # terra::add(sdmLayers) <- terra::rast("www/data/maps/species/SDM/lowRes/Aphanes.australis_sdmLR.tif")
-
-      #load COG
-
-      sdmLayer <- terra::rast("www/data/maps/species_new/SDM/allSDMs_binary_COG.tif")
-
-        #TEMPORARY (remove lissotriton vulgaris double)
-        sdmLayer <- sdmLayer[[-116]]
-
-        #SWITCH (activate) when using old or new SDMs
-        # terra::crs(sdmLayers) <- "epsg:3395"
-
-        #SWITCH between old and recent SDMs
-        # sdmLayers <- terra::crop(sdmLayers, terra::vect(shp_otherWGS), mask = TRUE)
+        # ── Load COG and crop once ──────────────────────────────────────────────────
+        #200species
+        # sdmLayer <- terra::rast("www/data/maps/species_new/SDM/allSDMs_binary_COG.tif")
+        #600+ species (SDMaps_CH)
+        sdmLayer <- terra::rast("www/data/maps/species_new/SDM/SDMapsCH_100m_binary_4326_COG.tif")
+        # sdmLayer <- sdmLayer[[-116]]                               # remove duplicate
         sdmLayer <- terra::crop(sdmLayer, terra::vect(shp_WGS84), mask = TRUE)
 
         progress$set(value = 1/4)
 
-        # sdmLayers <-terra::project(sdmLayers, "epsg:4326")
-        # layerNames <- c()
-        # layerNames_pres <- c()
-        # layerNames_noPres <- c()
-        #
-        # sdmLayers_pres <- terra::deepcopy( sdmLayers)
-        # sdmLayers_noPres <- terra::deepcopy(sdmLayers)
-        #
-        # #create empty layer to add when maps is empty
-        # empty_layer <- terra::rast(terra::ext(sdmLayers), resolution = terra::res(sdmLayers))
-        # empty_layer <- terra::subst(empty_layer, NaN, 0)
+        # ── Drop empty layers in one vectorised call ─────────────────────────────────
+        # minmax is already computed over all layers at once — no loop needed
+        non_empty <- terra::minmax(sdmLayer)[2, ] != 0
+        sdmLayer  <- sdmLayer[[non_empty]]
 
-        #remove all empty ones
-        sdmLayer <- sdmLayer[[terra::minmax(sdmLayer)[2,] != 0]]
+        progress$set(value = 2/4)
 
+        # ── Compute per-layer sums in one vectorised call ────────────────────────────
+        # global() is the idiomatic, fastest way to summarise all layers at once
+        cover_vals <- terra::global(sdmLayer, fun = "sum", na.rm = TRUE)$sum
+        names(cover_vals) <- names(sdmLayer)
 
+        progress$set(value = 3/4)
 
-
-      #load all sdm presences
-      sdmPres <- sfarrow::read_sf_dataset( arrow::open_dataset("www/data/maps/species_new/presence/sfarrow/"))
-      sdmPres <- sf::st_transform(sdmPres, "EPSG:4326")
-      sdmPres <- sf::st_crop(sdmPres, shp_WGS84)
-
-      progress$set(value = 2/4)
-      #load all species SDM and presence files
-      spNb <- 0
-      for(sp in names(sdmLayer)){
-
-        # # if(sp == "Turdus torquatus"){browser()}
-        #
-        spNb <- spNb + 1
-        progress$set( (value = 2/4) + ((spNb/length(names(sdmLayer)))/2 ) )
-        #
-        # #find SDM file
-        # sdmPath <- speciesData[sp, "SDM_file"]
-        #
-        # if(file.exists(sdmPath)){
-        #   #load, crop and get cover (sum)
-        #   sdm <- terra::rast(sdmPath)
-        #   #Determine projection, make sure its WGS84
-        #   if(terra::ext(sdm)[1] < 100){
-        #
-        #     terra::crs(sdm) <- "EPSG:4326"
-        #
-        #     sdm <- terra::crop(sdm, terra::vect(shp_WGS84), mask = TRUE)
-        #   }else if(terra::ext(sdm)[1] < 1000000){
-        #     print("PROJECTING FROM 3395")
-        #     terra::crs(sdm) <- "EPSG:3395"
-        #     sdm <- terra::crop(sdm, terra::vect(shp_otherWGS), mask = TRUE)
-        #     sdm <- terra::project(sdm, "epsg:4326")
-        #   }else{
-        #     print("PROJECTING FROM 2056")
-        #     terra::crs(sdm) <- "EPSG:2056"
-        #     sdm <- terra::crop(sdm, terra::vect(shp), mask = TRUE)
-        #     sdm <- terra::project(sdm, "epsg:4326")
-        #   }
-        #
-        #   #Save sdms as layers
-        #   #check if resampling is needed
-        #   if(terra::xres(sdmLayers) != terra::xres(sdm) | terra::yres(sdmLayers) != terra::yres(sdm)){
-        #     #adapt resolution if necessary
-        #     sdm <- terra::resample(sdm, sdmLayers)
-        #   }
-        #
-        #   #standardise to 0 - 1 values (though final SDM maps should already be within these values)
-        #   #determine final SM by standardising values (no need to standardise if using binary maps)
-        #   # maxVal <- max(minmax(sdm)["max",])
-        #   # minVal <- min(minmax(sdm)["min",])
-        #   #
-        #   maxVal <- 1000
-        #   minVal <- 0
-        #
-        #   sdm <- terra::app(sdm, fun = function(x) (x-minVal) / (maxVal- minVal))
-        #   # chosenLayers[[lyrNb]] <- chosenLayers[[lyrNb]] * input[[ r3$speciesWeights[lyrNb] ]]
-        #   #reclassify to binary (over 0.8 is presence, under is absence)
-        #   sdm <- terra::classify(sdm, matrix(c(0, 0.2, 0, 0.2 , 1, 1), nrow = 2, ncol = 3, byrow = TRUE))
-        #   sdm <- terra::subst(sdm, NaN, 0)
-        #
-        #   sdm_cover <- sum(terra::values(sdm, na.rm = TRUE))
-        #
-        #   #save sdm as layer
-        #   terra::add(sdmLayers) <- sdm
-        #   #generate layer names (genus_sp)
-        #   layerNames <- c(layerNames, gsub(" ", "_", speciesData[sp, "latinN"]) )
-
-        #only save sp reference (name)
-        #use that to reference sdmLayer later (this way only sdmLayer needs to be wrapped)
-        # sdm <- sdmLayer[[sp]]
-        sdm <- sp
-
-        sdm_cover <- sum(terra::values(sdmLayer[[sp]], na.rm = TRUE))
-
-
-        sdm_cover <- sum(terra::values(sdmLayer[[sp]], na.rm = TRUE))
-
-
-
-
-
-
-
-
-        # USING PRESENCE POLYGONS ####
-
-        # PRESENCE POLYGONS
-        #sdmPres
-
-
-
-        if(!is.null(sdmLayer[[sp]])){
-          # #get "layer" (filename without ext)
-          # filename <- basename(presPath)
-          # lyr <-substring(filename ,1, nchar(filename)-4 )
-          #
-          # #load, crop and get cover (sum)
-          #
-          # # pres <- readOGR(dsn = presPath, verbose = FALSE)#,  delete_null_obj=TRUE)
-          # pres <- sf::st_read(presPath, quiet = TRUE)
-
-          # pres <- st_as_sf(pres)
-          # sf::st_crs(pres) <- 2056
-          # if(terra::crs(pres) == ""){browser()}
-          # pres <- sf::st_transform(pres, 4326)
-          sp_ <- sdmPres[[gsub("[.]", "_", sp)]]
-          pres <- sdmPres[sdmPres$species == sp_]
-
-          if(length(sf::st_intersects(shp_WGS84, pres)[[1]]) > 0 |
-             length(sf::st_contains(shp_WGS84, pres)[[1]]) > 0){
-            #get intersection of presence and sdm (crop)
-
-            sdm_pres <- terra::mask(sdmLayer[[sp]], pres[1]) #only mask, extents remain same, NAs inserted
-            sdm_noPres <- terra::mask(sdmLayer[[sp]], pres[1], inverse = TRUE) #only mask, extents remain same, NAs inserted
-
-            #ext(sdm_pres) <- ext(vect(shp_WGS84))
-            #replace all NAs with 0
-            sdm_pres[is.na(sdm_pres)] <- 0
-            sdm_noPres[is.na(sdm_noPres)] <- 0
-
-            sdm_pres_cover <- sum(terra::values(sdm_pres, na.rm = TRUE))
-
-            #check resolution
-
-            #check if resampling is needed
-            # if(terra::xres(sdmLayers) != terra::xres(sdm_pres) | terra::yres(sdmLayers) != terra::yres(sdm_pres)){
-            #   #adapt resolution if necessary
-            #   sdm_pres <- terra::resample(sdm_pres, sdmLayers)
-            #   sdm_noPres <- terra::resample(sdm_noPres, sdmLayers)
-            #
-            # }
-            #save sdm as layer
-            #INSTEAD: replace existing sdmLayers
-            if(!is.null(sdm_pres)){
-              # terra::add(sdmLayers_pres) <- sdm_pres
-              sdmLayer[[sp]] <- sdm_pres
-            }else{
-              # terra::add(sdmLayers_pres) <- empty_layer
-              sdmLayer <- sdmLayer[[-sp]]
-            }
-            # if(!is.null(sdm_noPres)){
-            #   terra::add(sdmLayers_noPres) <- sdm_noPres
-            # }else{
-            #   terra::add(sdmLayers_noPres) <- empty_layer
-            #
-            # }
-#
-#             layerNames_pres <- c(layerNames_pres, gsub(" ", "_", speciesData[sp, "latinN"]) )
-#             layerNames_noPres <- c(layerNames_noPres, gsub(" ", "_", speciesData[sp, "latinN"]) )
-
-
-
-          }else{
-            #if shape and presence polygons don't overlap or intersect
-
-            # terra::add(sdmLayers_noPres) <- sdm
-            # terra::add(sdmLayers_pres) <- empty_layer
-            sdmLayer <- sdmLayer[[-sp]]
-
-
-            # layerNames_noPres <- c(layerNames_noPres, gsub(" ", "_", speciesData[sp, "latinN"]) )
-            # layerNames_pres <- c(layerNames_pres, gsub(" ", "_", speciesData[sp, "latinN"]) )
-
-            sdm_pres_cover <- 0
-            sdm_pres <- NULL
-          }
-
-        }else{
-          #if file doesn't exist
-          print("ERROR: file does not exist")
-
-          sdmLayer <- sdmLayer[[-sp]]
-
-          # if(!is.null(sdm)){
-          #   terra::add(sdmLayers_noPres) <- sdm
-          #   terra::add(sdmLayers_pres) <- empty_layer
-          # }else{
-          #   terra::add(sdmLayers_noPres) <- empty_layer
-          #   terra::add(sdmLayers_pres) <- empty_layer
-          # }
-          # layerNames_noPres <- c(layerNames_noPres, gsub(" ", "_", speciesData[sp, "latinN"]) )
-          # layerNames_pres <- c(layerNames_pres, gsub(" ", "_", speciesData[sp, "latinN"]) )
-
-
-          sdm_pres <- NULL
-          sdm_pres_cover <- 0
-        }
-
-        #save information
-
-        df_spInfo <- dplyr::add_row(df_spInfo,
-
-                                    species = gsub("[.]", " ", sp),
-                                    sdm = sdm,
-                                    sdm_cover = sdm_cover#, sdm_pres_cover = sdm_pres_cover
+        # ── Build df_spInfo without a loop ───────────────────────────────────────────
+        df_spInfo <- data.frame(
+          species   = gsub("[.]", " ", names(sdmLayer)),
+          sdm       = names(sdmLayer),
+          sdm_cover = cover_vals,
+          row.names = NULL,
+          stringsAsFactors = FALSE
         )
 
-      }
-      progress$set(value = 4/4 )
+        # Drop species with zero modelled cover
+        df_spInfo <- df_spInfo[df_spInfo$sdm_cover > 0, ]
 
-      # #standardise to 0 - 1 values (though final SDM maps should already be within these values)
-      # #determine final SM by standardising values (no need to standardise if using binary maps)
-      # maxVal <- max(minmax(chosenLayers[[lyrNb]])["max",])
-      # minVal <- min(minmax(chosenLayers[[lyrNb]])["min",])
-      # chosenLayers[[lyrNb]] <- terra::app(chosenLayers[[lyrNb]], fun = function(x) (x-minVal) / (maxVal- minVal))
-      #
-      # # chosenLayers[[lyrNb]] <- chosenLayers[[lyrNb]] * input[[ r3$speciesWeights[lyrNb] ]]
-      # #reclassify to binary (over 0.8 is presence, under is absence)
-      # chosenLayers[[lyrNb]] <- terra::classify(chosenLayers[[lyrNb]], matrix(c(0.8 , 1, 1), nrow = 1, ncol = 3))
-      #assign layer names
-      # names(sdmLayers) <- layerNames
-      # names(sdmLayers_pres) <- layerNames_pres
-      # names(sdmLayers_noPres) <- layerNames_noPres
+        # Drop corresponding layers
+        sdmLayer <- sdmLayer[[df_spInfo$sdm]]
+
+        progress$set(value = 4/4)
 
 
-      #remove first layer baseline
-      # sdmLayers <- sdmLayers[[2:terra::nlyr(sdmLayers)]]
-      # sdmLayers_pres <- sdmLayers_pres[[2:terra::nlyr(sdmLayers_pres)]]
-      # sdmLayers_noPres <- sdmLayers_noPres[[2:terra::nlyr(sdmLayers_noPres)]]
 
+          sdmLayer <- terra::rast("www/data/maps/species_new/SDM/SDMapsCH_100m_binary_4326_COG.tif")
+          # sdmLayer <- sdmLayer[[-116]]
+          sdmLayer <- terra::crop(sdmLayer, terra::vect(shp_WGS84))
 
-      #transform to df due to subsetting issues
-      df_spInfo <- as.data.frame(df_spInfo)
+          #mask with values of 0 (NA may not work when wrapped)
+          sdmLayer <- terra::mask(sdmLayer, terra::vect(shp_WGS84), updatevalue = 0)
 
-      #filter out species with no presence
-      df_spInfo <- df_spInfo[df_spInfo$sdm_cover > 0,]
-      # triggerUpdate(1)
-    }else{
-      #reload saved data ####
-      print("RELOAD SAVED DATA")
-      df_spInfo <- df_spInfo_old
-      # spChc <- r$spChc
-      # sdmLayers <- r$sdmLayers
+          progress$set(value = 1/4)
 
+          non_empty <- terra::minmax(sdmLayer)[2, ] != 0
+          sdmLayer  <- sdmLayer[[non_empty]]
+          progress$set(value = 2/4)
 
-      #avoid effect on species checkbox
-      # r3$ignoreGroupCheckboxEffect <- TRUE
-      # r3$ignoreAllCheckboxEffect <- TRUE
+          cover_vals <- terra::global(sdmLayer, fun = "sum", na.rm = TRUE)$sum
+          names(cover_vals) <- names(sdmLayer)
+          progress$set(value = 3/4)
 
-      # isolate({
-      # updateSelectInput(inputId = "filterList", choices = c("All" = "s1","CH Priorität 1" = "s2", "CH Priorität 1-2" = "s3", "CH Priorität 1-3" = "s4", "CH Priorität 1-4" = "s5",
-      #                                                       "Rote Liste CR" = "s6", "Rote Liste EN-CR" = "s7", "Rote Liste VU-CR" = "s8", "Rote Liste NT-CR" = "s9"),
-      #                   selected = r$filterList )
-      # updateCheckboxGroupInput(inputId = "checkboxGroup_class",  selected = r$groupSave_class)
-      # updateCheckboxGroupInput(inputId = "checkboxGroup_type", selected = r$groupSave_type)
-      # updateCheckboxGroupInput(inputId = "checkboxGroup_sens", selected = r$groupSave_sens)
-      # updateCheckboxGroupInput(inputId = "checkboxGroup_all", selected = r$groupSave_all)
-      #
-      #
-      # updateCheckboxGroupInput(inputId = "speciesCheckbox", selected = r$checkbox)
-      # })
-      # r3$speciesWeights <- r$speciesWeights
+          df_spInfo <- data.frame(
+            species   = gsub("[.]", " ", names(sdmLayer)),
+            sdm       = names(sdmLayer),
+            sdm_cover = cover_vals,
+            row.names = NULL,
+            stringsAsFactors = FALSE
+          )
 
-      # r3$ignoreGroupCheckboxEffect <- FALSE
-      # r3$ignoreAllCheckboxEffect <- FALSE
+          df_spInfo <- df_spInfo[df_spInfo$sdm_cover > 0, ]
+          sdmLayer  <- sdmLayer[[df_spInfo$sdm]]
 
+        # } else {
+        #   print("RELOAD SAVED DATA")
+        #   df_spInfo <- df_spInfo_old
+        # }
 
-    }
-        allResults <- list(df_spInfo, terra::wrap(sdmLayer))
-
+        progress$set(value = 4/4)
         progress$close()
 
-        allResults
-        }, seed = TRUE) %...>% (function(allResults){
+        list(df_spInfo, terra::wrap(sdmLayer))
 
-          cat(file = stderr(), paste0("PROMISE COMPLETED" ) )
+      }, seed = TRUE) %...>% (function(allResults){
 
-          # cat(file = stderr(), paste0("ALLRESULTS = ", allResults ) )
-          r$df_spInfo <- allResults[[1]]
-          r$sdmLayer <- terra::unwrap(allResults[[2]])
+        cat(file = stderr(), paste0("PROMISE COMPLETED" ) )
 
-          cat(file = stderr(), paste0("names(r$sdmLayer) = ", names(r$sdmLayer) ) )
+              # cat(file = stderr(), paste0("ALLRESULTS = ", allResults ) )
+              r$df_spInfo <- allResults[[1]]
+              r$sdmLayer <- terra::unwrap(allResults[[2]])
 
-      #sort based on cover
-      #TODO: base order on both sdm_presence and just sdm.
-      #order sdm_presence and order sdm, then concatenate them. (sdm_pres first, then sdm)
-      #TODO: if a lot of species, automatically select most present
-      spOrder <-order(r$df_spInfo$sdm_cover, decreasing = TRUE)
+              cat(file = stderr(), paste0("names(r$sdmLayer) = ", names(r$sdmLayer) ) )
 
-      r$spChc <- r$df_spInfo[spOrder, "species"]
+          #sort based on cover
+          #order sdm_presence and order sdm, then concatenate them. (sdm_pres first, then sdm)
+          spOrder <-order(r$df_spInfo$sdm_cover, decreasing = TRUE)
 
-      #create a table with ordered and subset species for current area
-      r3$thisSpeciesData <- speciesData[match(r$spChc, speciesData$latinN),]
+          r$spChc <- r$df_spInfo[spOrder, "species"]
 
-      r3$speciesOrder <- r$spChc
+          #create a table with ordered and subset species for current area
+          r3$thisSpeciesData <- speciesData[match(r$spChc, speciesData$latinN),]
+
+          r3$speciesOrder <- r$spChc
 
 
-      #try to update checkboxes
-      #default: VU-CR red list with all species selected
-      shinyjs::delay(600, shiny::updateSelectInput(inputId = "filterList", selected = "s8") )
-      shinyjs::delay(1500, shiny::updateCheckboxInput(inputId = "groupCheckbox_all", value = TRUE) )
+          #try to update checkboxes
+          #default: VU-CR red list with all species selected
+          shinyjs::delay(600, shiny::updateSelectInput(inputId = "filterList", selected = "s8") )
+          shinyjs::delay(1500, shiny::updateCheckboxInput(inputId = "groupCheckbox_all", value = TRUE) )
 
-    })
+
+      })
 
     }, once = TRUE, ignoreInit = FALSE, ignoreNULL = FALSE, priority = 12)
 
-      #HELP WINDOW ####
-      # cat(file = stderr(), paste0("r$needHelp = ", r$needHelp ) )
-      # if(r$needHelp == 1){
-      #
-      #   shinyjs::delay(1500, {
-      #     shiny::showModal(
-      #       shiny::modalDialog( footer = shiny::modalButton(label = i18n()$t("OK!") ),
-      #                           h2(i18n()$t("Erstellen Sie eine Sensitivitätsmatrix.")),
-      #                           shiny::img(src = "www/arrowLeft.png", style = "float:left;height:50px;margin-left:-70px"),h3(shiny::HTML(as.character( i18n()$t("Auf der <b>linken</b> Seite können Sie:")) ) ),
-      #                           h4(shiny::HTML(as.character( i18n()$t("1) <b>Informationen</b> über die in diesem Gebiet vorkommenden Arten anzeigen, <br>2) <b>filtern</b>, um nur die Arten mit einer bestimmten Prioritätsstufe oder einem bestimmten Status auf der Roten Liste anzuzeigen, <br>3) die Arten unterschiedlich gewichten (Wichtigkeit), <br>4) Arten <b>einzeln</b> auswählen.")))),
-      #                           h4(),
-      #                           div(style = "white-space: nowrap",
-      #                               h4(shiny::HTML(as.character( i18n()$t("Sie können die Gewichtung jeder<br>Art manuell ändern' <img src='www/weightWindow.png' style = 'display:inline;height:35px;'>."))))
-      #                           ),
-      #                           h4(shiny::HTML(as.character( i18n()$t("Oder automatisch auf der Grundlage der Priorität oder des Status auf der Roten Liste mit den Schaltflächen unten.")))),
-      #                           div(style = "text-align:right",
-      #                               h3(shiny::HTML(as.character( i18n()$t("Auf der <b>rechten</b> Seite können Sie:"))), shiny::img(src = "www/arrowRight.png", style = "float:right;height:50px;margin-right:-70px")),
-      #                               h4(shiny::HTML(as.character( i18n()$t("1) <b>mehrere Arten auf einmal</b> auswählen, gruppiert nach Kategorie, Sensitivität oder Merkmalen.")))),
-      #                           ),
-      #                           h3(),
-      #                           h3(shiny::HTML(as.character( i18n()$t("Wenn Sie mehrere Arten auswählen (mehrere Kästchen ankreuzen), werden die Verbreitungen der Arten kombiniert und angezeigt")))),
-      #                           h3(),
-      #                           h3(shiny::HTML(as.character( i18n()$t("Die endgültige Karte (die '<b>Sensitivitätsmatrix</b>') kann <b>später</b> bei der Beobachtung/Änderung von Freizeitdaten <b>verwendet werden</b>!"))))
-      #       )
-      #     )
-      #   })
-      # }
+    ## END OF NEW METHOD ###
 
 
 
-      #for each entry, append html information
-      # observeEvent(r3$spChoices, {
-      # }, ignoreInit = FALSE)
+
 
 
 
@@ -647,8 +612,9 @@ print("SPCHOICES")
 cat(file = stderr(), paste0("r3$spChoices = ", r3$spChoices ) )
 
         if(length(r3$spChoices) > 0){
+
           #cycle through column of grouping characteristics
-          for(col in 15:20){
+          for(col in c("group_de", "Aquatisch",      "Fliegen",        "Boden",          "Geraeusche",     "Naechtliche")){
             #for each, save grouping variable and associate to all species in spChoices with X
             groupCol_allSp <- r3$thisSpeciesData[, col]
             #use reordered and subset table (r3$thisSpeciesData)
@@ -661,7 +627,7 @@ cat(file = stderr(), paste0("r3$spChoices = ", r3$spChoices ) )
                !sum(groupCol %in% c(NA)) == length(groupCol)){
 
               #determine type of grouping and evaluate based on type (ex: activity = diurnal, nocturnal; group = Amphibia, mammal etc.; flying = X)
-              if(groupN == "group"){
+              if(groupN == "group_de"){
 
                 #cycle through group types (mammal, bird etc..)
                 for(groupType in unique(groupCol)){
@@ -750,6 +716,8 @@ cat(file = stderr(), paste0("r3$spChoices = ", r3$spChoices ) )
 
     #SPECIES SELECTION RENDER####
     output$speciesCheckbox <- shiny::renderUI({
+
+      #TODO: Check for empty list of species due to filter
 
       shiny::tagList(
         shiny::checkboxGroupInput(
@@ -901,6 +869,9 @@ cat(file = stderr(), paste0("r3$spChoices = ", r3$spChoices ) )
         output$speciesCheckbox <- shiny::renderUI({
 
           shiny::tagList(
+
+            #TODO: Check for empty list of species due to filter
+
             shiny::checkboxGroupInput(
               inputId = shiny::NS(id, "speciesCheckbox"),
               label = "",
@@ -996,6 +967,9 @@ cat(file = stderr(), paste0("r3$spChoices = ", r3$spChoices ) )
         output$speciesCheckbox <- shiny::renderUI({
 
           shiny::tagList(
+
+            #TODO: Check for empty list of species due to filter
+
             shiny::checkboxGroupInput(
               inputId = shiny::NS(id, "speciesCheckbox"),
               label = "",
@@ -1098,6 +1072,9 @@ cat(file = stderr(), paste0("r3$spChoices = ", r3$spChoices ) )
         output$speciesCheckbox <- shiny::renderUI({
 
           shiny::tagList(
+
+            #TODO: Check for empty list of species due to filter
+
             shiny::checkboxGroupInput(
               inputId = shiny::NS(id, "speciesCheckbox"),
               label = "",
@@ -1169,7 +1146,7 @@ cat(file = stderr(), paste0("r3$spChoices = ", r3$spChoices ) )
       obsSelectAfter$destroy()
       obsConfirm$destroy()
 
-      return(list(SM_pres = shiny::reactive(r$SM_pres), SMcolors = shiny::reactive(SMcolors), toSelectSpAfter = shiny::reactive(toSelectSpAfter), confirm = shiny::reactive({r3$confirm}), needHelp = reactive({r$needHelp})),
+      return(list(SM_pres = shiny::reactive(r$SM_pres), SMcolors = shiny::reactive(r$SMcolors), toSelectSpAfter = shiny::reactive(toSelectSpAfter), confirm = shiny::reactive({r3$confirm}), needHelp = reactive({r$needHelp})),
              currentLang = shiny::reactive(i18n()$get_translation_language()))
 
       #trigger return to past (return with specific confirm value?)
@@ -1334,6 +1311,9 @@ print("GROUP TRIGGERS")
               print("IFNULL")
               output$speciesCheckbox <- shiny::renderUI({
                 shiny::tagList(
+
+                  #TODO: Check for empty list of species due to filter
+
                   shiny::checkboxGroupInput(
                     inputId = shiny::NS(id, "speciesCheckbox"),
                     label="",
@@ -1395,6 +1375,9 @@ print("CHECKBOX ALL")
 
           #manually select all species
           print("select all species")
+
+          #TODO: Check for empty list of species due to filter
+
           shiny::updateCheckboxGroupInput(inputId ="speciesCheckbox", selected = r3$spChoices_html)
 
           #trigger observer to reset ignore-variables (with delay to execute after groupCheckbox trigger)
@@ -1547,7 +1530,7 @@ print("BLABLA")
         cat(file = stderr(), paste0("Create Sensitivity Matrix" ) )
 
         ## CREATE SENSITIVITY MATRIX ####
-print("SENSITVITYMATRIX")
+print("SENSITIVITYMATRIX")
         if( length(input$speciesCheckbox) > 0 ){
 
           cat(file = stderr(), paste0("speciescheckbox > 0" ) )
@@ -1566,7 +1549,7 @@ print("SENSITVITYMATRIX")
           cat(file = stderr(), paste0("names(r$sdmLayer) = ", names(r$sdmLayer) ) )
 
           #replace " " with "_" for layer names
-          chosenLayers <- r$sdmLayer[[gsub(" ", ".", r$keptSpecies)]]
+          chosenLayers <- r$sdmLayer[[r$keptSpecies]]#gsub(" ", ".", )
 
           cat(file = stderr(), paste0("chosenLayers = ", chosenLayers ) )
 
@@ -1822,10 +1805,10 @@ print("CHOSEN")
 
       r3$spChoices <- switch(input$filterList,
                             "s1" = r$spChc,
-                            "s2" = r$spChc[r$spChc %in% speciesData$latinN[speciesData$ch.priority %in% c("PR1")] ],
-                            "s3" = r$spChc[r$spChc %in% speciesData$latinN[speciesData$ch.priority %in% c("PR1", "PR2")] ],
-                            "s4" = r$spChc[r$spChc %in% speciesData$latinN[speciesData$ch.priority %in% c("PR1", "PR2", "PR3")] ],
-                            "s5" = r$spChc[r$spChc %in% speciesData$latinN[speciesData$ch.priority %in% c("PR1", "PR2", "PR3", "PR4")] ],
+                            "s2" = r$spChc[r$spChc %in% speciesData$latinN[speciesData$ch.priority %in% c("1")] ],
+                            "s3" = r$spChc[r$spChc %in% speciesData$latinN[speciesData$ch.priority %in% c("1", "2")] ],
+                            "s4" = r$spChc[r$spChc %in% speciesData$latinN[speciesData$ch.priority %in% c("1", "2", "3")] ],
+                            "s5" = r$spChc[r$spChc %in% speciesData$latinN[speciesData$ch.priority %in% c("1", "2", "3", "4")] ],
                             "s6" = r$spChc[r$spChc %in% speciesData$latinN[speciesData$threat %in% c("CR")] ],
                             "s7" = r$spChc[r$spChc %in% speciesData$latinN[speciesData$threat %in% c("CR", "EN")] ],
                             "s8" = r$spChc[r$spChc %in% speciesData$latinN[speciesData$threat %in% c("CR", "EN", "VU")] ],
@@ -1878,10 +1861,10 @@ print("CHOSEN")
         prrLvl <- speciesData$ch.priority[speciesData$latinN == r3$spChoices[i]]
         newValue = 1
         newValue <- switch(prrLvl,
-                           PR1 = 5,
-                           PR2 = 4,
-                           PR3 = 3,
-                           PR4 = 2,
+                           "1" = 5,
+                           "2" = 4,
+                           "3" = 3,
+                           "4" = 2,
                            1
         )
         shiny::updateTextInput(
@@ -1912,22 +1895,39 @@ print("CHOSEN")
         return(name)
       },
       content = function(file){
-        tempTIF_SM <- tempfile(pattern = "SM_", fileext = ".tif")
-        terra::writeRaster(r$SM_pres, filename = tempTIF_SM, filetype = "GTiff")
-browser()
+
+        # Create a dedicated temp folder with a clean name
+        tmpDir <- tempfile(pattern = "SM_download")
+        dir.create(tmpDir)
+
+        # Define clean file names inside that folder
+        tifFile  <- file.path(tmpDir, "SensitivityMatrix.tif")
+        txtFile  <- file.path(tmpDir, "INFO_SM.txt")
+
+
+
+        # tempTIF_SM <- tempfile(pattern = "SM_", fileext = ".tif")
+        terra::writeRaster(r$SM_pres, filename = tifFile, filetype = "GTiff")
+
         #text info
-        tempTXT_info <- tempfile(pattern = "INFO_", fileext = ".txt")
-        fileConn<-file(tempTXT_info)
+        # tempTXT_info <- tempfile(pattern = "INFO_", fileext = ".txt")
+        # fileConn<-file(tempTXT_info)
         writeLines(c("Information about the sensitivity matrix.",
-                     "Values represent sensitivity (number of considered species present * weight given",
-                     "ex: if a pixel has 3 species with weight of 1, and 3 species with weight of 2, it would have a sensitivity of 9",
-                     "The species included are:",
+                       "Values represent sensitivity (number of considered species present * weight given",
+                       "ex: if a pixel has 3 species with weight of 1, and 3 species with weight of 2, it would have a sensitivity of 9",
+                       "---",
+                       ifelse(minCutThresh == 0,"", paste0("Important: This Sensitivity Matrix only shows the top ", minCutThresh, "% sensitivity values")),
+                       "The species included are:",
                      paste(r3$spChoices)
-        ), fileConn)
-        close(fileConn)
+        ), txtFile)
+        # close(fileConn)
+
+        # Zip using relative paths by setting wd to tmpDir
+        oldWd <- setwd(tmpDir)
+        on.exit(setwd(oldWd), add = TRUE)  # always restore wd
 
         #zip both
-        utils::zip(file, c(tempTIF_SM, tempTXT_info), flags = NULL)
+        utils::zip(file,files =  c("SensitivityMatrix.tif", "INFO_SM.txt"))
 
 
       }
@@ -1955,14 +1955,14 @@ browser()
       }else if(r$currentLang == "fr"){
         terra::plot(basemapWhite, y = 1, type = "continuous", col = "#FFFFFF", ext = terra::ext(terra::vect(shp_WGS84)), range = c(0,12), legend = FALSE, box = FALSE, axes = FALSE,  mar = c(6.1, 0, 0, 0), plg = list(legend = "bottom", horiz = TRUE, title = "Sensibilité", title.adj = 0))
       }else if(r$currentLang == "en"){
-        terra::plot(basemapWhite, y = 1, type = "continuous", col = "#FFFFFF", ext = terra::ext(terra::vect(shp_WGS84)), range = c(0,12), legend = FALSE, box = FALSE, axes = FALSE,  mar = c(6.1, 0, 0, 0), plg = list(legend = "bottom", horiz = TRUE, , title = "Sensitivity", title.adj = 0))
+        terra::plot(basemapWhite, y = 1, type = "continuous", col = "#FFFFFF", ext = terra::ext(terra::vect(shp_WGS84)), range = c(0,12), legend = FALSE, box = FALSE, axes = FALSE,  mar = c(6.1, 0, 0, 0), plg = list(legend = "bottom", horiz = TRUE, title = "Sensitivity", title.adj = 0))
       }
         print("SMUPDATE")
       if(SMUpdate() > 0){
         #get max value of both SM_pres and SM_noPres
-        maxVal <- terra::minmax(r$SM_pres)["max",]
-        if(maxVal < 12){maxVal <- 12}
-print(paste0("maxVal: ", maxVal))
+        r$maxVal <- terra::minmax(r$SM_pres)["max",]
+        if(r$maxVal < 12){r$maxVal <- 12}
+print(paste0("maxVal: ", r$maxVal))
         #if no SM_pres, than just plot SM_noPres
 
 #simply ignore noPres (simple solution for now)
@@ -1979,18 +1979,24 @@ print(paste0("maxVal: ", maxVal))
         # }
         # basemap <- basemaps::basemap_raster(ext = st_bbox(shp_WebMerc))
 
+        #make legend relative
+        r$minVal <- input$minValThreshold/100 * r$maxVal
+
         if(!is.null(r$SM_pres)){
-          SMcolors <<- c("#FFFFFF00", grDevices::colorRampPalette(c("#FFD700", "red", "red4"), alpha = TRUE)(maxVal))
+          r$SMcolors <- c("#FFFFFF00", grDevices::colorRampPalette(c("#FFD700", "red", "red4"), alpha = TRUE)(r$maxVal-r$minVal))
 
           # colorIntervals <- data.frame(from = 0:12, to = c(1:12, 1000), col = colors)
 
           #plot map: range and colNA help set threshold
           if(r$currentLang == "de"){
-            terra::plot(x= r$SM_pres, box = FALSE, axes = FALSE, col  = SMcolors, colNA = "#3b035780",  type = "continuous", range = c(0, maxVal),   add = TRUE, mar = c(6.1, 0, 0, 0), plg = list(x = "bottom", horiz = TRUE, title = "Sensitivität", title.adj = -1, pax = list(side = 1)))
+            terra::plot(x= r$SM_pres, box = FALSE, axes = FALSE, col  = r$SMcolors, colNA = "black",  type = "continuous", range = c(r$minVal, r$maxVal), fill_range = TRUE,
+                        add = TRUE, mar = c(6.1, 0, 0, 0), plg = list(x = "bottom", horiz = TRUE, title = "Sensitivität", title.adj = -1, pax = list(side = 1)))
           }else if(r$currentLang == "fr"){
-            terra::plot(x= r$SM_pres, box = FALSE, axes = FALSE, col  = SMcolors, colNA = "#3b035780",  type = "continuous", range = c(0, maxVal),   add = TRUE, mar = c(6.1, 0, 0, 0), plg = list(x = "bottom", horiz = TRUE, title = "Sensibilité", title.adj = -1, pax = list(side = 1)))
+            terra::plot(x= r$SM_pres, box = FALSE, axes = FALSE, col  = r$SMcolors, colNA = "black",  type = "continuous", range = c(r$minVal, r$maxVal), fill_range = TRUE,
+                        add = TRUE, mar = c(6.1, 0, 0, 0), plg = list(x = "bottom", horiz = TRUE, title = "Sensibilité", title.adj = -1, pax = list(side = 1)))
           }else if(r$currentLang == "en"){
-            terra::plot(x= r$SM_pres, box = FALSE, axes = FALSE, col  = SMcolors, colNA = "#3b035780",  type = "continuous", range = c(0, maxVal),   add = TRUE, mar = c(6.1, 0, 0, 0), plg = list(x = "bottom",horiz = TRUE, title = "Sensitivity", title.adj = -1, pax = list(side = 1)))
+            terra::plot(x= r$SM_pres, box = FALSE, axes = FALSE, col  = r$SMcolors, colNA = "black",  type = "continuous", range = c(r$minVal, r$maxVal), fill_range = TRUE,
+                        add = TRUE, mar = c(6.1, 0, 0, 0), plg = list(x = "bottom",horiz = TRUE, title = "Sensitivity", title.adj = -1, pax = list(side = 1)))
           }
           terra::lines(x = terra::vect(shp_WGS84), col = "black", lwd = 2)
 
@@ -2057,6 +2063,10 @@ print(r$SM_pres)
 
       cat(file = stderr(), "DEBUG1")
 
+      #Finalize SMColors (make all values below Cutoff Threshold a minValue)
+      r$SM_pres[r$SM_pres <= r$minVal] <- r$minVal
+
+
       # return(list(SM_pres = shiny::reactive(r$SM_pres), SMcolors = shiny::reactive(SMcolors), toSelectSpAfter = shiny::reactive(toSelectSpAfter), confirm = shiny::reactive({r3$confirm}), needHelp = reactive({r$needHelp}),
       #             groupSave_all = shiny::reactive(r$groupSave_all), groupSave_sens = shiny::reactive(r$groupSave_sens), groupSave_type = shiny::reactive(r$groupSave_type), groupSave_class = shiny::reactive(r$groupSave_class), checkboxSave = shiny::reactive(r$checkboxSave),
       #             filterList = shiny::reactive(r$filterList), weightInputs = shiny::reactive(r$weightInputs), weightNames = shiny::reactive(r$weightNames)) )
@@ -2100,10 +2110,10 @@ print(r$SM_pres)
 
 
     cat(file = stderr(), "RETURNING...")
-    return(list(SM_pres = shiny::reactive(r$SM_pres), SMcolors = shiny::reactive(SMcolors), toSelectSpAfter = shiny::reactive(toSelectSpAfter), confirm = shiny::reactive({r3$confirm}), needHelp = reactive({r$needHelp}),
+    return(list(SM_pres = shiny::reactive(r$SM_pres), SMcolors = shiny::reactive(r$SMcolors), toSelectSpAfter = shiny::reactive(toSelectSpAfter), confirm = shiny::reactive({r3$confirm}), needHelp = reactive({r$needHelp}),
                 groupSave_all = shiny::reactive(r$groupSave_all), groupSave_sens = shiny::reactive(r$groupSave_sens), groupSave_type = shiny::reactive(r$groupSave_type), groupSave_class = shiny::reactive(r$groupSave_class), checkboxSave = shiny::reactive(r$checkboxSave),
                 filterList = shiny::reactive(r$filterList), weightInputs = shiny::reactive(r$weightInputs), weightNames = shiny::reactive(r$weightNames), species = shiny::reactive(r$keptSpecies),
-                currentLang = shiny::reactive(i18n()$get_translation_language()) ) )
+                currentLang = shiny::reactive(i18n()$get_translation_language()), minCutThresh = shiny::reactive(input$minValThreshold) ) )
   })
 }
 #

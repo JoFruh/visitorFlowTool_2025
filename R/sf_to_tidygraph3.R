@@ -18,38 +18,38 @@ sf_to_tidygraph3 = function(x, shape, directed = FALSE, parkingPolygons = NULL, 
   # 2. Keep largest component
   #-----------------------------
 
-  net <- net %>%
-    tidygraph::activate("nodes") %>%
-    dplyr::mutate(comp = tidygraph::group_components()) %>%
-    dplyr::filter(comp == which.max(table(comp))) %>%
+  net <- net |>
+    tidygraph::activate("nodes") |>
+    dplyr::mutate(comp = tidygraph::group_components()) |>
+    dplyr::filter(comp == which.max(table(comp))) |>
     dplyr::select(-comp)
 
   #-----------------------------
   # 3. Extract nodes
   #-----------------------------
 
-  nodes_sf <- net %>%
-    tidygraph::activate("nodes") %>%
+  nodes_sf <- net |>
+    tidygraph::activate("nodes") |>
     sf::st_as_sf()
 
   coords <- sf::st_coordinates(nodes_sf)
 
-  nodes <- nodes_sf %>%
+  nodes <- nodes_sf |>
     dplyr::mutate(
       nodeID = dplyr::row_number(),
       X = coords[,1],
       Y = coords[,2]
     )
-  # %>%
+  # |>
   #   sf::st_drop_geometry()
 
   #-----------------------------
   # 4. Extract edges
   #-----------------------------
 
-  edgs <- net %>%
-    tidygraph::activate("edges") %>%
-    sf::st_as_sf() %>%
+  edgs <- net |>
+    tidygraph::activate("edges") |>
+    sf::st_as_sf() |>
     dplyr::mutate(
       edgeID = dplyr::row_number(),
       from = as.integer(from),
@@ -65,63 +65,63 @@ sf_to_tidygraph3 = function(x, shape, directed = FALSE, parkingPolygons = NULL, 
   edgs$hardNatur <- as.integer(edgs$hardNatur)
 
 
-#   edgs <- x %>%
+#   edgs <- x |>
 #     dplyr::mutate(edgeID = c(1:dplyr::n()))
 #
-#   nodes <- edgs %>%
-#     sf::st_coordinates() %>%
-#     dplyr::as_tibble() %>%
-#     dplyr::rename(edgeID = .data$L1) %>%
-#     dplyr::group_by(.data$edgeID) %>%
-#     dplyr::slice(c(1, dplyr::n())) %>%
-#     dplyr::ungroup() %>%
+#   nodes <- edgs |>
+#     sf::st_coordinates() |>
+#     dplyr::as_tibble() |>
+#     dplyr::rename(edgeID = .data$L1) |>
+#     dplyr::group_by(.data$edgeID) |>
+#     dplyr::slice(c(1, dplyr::n())) |>
+#     dplyr::ungroup() |>
 #     dplyr::mutate(start_end = rep(c('start', 'end'), times = dplyr::n()/2))
 #
 # #DEPRECATED
-#   # nodes <- nodes %>%
-#   #   dplyr::mutate(xy = paste(.data$X, .data$Y)) %>%
-#   #   dplyr::mutate(nodeID = dplyr::group_indices(., factor(.data$xy, levels = unique(.data$xy)))) %>%
+#   # nodes <- nodes |>
+#   #   dplyr::mutate(xy = paste(.data$X, .data$Y)) |>
+#   #   dplyr::mutate(nodeID = dplyr::group_indices(., factor(.data$xy, levels = unique(.data$xy)))) |>
 #   #   dplyr::select(-.data$xy)
 #
 #   # #corrected
-#   # nodes <- nodes %>%
-#   #   dplyr::mutate(xy = paste(.data$X, .data$Y)) %>%
-#   #   dplyr::group_by(xy) %>%                           # group by xy
-#   #   dplyr::mutate(nodeID = dplyr::cur_group_id()) %>%        # assign group IDs
-#   #   dplyr::ungroup() %>%                               # ungroup to remove grouping
+#   # nodes <- nodes |>
+#   #   dplyr::mutate(xy = paste(.data$X, .data$Y)) |>
+#   #   dplyr::group_by(xy) |>                           # group by xy
+#   #   dplyr::mutate(nodeID = dplyr::cur_group_id()) |>        # assign group IDs
+#   #   dplyr::ungroup() |>                               # ungroup to remove grouping
 #   #   dplyr::select(-xy)                                # drop the temporary xy column
 #
 #
 #   #updated
-#   nodes <- nodes %>%
+#   nodes <- nodes |>
 #     dplyr::mutate(
 #       X = round(X, 6),
 #       Y = round(Y, 6),
 #       xy = paste(X, Y)
-#     ) %>%
-#     dplyr::group_by(xy) %>%
-#     dplyr::mutate(nodeID = dplyr::cur_group_id()) %>%
-#     dplyr::ungroup() %>%
+#     ) |>
+#     dplyr::group_by(xy) |>
+#     dplyr::mutate(nodeID = dplyr::cur_group_id()) |>
+#     dplyr::ungroup() |>
 #     dplyr::select(-xy)
 #
 #
 #   #add node ids into edge ids as start and end
-#   source_nodes <- nodes %>%
-#     dplyr::filter(.data$start_end == 'start') %>%
+#   source_nodes <- nodes |>
+#     dplyr::filter(.data$start_end == 'start') |>
 #     dplyr::pull(.data$nodeID)
 #
 #
-#   target_nodes <- nodes %>%
-#     dplyr::filter(.data$start_end == 'end') %>%
+#   target_nodes <- nodes |>
+#     dplyr::filter(.data$start_end == 'end') |>
 #     dplyr::pull(.data$nodeID)
 #
-#   edgs <- edgs %>%
+#   edgs <- edgs |>
 #     dplyr::mutate(from = source_nodes, to = target_nodes)
 #
-#   nodes <- nodes %>%
-#     dplyr::distinct(.data$nodeID, .keep_all = TRUE) %>%
-#     tidygraph::select(-c(.data$edgeID, .data$start_end)) %>%
-#     sf::st_as_sf(coords = c('X', 'Y')) %>%
+#   nodes <- nodes |>
+#     dplyr::distinct(.data$nodeID, .keep_all = TRUE) |>
+#     tidygraph::select(-c(.data$edgeID, .data$start_end)) |>
+#     sf::st_as_sf(coords = c('X', 'Y')) |>
 #     sf::st_set_crs(sf::st_crs(edgs))
 #
 #   #create tbl_graph
@@ -143,7 +143,7 @@ sf_to_tidygraph3 = function(x, shape, directed = FALSE, parkingPolygons = NULL, 
 #   rm(edgs)
 #
 #   #REPEAT PROCESS BUT IGNORING UNCONNECTED EDGES
-#   edgs <- largestEdges %>% #[, c(-8:-11)]
+#   edgs <- largestEdges |> #[, c(-8:-11)]
 #     dplyr::mutate(edgeID = c(1:dplyr::n()))
 #
 #   #make char variables into integer
@@ -153,28 +153,28 @@ sf_to_tidygraph3 = function(x, shape, directed = FALSE, parkingPolygons = NULL, 
 #   #make walkBike from 1 to 4, rather than 0 to 3
 #   edgs$walkBike <- edgs$walkBike + 1
 #
-#   nodes <- edgs %>%
-#     sf::st_coordinates() %>%
-#     dplyr::as_tibble() %>%
-#     dplyr::rename(edgeID = .data$L1) %>%
-#     dplyr::group_by(.data$edgeID) %>%
-#     dplyr::slice(c(1, dplyr::n())) %>%
-#     dplyr::ungroup() %>%
+#   nodes <- edgs |>
+#     sf::st_coordinates() |>
+#     dplyr::as_tibble() |>
+#     dplyr::rename(edgeID = .data$L1) |>
+#     dplyr::group_by(.data$edgeID) |>
+#     dplyr::slice(c(1, dplyr::n())) |>
+#     dplyr::ungroup() |>
 #     dplyr::mutate(start_end = rep(c('start', 'end'), times = dplyr::n()/2))
 #
 #
 #   #DEPRECATED
-#   # nodes <- nodes %>%
-#   #   dplyr::mutate(xy = paste(.data$X, .data$Y)) %>%
-#   #   dplyr::mutate(nodeID = dplyr::group_indices(., factor(.data$xy, levels = unique(.data$xy)))) %>%
+#   # nodes <- nodes |>
+#   #   dplyr::mutate(xy = paste(.data$X, .data$Y)) |>
+#   #   dplyr::mutate(nodeID = dplyr::group_indices(., factor(.data$xy, levels = unique(.data$xy)))) |>
 #   #   dplyr::select(-.data$xy)
 #
 #   #corrected
-#   nodes <- nodes %>%
-#     dplyr::mutate(xy = paste(.data$X, .data$Y)) %>%
-#     dplyr::group_by(xy) %>%                           # group by xy
-#     dplyr::mutate(nodeID = dplyr::cur_group_id()) %>%        # assign group IDs
-#     dplyr::ungroup() %>%                               # ungroup to remove grouping
+#   nodes <- nodes |>
+#     dplyr::mutate(xy = paste(.data$X, .data$Y)) |>
+#     dplyr::group_by(xy) |>                           # group by xy
+#     dplyr::mutate(nodeID = dplyr::cur_group_id()) |>        # assign group IDs
+#     dplyr::ungroup() |>                               # ungroup to remove grouping
 #     dplyr::select(-xy)
 #
 #
@@ -183,28 +183,28 @@ sf_to_tidygraph3 = function(x, shape, directed = FALSE, parkingPolygons = NULL, 
 #   # REMOVED DUE TO IMPLICIT ORDERING
 #
 #   # #add node ids into edge ids as start and end
-#   # source_nodes <- nodes %>%
-#   #   dplyr::filter(.data$start_end == 'start') %>%
+#   # source_nodes <- nodes |>
+#   #   dplyr::filter(.data$start_end == 'start') |>
 #   #   dplyr::pull(.data$nodeID)
 #   #
 #   #
-#   # target_nodes <- nodes %>%
-#   #   dplyr::filter(.data$start_end == 'end') %>%
+#   # target_nodes <- nodes |>
+#   #   dplyr::filter(.data$start_end == 'end') |>
 #   #   dplyr::pull(.data$nodeID)
 #   #
-#   # edgs = edgs %>%
+#   # edgs = edgs |>
 #   #   dplyr::mutate(from = source_nodes, to = target_nodes)
 #
 #   #Fix
-#   edge_nodes <- nodes %>%
-#     dplyr::select(edgeID, nodeID, start_end) %>%
+#   edge_nodes <- nodes |>
+#     dplyr::select(edgeID, nodeID, start_end) |>
 #     tidyr::pivot_wider(
 #       names_from = start_end,
 #       values_from = nodeID
 #     )
 #
-#   edgs <- edgs %>%
-#     dplyr::left_join(edge_nodes, by = "edgeID") %>%
+#   edgs <- edgs |>
+#     dplyr::left_join(edge_nodes, by = "edgeID") |>
 #     dplyr::rename(
 #       from = start,
 #       to   = end
@@ -213,10 +213,10 @@ sf_to_tidygraph3 = function(x, shape, directed = FALSE, parkingPolygons = NULL, 
 #
 #
 #
-#   nodes <- nodes %>%
-#     dplyr::distinct(.data$nodeID, .keep_all = TRUE) %>%
-#     tidygraph::select(-c(.data$edgeID, .data$start_end)) %>%
-#     sf::st_as_sf(coords = c('X', 'Y')) %>%
+#   nodes <- nodes |>
+#     dplyr::distinct(.data$nodeID, .keep_all = TRUE) |>
+#     tidygraph::select(-c(.data$edgeID, .data$start_end)) |>
+#     sf::st_as_sf(coords = c('X', 'Y')) |>
 #     sf::st_set_crs(sf::st_crs(edgs))
 
 
@@ -238,7 +238,7 @@ sf_to_tidygraph3 = function(x, shape, directed = FALSE, parkingPolygons = NULL, 
 
 
   #convert nodes
-  # node_points <- as_tibble( network_Tbl_allCH%>%activate("nodes") )
+  # node_points <- as_tibble( network_Tbl_allCH|>activate("nodes") )
   node_vect <- terra::vect(nodes)
 
   # DULN_all <- DULN$all
@@ -288,7 +288,7 @@ sf_to_tidygraph3 = function(x, shape, directed = FALSE, parkingPolygons = NULL, 
 
   #add node_DULN data to original nodes
   colnames(extrResults) <- c("Residents", "cell")
-  newnodes <- nodes %>% dplyr::bind_cols(extrResults[, "Residents", drop = FALSE]) #remove cell column
+  newnodes <- nodes |> dplyr::bind_cols(extrResults[, "Residents", drop = FALSE]) #remove cell column
 
 
 
@@ -340,19 +340,19 @@ sf_to_tidygraph3 = function(x, shape, directed = FALSE, parkingPolygons = NULL, 
   colnames(node_DULN_data) <- c("DULN")
   #rename to fit tool's existing name convention
   colnames(node_DULN_allAgents) <- c("DULN_JOGGE", "DULN_DOG_N", "DULN_EBIKE", "DULN_WALK_","DULN_DOG_P","DULN_WALK1","DULN_BIKER")
-  newnodes <- newnodes %>% dplyr::bind_cols(node_DULN_data) %>% dplyr::bind_cols(node_DULN_allAgents)
+  newnodes <- newnodes |> dplyr::bind_cols(node_DULN_data) |> dplyr::bind_cols(node_DULN_allAgents)
 
   #add agentLoc to nodes (for Debug plotting agent locations)
-  newnodes <- newnodes %>% dplyr::bind_cols(data.frame(agentLoc = rep(0, nrow(nodes))))
+  newnodes <- newnodes |> dplyr::bind_cols(data.frame(agentLoc = rep(0, nrow(nodes))))
 
   #rename geometry to stay in line with previous versions
-  newnodes <- newnodes %>% dplyr::rename(geometry = SHAPE)
+  newnodes <- newnodes |> dplyr::rename(geometry = SHAPE)
 
 
   # print(edgs)
   #
   # #place edgeID as first column
-  # edgs <- edgs %>% select(edgeID, everything())
+  # edgs <- edgs |> select(edgeID, everything())
   #
   # print(edgs)
 # progress$inc(1/4)

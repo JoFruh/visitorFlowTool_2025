@@ -26,7 +26,8 @@ print("UI6")
                  ),
                  shiny::column(4,align = "center",
                                # shiny::h1("Schritt 1")
-                               imageMap(NS(id, "banner"), 'www/stepNewVersions_wsl.png' , list() )
+                               shiny::uiOutput(NS(id,"bannerUI_7"))
+                               # imageMap(NS(id, "banner"), 'www/stepNewVersions_wsl.png' , list() )
 
 
                  ),
@@ -83,8 +84,35 @@ background: url('infoIcon.png');  background-size: cover; background-position: c
                           shiny::column(12, align = "center",
                                  shinyWidgets::prettySwitch(shiny::NS(id, "showSM"), value = FALSE, label = NULL, width = "150px",
                                               bigger = TRUE, fill = TRUE, status = "success", inline = TRUE)
-                          ))
+                          )),
+                        shiny::fluidRow(
+
+                          shiny::column(12, align = "center",
+                                        shiny::h5(shiny::strong(i18n$t("Schutzgebiete anzeigen")))
+                          )
                         ),
+                        shiny::fluidRow(shiny::h5()),
+                        shiny::fluidRow(
+                          shiny::column(12, align = "center",
+                                        shinyWidgets::prettySwitch(shiny::NS(id, "showPA"), value = FALSE, label = NULL, width = "150px",
+                                                                   bigger = TRUE, fill = TRUE, status = "success", inline = TRUE)
+                          )),
+
+                        shiny::fluidRow(
+
+                          shiny::column(12, align = "center",
+                                        shiny::h5(shiny::strong(i18n$t("Zielgebiete anzeigen")))
+                          )
+                        ),
+                        shiny::fluidRow(shiny::h5()),
+                        shiny::fluidRow(
+                          shiny::column(12, align = "center",
+                                        shinyWidgets::prettySwitch(shiny::NS(id, "showAOI"), value = FALSE, label = NULL, width = "150px",
+                                                                   bigger = TRUE, fill = TRUE, status = "success", inline = TRUE)
+                          ))
+                 ),
+
+
                  #MAIN MAP ####
 
                  #code to alter legends manually (for left align etc.)

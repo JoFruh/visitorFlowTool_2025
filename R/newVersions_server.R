@@ -8,7 +8,7 @@
 # envUpdate <- new.env(parent = emptyenv())
 # envBtn <- new.env(parent = emptyenv())
 
-newVersions_server <- function(id, networkList, confirm, i18n, currentLang, isFirstRun, SM_pres, SMcolors, finalPolygons = NULL, versionsUI = list(), trigger = 0,
+newVersions_server <- function(id, networkList, confirm, i18n, currentLang, isFirstRun, SM_pres, SMcolors, shp_PA, finalPolygons = NULL, versionsUI = list(), trigger = 0,
                                DULN = NULL){
 
   # r$mapRefresh <- 0
@@ -683,13 +683,22 @@ obs_dimissModal <- shiny::observeEvent(input$dismissModal, {
 
 #observe info Button ####
 obs_info6 <- shiny::observeEvent(input$infoButton6, {
+  tbl <- read.csv2( "www/data/tables/attractivity_description.csv",
+                    check.names = FALSE)
+
   shiny::showModal(
     shiny::modalDialog(footer = shiny::actionButton(inputId = shiny::NS(id, "dismissModal"), label = i18n()$t("OK!"), style = "background-color:#006268; color:#ffffff"  ),
-                       h2(i18n()$t("Additional information:") ),
-                       h4(i18n()$t("work in progress...") )
-
+                       h2(i18n()$t("Attraktivitätsmodell für Naherholung:") ),
+                       h4(i18n()$t("Die Attraktivitätsmodelle werden dynamisch angepasst, um Änderungen in den Szenarien Rechnung zu tragen.") ),
+                       h4(i18n()$t("Im Folgenden beschreiben wir, wie Landschaftselemente die Attraktivität Naherholungsgebiete beeinflussen, indem wir ihre relative Rangfolge darstellen:") ),
+                       browser(),
+                       HTML(knitr::kable(tbl, format = "html") |>
+                        kableExtra::kable_styling(
+                           bootstrap_options = c("striped", "condensed"),
+                           full_width = TRUE)|>
+                          kableExtra::row_spec(0, align = "c")),
+                       size = "l")
     )
-  )
 })
 
 #observe help ####
@@ -729,16 +738,47 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
     # i18n$set_translation_language('de')
     shiny.i18n::update_lang("de")
     i18n()$set_translation_language("de")
+
+
+
+    output$bannerUI_7 <- shiny::renderUI({
+      imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/stepNewVersions_wsl_de.png"), list() )
+      #replace /" with ', to avoid problems
+      return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
+    })
+
+
+    r$currentLang <- "de"
+
     print("DE")
-
-
-
   }else if(input$languageSelect_7 == "fr"){
     # i18n$set_translation_language('fr')
     shiny.i18n::update_lang("fr")
+
+
+    output$bannerUI_7 <- shiny::renderUI({
+      imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/stepNewVersions_wsl_fr.png"), list() )
+      #replace /" with ', to avoid problems
+      return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
+    })
+
+
+    r$currentLang <- "fr"
     i18n()$set_translation_language("fr")
+  }else if(input$languageSelect_7 == "en"){
+    # i18n$set_translation_language('fr')
+    shiny.i18n::update_lang("en")
+    i18n()$set_translation_language("en")
 
 
+    output$bannerUI_7 <- shiny::renderUI({
+      imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/stepNewVersions_wsl_en.png"), list() )
+      #replace /" with ', to avoid problems
+      return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
+    })
+
+
+    r$currentLang <- "en"
   }
 })
 ##Observe end of render ####
@@ -1148,10 +1188,10 @@ print("add versions")
           #as for name of new version
           shiny::showModal(shiny::modalDialog(
             shiny::tags$h2(i18n()$t('Geben Sie der neuen Version einen Namen:') ),
-            shiny::textInput(shiny::NS(id, 'name'), 'Name der neuen Version'),
+            shiny::textInput(shiny::NS(id, 'name'), i18n()$t('Name der neuen Version')),
             footer=shiny::tagList(
-              shiny::actionButton(inputId = shiny::NS(id, 'submitName'), i18n()$t('Einreichen') ),
-              shiny::modalButton('Abbrechen'))
+              shiny::actionButton(inputId = shiny::NS(id, 'submitName'), label = i18n()$t('Einreichen'), style = "background-color:#006268; color:#ffffff"   ),
+              shiny::modalButton(i18n()$t('Abbrechen')) )
             )
           )
         }, ignoreInit = TRUE)
@@ -3096,7 +3136,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
             }
           }else{
             #if Original was clicked
-            shiny::showModal(shiny::modalDialog(shiny::h3(shiny::HTML("Sie können das <b>originale</b> Wegenetz <b>nicht</b> ändern.")),
+            shiny::showModal(shiny::modalDialog(shiny::h3(shiny::HTML(i18n()$t("Sie können das <b>originale</b> Wegenetz <b>nicht</b> ändern."))),
                                                 h3(shiny::HTML(i18n()$t("Bitte wählen Sie zuerst ein <b>anderes Szenario</b> aus und erstellen Sie es.")), shiny::img(src = "www/arrowRight.png", style = "float:right;height:100px;margin-right:-100px")),
 
                                                 footer = shiny::actionButton(inputId = shiny::NS(id, "dismissModal"), label = i18n()$t("OK!"), style = "background-color:#006268; color:#ffffff"  ))
@@ -3183,6 +3223,69 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
               leaflet::clearGroup(group = "SM")
           }
 
+        })
+
+        obsPA <- shiny::observeEvent(input$showPA, {
+          #show SM when switch is turned on (and there is a SM)
+          if(input$showPA == 1 ){
+
+            if( !is.null(shp_PA)){
+
+              #prepare pal
+              pal <- leaflet::colorFactor(
+                palette = c("#a2e08a", "#4a8636", "#105200"),
+                levels = c(3, 2, 1)
+              )
+
+              #show PA
+              leaflet::leafletProxy("versionMap", data = shp_PA )%>%
+                leaflet::addPolygons(group = "PA", opacity = 1, color = ~pal(PA_type), weight = 5)%>%
+                leaflet::addLegend(layerId = "legend", title = "Zielgebiete:", position = "topright", labels = c("streng", "umfassend", "teilweise") , colors = c("#105200", "#4a8636", "#a2e08a"))
+            }else if(is.null(SM_pres)){
+              #write error precising that there is no SM or default SM is used
+              #TODO write error
+              return()
+            }
+          }else{
+            #remove SM when switched is turned off
+            leaflet::leafletProxy("versionMap" )%>%
+
+              leaflet::clearGroup(group = "PA")%>%
+              leaflet::removeControl(layerId = "legend")
+          }
+        })
+
+        obsAOI <- shiny::observeEvent(input$showAOI, {
+          #show ziegebiete when switch is turned on
+          if(input$showAOI == 1 ){
+
+            if( !is.null(shp_PA)){
+
+
+              #show PA
+              leaflet::leafletProxy("versionMap", data = finalPolygons )%>%
+                leaflet::addPolygons(data = finalPolygons,
+                                     weight = 3,
+                                     color = "green",
+                                     fillColor = "green",
+                                     fill = TRUE,
+                                     stroke = TRUE,
+                                     options = leaflet::pathOptions(pane = "layer1"),
+                                     opacity = 1,
+                                     fillOpacity = 0.1,
+                                     group = "AOI")
+
+            }else if(is.null(SM_pres)){
+              #write error precising that there is no SM or default SM is used
+              #TODO write error
+              return()
+            }
+          }else{
+            #remove SM when switched is turned off
+            leaflet::leafletProxy("versionMap" )%>%
+
+              leaflet::clearGroup(group = "AOI")
+          }
         })
 
       # CONFIRM NEW VERSIONS ####

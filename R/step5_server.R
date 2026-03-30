@@ -118,19 +118,19 @@ step5_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
 
         if(skip == TRUE){ #without starting polygons
           tmap::tmap_leaflet(
-            tmap::tm_shape(network %>% tidygraph::activate(edges) %>% dplyr::as_tibble() %>% sf::st_as_sf(), options = leaflet::pathOptions(pane = "layer1")) +
+            tmap::tm_shape(network |> tidygraph::activate(edges) |> dplyr::as_tibble() |> sf::st_as_sf(), options = leaflet::pathOptions(pane = "layer1")) +
               tmap::tm_lines(col = "grey", lwd = 2, palette = c("grey"), popup.vars = FALSE,interactive = FALSE) +
               tmap::tmap_options(basemaps = 'OpenStreetMap', basemap.alpha = c(0.5) )
-          ) %>%leaflet::addMapPane("layer1", zIndex = 410) %>% leaflet::addMapPane("layer2", zIndex = 420)
+          ) |>leaflet::addMapPane("layer1", zIndex = 410) |> leaflet::addMapPane("layer2", zIndex = 420)
 
 
         }else if(skip == FALSE){ #with starting polygons
 
           tmap::tmap_leaflet(
-            tmap::tm_shape(network %>% tidygraph::activate(edges) %>% dplyr::as_tibble() %>% sf::st_as_sf(), options = leaflet::pathOptions(pane = "layer1")) +
+            tmap::tm_shape(network |> tidygraph::activate(edges) |> dplyr::as_tibble() |> sf::st_as_sf(), options = leaflet::pathOptions(pane = "layer1")) +
               tmap::tm_lines(col = "grey", lwd = 2, palette = c("grey"), popup.vars = FALSE,interactive = FALSE) +
               tmap::tmap_options(basemaps = 'OpenStreetMap', basemap.alpha = c(0.5) )
-          ) %>% leaflet::addMapPane("layer1", zIndex = 410) %>% leaflet::addMapPane("layer2", zIndex = 420) %>%
+          ) |> leaflet::addMapPane("layer1", zIndex = 410) |> leaflet::addMapPane("layer2", zIndex = 420) |>
             leaflet::addGeoJSON(
             geojson = geojsonsf::sf_geojson(r$startingPolygons ),
             stroke = TRUE,
@@ -153,8 +153,8 @@ step5_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
       #TO DO: try to improve: either name container in input variables, include container in inputs (reactive programming complicates this)
 
       #
-      # leafletProxy("finalAOIMap", deferUntilFlush = FALSE )%>%
-      #   clearGroup("eraseable")%>%
+      # leafletProxy("finalAOIMap", deferUntilFlush = FALSE )|>
+      #   clearGroup("eraseable")|>
       #   addGeoJSON(
       #     geojson = geojsonsf::sf_geojson(polygonsList),
       #     stroke = TRUE,
@@ -218,9 +218,9 @@ step5_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
           shinyjs::addClass(id = "mapFrame", "cutModeOff", asis = TRUE)
         }
 
-        proxy <- leaflet::leafletProxy(leafletMapID)%>%
-          leaflet::clearGroup("first")%>%
-          leaflet::clearGroup("after")%>%
+        proxy <- leaflet::leafletProxy(leafletMapID)|>
+          leaflet::clearGroup("first")|>
+          leaflet::clearGroup("after")|>
           leaflet::clearGroup("cut")
       }, ignoreInit = TRUE)
 
@@ -254,7 +254,7 @@ step5_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
                 if(length(intersectingPolys) > 0){
                   #if so, combine it into a single polygon
                   newPoly <- sf::st_as_sf(sf::st_union(c(poly$polygons, r$polygonsList[intersectingPolys,]$polygons) ) )
-                  newPoly <- newPoly %>% dplyr::rename(polygons = .data$x)
+                  newPoly <- newPoly |> dplyr::rename(polygons = .data$x)
                   #determine its general attractivity (with popup)
                   newPoly$DULN <- 1
                   #determine id
@@ -269,13 +269,13 @@ step5_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
                 #generate DULN value for polygon on the fly
                 values <- terra::extract(r$DULN_na, poly)
 
-                values <- values %>% dplyr::group_by(ID)%>%dplyr::arrange(desc(walkNat))
+                values <- values |> dplyr::group_by(ID)|>dplyr::arrange(desc(walkNat))
 
                 # meanFunc <- function(x){
                 #   (median(x[1:(length(x)/4 )] , na.rm = TRUE)+
                 #      median(x, na.rm = TRUE) ) / 2
                 # }
-                # meanValues <- values %>% dplyr::group_by(ID)%>% dplyr::summarise(mean = meanFunc(Nature_walk))
+                # meanValues <- values |> dplyr::group_by(ID)|> dplyr::summarise(mean = meanFunc(Nature_walk))
                 # spltPoly$DULN <- meanValues$mean
                 poly$DULN <- (median(values$walkNat[1:(length(values$walkNat)/4 )] , na.rm = TRUE)+
                                              median(values$walkNat, na.rm = TRUE) ) / 2
@@ -299,8 +299,8 @@ step5_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
 
               r$mapPoints <- sf::st_sfc(crs = 4326)
               print(r$polygonsList)
-              proxy <- leaflet::leafletProxy(leafletMapID)%>%
-                leaflet::clearGroup("eraseable")%>%
+              proxy <- leaflet::leafletProxy(leafletMapID)|>
+                leaflet::clearGroup("eraseable")|>
                 leaflet::addGeoJSON(geojson = geojsonsf::sf_geojson(r$polygonsList),
                                     stroke = TRUE,
                                     weight = 5,
@@ -412,12 +412,12 @@ step5_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
                     values <- terra::extract(r$DULN_na, spltPoly)
 
                     #Determine AoI by giving importance to a sizeable portion of the most attractive area (1/4)
-                    values <- values %>% dplyr::group_by(ID)%>%dplyr::arrange(desc(walkNat))
+                    values <- values |> dplyr::group_by(ID)|>dplyr::arrange(desc(walkNat))
                     meanFunc <- function(x){
                       (median(x[1:(length(x)/4 )] , na.rm = TRUE)+
                          median(x, na.rm = TRUE) ) / 2
                     }
-                    meanValues <- values %>% dplyr::group_by(ID)%>% dplyr::summarise(mean = meanFunc(walkNat))
+                    meanValues <- values |> dplyr::group_by(ID)|> dplyr::summarise(mean = meanFunc(walkNat))
                     spltPoly$DULN <- meanValues$mean #[values$all > -20] no longer need to avoid values <= -20
 
                     #add area to polygon
@@ -428,8 +428,8 @@ step5_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
                     r$polygonsList <- r$polygonsList[-polyIndex,]
 
                     #update map
-                    proxy <- leaflet::leafletProxy(leafletMapID)%>%
-                      leaflet::clearGroup("eraseable")%>%
+                    proxy <- leaflet::leafletProxy(leafletMapID)|>
+                      leaflet::clearGroup("eraseable")|>
                       leaflet::addGeoJSON(geojson = geojsonsf::sf_geojson(r$polygonsList),
                                           stroke = TRUE,
                                           weight = 5,
@@ -455,12 +455,12 @@ step5_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
                     values <- terra::extract(r$DULN_na, newPoly)
 
                     #Determine AoI by giving importance to a sizeable portion of the most attractive area (1/4)
-                    values <- values %>% dplyr::group_by(ID)%>%dplyr::arrange(desc(walkNat))
+                    values <- values |> dplyr::group_by(ID)|>dplyr::arrange(desc(walkNat))
                     meanFunc <- function(x){
                       (median(x[1:(length(x)/4 )] , na.rm = TRUE)+
                          median(x, na.rm = TRUE) ) / 2
                     }
-                    meanValues <- values %>% dplyr::group_by(ID)%>% dplyr::summarise(mean = meanFunc(walkNat))
+                    meanValues <- values |> dplyr::group_by(ID)|> dplyr::summarise(mean = meanFunc(walkNat))
                     newPoly$DULN <- meanValues$mean #[values$all > -20] no longer need to avoid values <= -20
                     #add area to polygon
                     newPoly$area <- as.numeric(sf::st_area(newPoly$polygons))
@@ -470,8 +470,8 @@ step5_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
                     r$polygonsList <- r$polygonsList[-polyIndex,]
 
                     #update map
-                    proxy <- leaflet::leafletProxy(leafletMapID)%>%
-                      leaflet::clearGroup("eraseable")%>%
+                    proxy <- leaflet::leafletProxy(leafletMapID)|>
+                      leaflet::clearGroup("eraseable")|>
                       leaflet::addGeoJSON(geojson = geojsonsf::sf_geojson(r$polygonsList),
                                           stroke = TRUE,
                                           weight = 5,
@@ -486,7 +486,7 @@ step5_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
                     #reset shape clicked
                     r$shapeWasClicked <- FALSE
 
-                    leaflet::leafletProxy(leafletMapID) %>%leaflet::clearGroup("cut")
+                    leaflet::leafletProxy(leafletMapID) |>leaflet::clearGroup("cut")
 
                     #reset
                     r$cutMarkerExists <- FALSE
@@ -502,7 +502,7 @@ step5_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
                 #potentially check if shape can be cut
               }
 
-              leaflet::leafletProxy(leafletMapID) %>%leaflet::clearGroup("cut")
+              leaflet::leafletProxy(leafletMapID) |>leaflet::clearGroup("cut")
 
 
               #reset
@@ -523,12 +523,12 @@ step5_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
               values <- terra::extract(r$DULN_na, newPoly)
 
               #Determine AoI by giving importance to a sizeable portion of the most attractive area (1/4)
-              values <- values %>% dplyr::group_by(ID)%>%dplyr::arrange(desc(walkNat))
+              values <- values |> dplyr::group_by(ID)|>dplyr::arrange(desc(walkNat))
               meanFunc <- function(x){
                 (median(x[1:(length(x)/4 )] , na.rm = TRUE)+
                    median(x, na.rm = TRUE) ) / 2
               }
-              meanValues <- values %>% dplyr::group_by(ID)%>% dplyr::summarise(mean = meanFunc(walkNat))
+              meanValues <- values |> dplyr::group_by(ID)|> dplyr::summarise(mean = meanFunc(walkNat))
               newPoly$DULN <- meanValues$mean #[values$all > -20] no longer need to avoid values <= -20
               #add area to polygon
               newPoly$area <- as.numeric(sf::st_area(newPoly$polygons))
@@ -538,8 +538,8 @@ step5_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
               r$polygonsList <- r$polygonsList[-polyIndex,]
 
               #update map
-              proxy <- leaflet::leafletProxy(leafletMapID)%>%
-                leaflet::clearGroup("eraseable")%>%
+              proxy <- leaflet::leafletProxy(leafletMapID)|>
+                leaflet::clearGroup("eraseable")|>
                 leaflet::addGeoJSON(geojson = geojsonsf::sf_geojson(r$polygonsList),
                                     stroke = TRUE,
                                     weight = 5,
@@ -554,7 +554,7 @@ step5_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
               #reset shape clicked
               r$shapeWasClicked <- FALSE
 
-              leaflet::leafletProxy(leafletMapID) %>%leaflet::clearGroup("cut")
+              leaflet::leafletProxy(leafletMapID) |>leaflet::clearGroup("cut")
 
               #reset
               r$cutMarkerExists <- FALSE
@@ -594,8 +594,8 @@ step5_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
             r$polygonsList <- r$polygonsList[!r$polygonsList$id %in% input[[mapGeojsonClick]]$properties$id, ]
 
             #replot polygons
-            leaflet::leafletProxy(leafletMapID )%>%
-              leaflet::clearGroup("eraseable")%>%
+            leaflet::leafletProxy(leafletMapID )|>
+              leaflet::clearGroup("eraseable")|>
               leaflet::addGeoJSON(
                 geojson = geojsonsf::sf_geojson(r$polygonsList),
                 stroke = TRUE,
@@ -636,7 +636,7 @@ step5_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
 
 
               #replot polygons
-              leaflet::leafletProxy(leafletMapID )%>%
+              leaflet::leafletProxy(leafletMapID )|>
                 leaflet::clearGroup("eraseable")
 
             }
@@ -656,10 +656,10 @@ step5_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
           r$polygonsList <- r$startingPolygons
 
           #replot polygons
-          map <- leaflet::leafletProxy(leafletMapID )%>%
+          map <- leaflet::leafletProxy(leafletMapID )|>
             leaflet::clearGroup("eraseable")
           if(!is.null(nrow(r$startingPolygons)) ){
-            map %>% leaflet::addGeoJSON(
+            map |> leaflet::addGeoJSON(
               geojson = geojsonsf::sf_geojson(r$startingPolygons),
               stroke = TRUE,
               weight = 5,
@@ -848,7 +848,7 @@ step5_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
 
           vertices <- sf::st_as_sf(dplyr::as_tibble(tidygraph::activate(network, nodes)))
           vertices <- sf::st_transform(vertices, 4326)
-          # node_points <- as_tibble( network_Tbl_allCH%>%activate("nodes") )
+          # node_points <- as_tibble( network_Tbl_allCH|>activate("nodes") )
           vertices_vect <- terra::vect(vertices)
 
           cat(file = stderr(), "TEST2")
@@ -931,8 +931,8 @@ step5_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
                                    wkt_filter = wkt
             )
             if(!is.null(parking )){
-              parking <-  parking %>%
-                dplyr::rename(polygons = .data$`_ogr_geometry_`) %>%
+              parking <-  parking |>
+                dplyr::rename(polygons = .data$`_ogr_geometry_`) |>
                 dplyr::select(.data$polygons)
               parking$id <- 1:nrow(parking)
               parking$isNew <- 0
@@ -1184,29 +1184,45 @@ step5_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
       filename = function(){
 
         if(r$currentLang == "de"){
-          name <- "visitorFlow_aoi.zip"
+          name <- "visitorFlow_Zielgebiete.zip"
         }else if(r$currentLang == "fr"){
-          name <- "visitorFlow_aoi.zip"
+          name <- "visitorFlow_zonesCibles.zip"
+        }else if(r$currentLang == "en"){
+          name <- "visitorFlow_areasOfInterest.zip"
         }
 
         return(name)
       },
       content = function(file){
 
+        # Create a dedicated temp folder with a clean name
+        tmpDir <- tempfile(pattern = "AOI_download")
+        dir.create(tmpDir)
+
+        # Define clean file names inside that folder
+        gpkgFile  <- file.path(tmpDir, "AOI.gpkg")
+        txtFile  <- file.path(tmpDir, "INFO_AOI.txt")
+
         #put areas of interest
-        tempGDB_aoi <- tempfile(pattern = "zielgebiet_", fileext = ".gpkg")
-        sf::st_write(r$polygonsList, dsn = tempGDB_aoi , driver = "GPKG")
+        # tempGDB_aoi <- tempfile(pattern = "zielgebiet_", fileext = ".gpkg")
+        sf::st_write(r$polygonsList, dsn = gpkgFile , driver = "GPKG")
 
         #text info
-        tempTXT_info <- tempfile(pattern = "INFO_", fileext = ".txt")
-        fileConn<-file(tempTXT_info)
+        # tempTXT_info <- tempfile(pattern = "INFO_", fileext = ".txt")
+        # fileConn<-file(tempTXT_info)
         writeLines(c("Information about AOI.",
                      "DULN field represents attractivity of the area",
-                     "area is the surface in m^2" ), fileConn)
-        close(fileConn)
+                     "Area of surfaces is in m^2" ), txtFile)
+        # close(fileConn)
+
+        # Zip using relative paths by setting wd to tmpDir
+        oldWd <- setwd(tmpDir)
+        on.exit(setwd(oldWd), add = TRUE)  # always restore wd
+
+        utils::zip(file, files = c("AOI.gpkg", "INFO_AOI.txt"))
 
         #zip both
-        utils::zip(file, c(tempGDB_aoi, tempTXT_info), flags = NULL)
+        # utils::zip(file, c(tempGDB_aoi, tempTXT_info), flags = NULL)
 
       }
     )
@@ -1229,16 +1245,29 @@ step5_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
                                                 detail = paste0("Dies sollte weniger als ", 30, "Sekunden dauern"),
                                                 queue = ipc::shinyQueue(),
                                                 millis = 1000)
+
+
+
+            DULN_wrapped <- terra::wrap(DULN)
+            DULN_all_wrapped <- terra::wrap(DULN_all)
+
+            # lake_path <- paste0(home, "/inst/app/www/data/maps/lakes.gdb")
+
             future::future({
+
+              DULN <- terra::unwrap(DULN_wrapped)
+              DULN_all <- terra::unwrap(DULN_all_wrapped)
 
               progress1$set(1/2)
               finalAOI <- generateAoI2(network, minThresh = minThresh, perimeter = shape,
-                                       DULN = DULN, DULN_all = DULN_all)
+                                       DULN = DULN, DULN_all = DULN_all) #, lake_path = lake_path
               progress1$set(2/2)
               progress1$close()
               finalAOI
 
             }, seed = TRUE) %...>% (function(finalAOI){
+
+
               #create a local version of the global variable to plot it
               #complications due to observe events being called by functions (TO DO: improve this coding)
               r$startingPolygons <- sf::st_transform(finalAOI, crs = 4326)

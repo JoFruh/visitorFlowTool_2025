@@ -5,8 +5,10 @@ step1_server <- function(id, i18n){
 
     cat(file = stderr(), "START STEP 1 SERVER\n")
 
-    # currentPlan <- future::plan("future::multisession")
-    currentPlan <- future::plan("future::sequential")
+
+
+
+
 
     #make title for tab
     shiny::titlePanel("Besucherlenkungs-Tool")
@@ -172,7 +174,7 @@ step1_server <- function(id, i18n){
       r1$finalPolygon <- NULL
 
       #replot
-      leaflet::leafletProxy(leafletMapID )%>%
+      leaflet::leafletProxy(leafletMapID )|>
         leaflet::clearGroup("eraseable")
 
       #remove confirm button
@@ -198,8 +200,8 @@ step1_server <- function(id, i18n){
             if(!sf::st_is_valid(poly)){
               #erase points
               r$mapPoints <- sf::st_sfc(crs = 4326)
-              leaflet::leafletProxy(leafletMapID )%>%
-                leaflet::clearGroup("first")%>%
+              leaflet::leafletProxy(leafletMapID )|>
+                leaflet::clearGroup("first")|>
                 leaflet::clearGroup("after")
 
               shiny::showModal(
@@ -212,8 +214,8 @@ step1_server <- function(id, i18n){
 
               #erase points
               r$mapPoints <- sf::st_sfc(crs = 4326)
-              leaflet::leafletProxy(leafletMapID )%>%
-                leaflet::clearGroup("first")%>%
+              leaflet::leafletProxy(leafletMapID )|>
+                leaflet::clearGroup("first")|>
                 leaflet::clearGroup("after")
 
               shiny::showModal(
@@ -240,7 +242,7 @@ step1_server <- function(id, i18n){
               #   if(length(intersectingPolys) > 0){
               #     #if so, combine it into a single polygon
               #     newPoly <- sf::st_as_sf(sf::st_union(c(poly$polygons, r$polygonsList[intersectingPolys,]$polygons) ) ) #polygonEnv$
-              #     newPoly <- newPoly %>% dplyr::rename(polygons = .data$x)
+              #     newPoly <- newPoly |> dplyr::rename(polygons = .data$x)
               #     #determine its general attractivity (with popup)
               #     newPoly$DULN <- 1
               #     #determine id
@@ -266,8 +268,8 @@ step1_server <- function(id, i18n){
               # }
               r$polyFinished <- TRUE
               r$mapPoints <- sf::st_sfc(crs = 4326)
-              proxy <- leaflet::leafletProxy(leafletMapID)%>%
-                leaflet::clearGroup("eraseable")%>%
+              proxy <- leaflet::leafletProxy(leafletMapID)|>
+                leaflet::clearGroup("eraseable")|>
                 leaflet::addGeoJSON(geojson = geojsonsf::sf_geojson(r$polygonsList),
                                     stroke = TRUE,
                                     weight = 5,
@@ -364,7 +366,7 @@ step1_server <- function(id, i18n){
             button2Visible(FALSE)
 
             #replot
-            leaflet::leafletProxy(leafletMapID )%>%
+            leaflet::leafletProxy(leafletMapID )|>
               leaflet::clearGroup("eraseable")
 
             button2Visible(FALSE)
@@ -387,10 +389,10 @@ step1_server <- function(id, i18n){
         r$polygonsList <- startingPolygons
 
         #replot polygons
-        map <- leaflet::leafletProxy(leafletMapID )%>%
+        map <- leaflet::leafletProxy(leafletMapID )|>
           leaflet::clearGroup("eraseable")
         if(!is.null(nrow(startingPolygons)) ){
-          map %>% leaflet::addGeoJSON(
+          map |> leaflet::addGeoJSON(
             geojson = geojsonsf::sf_geojson(startingPolygons),
             stroke = TRUE,
             weight = 5,
@@ -422,14 +424,15 @@ step1_server <- function(id, i18n){
         #map with saved shape
         tmap::tmap_leaflet(
           tmap::tm_shape(countryshape) +
-            tmap::tm_borders(col = "darkgreen", lwd = 3, zindex = 405) +
-            tmap::tmap_options(basemap.server = 'OpenStreetMap', basemap.alpha = c(0.5) ),
+            tmap::tm_borders(col = "darkgreen", lwd = 3, zindex = 405) ,
+          # +
+            # tmap::tmap_options(basemap.server = 'OpenStreetMap', basemap.alpha = c(0.5) ),
           options = leaflet::leafletOptions(doubleClickZoom = FALSE,
                                             zoomSnap = 0.05, zoomDelta = 0.05,
                                             wheelPxPerZoomLevel = 60),
-          in.shiny = TRUE) %>%
-          leaflet::addMapPane("layer1", zIndex = 410)%>% leaflet::addMapPane("layer2", zIndex = 420)%>% leaflet::addMapPane("layer3", zIndex = 450) %>%
-          leaflet::clearGroup("eraseable")%>%
+          in.shiny = TRUE) |>
+          leaflet::addMapPane("layer1", zIndex = 410)|> leaflet::addMapPane("layer2", zIndex = 420)|> leaflet::addMapPane("layer3", zIndex = 450) |>
+          leaflet::clearGroup("eraseable")|>
           leaflet::addGeoJSON(geojson = geojsonsf::sf_geojson( shape ),
                               stroke = TRUE,
                               weight = 5,
@@ -438,22 +441,27 @@ step1_server <- function(id, i18n){
                               fillColor = "green",
                               opacity = 1,
                               group = "eraseable",
-                              options = leaflet::pathOptions(pane = "layer2"))%>%
-          leaflet::fitBounds(lng1 = bb[[1]], lat1 = bb[[2]], lng2 = bb[[3]], lat2 = bb[[4]])
+                              options = leaflet::pathOptions(pane = "layer2"))|>
+          leaflet::fitBounds(lng1 = bb[[1]], lat1 = bb[[2]], lng2 = bb[[3]], lat2 = bb[[4]]) |>
+          leaflet::addProviderTiles(
+            leaflet::providers$OpenStreetMap,
+            options = leaflet::providerTileOptions(noWrap = TRUE)
+          )
 
       }else{
 
         #if no shape exists, do original (empty) map
         tmap::tmap_leaflet(
           tmap::tm_shape(countryshape) +
-            tmap::tm_borders(col = "darkgreen", lwd = 3, zindex = 405) +
-            tmap::tmap_options(basemap.server = 'OpenStreetMap', basemap.alpha = c(0.5) ),
+            tmap::tm_borders(col = "darkgreen", lwd = 3, zindex = 405) ,
           options = leaflet::leafletOptions(doubleClickZoom = FALSE,
                                             zoomSnap = 0.05, zoomDelta = 0.05,
                                             wheelPxPerZoomLevel = 60),
-          in.shiny = TRUE) %>%
-
-          leaflet::addMapPane("layer1", zIndex = 410)%>% leaflet::addMapPane("layer2", zIndex = 420)%>% leaflet::addMapPane("layer3", zIndex = 450)
+          in.shiny = TRUE) |>
+          leaflet::addMapPane("layer1", zIndex = 410)|> leaflet::addMapPane("layer2", zIndex = 420)|> leaflet::addMapPane("layer3", zIndex = 450)|>
+          leaflet::addProviderTiles(
+            leaflet::providers$OpenStreetMap,
+            options = leaflet::providerTileOptions(noWrap = TRUE) )
       }
     })
 
@@ -624,7 +632,7 @@ step1_server <- function(id, i18n){
                              h3(shiny::HTML(as.character(i18n()$t("Kombinieren Sie empfindliche Biodiversität und Naherholung in der Schweiz<br>in <b>5 einfachen Schritten</b>!"))), style = "text-align:center" ),
                              h2(),
 
-                             shiny::img(src = i18n()$t("www/introBanner_de.png"), style = "align:center; height:300px"),
+                             shiny::img(src = i18n()$t("www/introBanner_de.png"), style = "align:center; width:871px"),
                              h2(),
                              h4(shiny::HTML(as.character(i18n()$t("Sie können die Ergebnisse nach jedem Schritt <b>speichern</b> und <b>herunterladen</b>.") ) ), style = "text-align:center" )
 
@@ -706,8 +714,8 @@ step1_server <- function(id, i18n){
 
           #erase points
           r$mapPoints <- sf::st_sfc(crs = 4326)
-          leaflet::leafletProxy(leafletMapID )%>%
-            leaflet::clearGroup("first")%>%
+          leaflet::leafletProxy(leafletMapID )|>
+            leaflet::clearGroup("first")|>
             leaflet::clearGroup("after")
 
           #TODO: reset text input if necessary
@@ -778,15 +786,15 @@ step1_server <- function(id, i18n){
     # ADD SHAPE ####
     shiny::observeEvent(r1$triggerNewShape, {
 
-      # r1$finalShape <- sf::st_as_sf(r1$shape, coords = c("long", "lat"), crs = sf::st_crs(4326)) %>% sf::st_combine() %>% sf::st_cast( "POLYGON") %>% sf::st_sf()
-      r1$finalShape <- sf::st_as_sfc(r1$shape, coords = c("long", "lat"), crs = sf::st_crs(4326)) %>% sf::st_combine() %>% sf::st_cast( "POLYGON") %>% sf::st_sf()
+      # r1$finalShape <- sf::st_as_sf(r1$shape, coords = c("long", "lat"), crs = sf::st_crs(4326)) |> sf::st_combine() |> sf::st_cast( "POLYGON") |> sf::st_sf()
+      r1$finalShape <- sf::st_as_sfc(r1$shape, coords = c("long", "lat"), crs = sf::st_crs(4326)) |> sf::st_combine() |> sf::st_cast( "POLYGON") |> sf::st_sf()
 
 
       bb <- sf::st_bbox(r1$finalShape)
       #update plot
-      proxy <- leaflet::leafletProxy("areaSelectMap")%>%
-        leaflet::flyToBounds(lng1 = bb[[1]], lat1 = bb[[2]], lng2 = bb[[3]], lat2 = bb[[4]])%>%
-        leaflet::clearGroup("eraseable")%>%
+      proxy <- leaflet::leafletProxy("areaSelectMap")|>
+        leaflet::flyToBounds(lng1 = bb[[1]], lat1 = bb[[2]], lng2 = bb[[3]], lat2 = bb[[4]])|>
+        leaflet::clearGroup("eraseable")|>
         leaflet::addGeoJSON(geojson = geojsonsf::sf_geojson( r1$finalShape),
                    stroke = TRUE,
                    weight = 5,
@@ -948,63 +956,121 @@ step1_server <- function(id, i18n){
       filename = function(){
 
         if(r$currentLang == "de"){
-          name <- "visitorFlow_attractivity.zip"
+          name <- "visitorFlow_attractivität.zip"
         }else if(r$currentLang == "fr"){
+          name <- "visitorFlow_attractivité.zip"
+        }else if(r$currentLang == "en"){
           name <- "visitorFlow_attractivity.zip"
         }
 
         return(name)
       },
-      content = function(file){
-        #put areas of interest
-        tempGDB_attr <- tempfile(pattern = "attractivity_", fileext = ".tif")
 
-        if(r$attrToDownload == "new"){
-          #load attractivity
-          attr <- terra::rast( "www/data/maps/DULN/DULN_nat_majMaxMeanAGGBlur.tif")
+      content = function(file) {
 
-          #text info
-          tempTXT_info <- tempfile(pattern = "INFO_", fileext = ".txt")
-          fileConn<-file(tempTXT_info)
-          writeLines(c("Information about new Attractivity map",
-                       "The raster was developed by aggregating various features known or assumed to attract recreationists",
-                       "Table describing these is available at..." ), fileConn)
-          close(fileConn)
-        }else{
-          attr <- terra::rast( "www/data/maps/DULN/DULN_old_epsg4326.tif")
+        # Create a dedicated temp folder with a clean name
+        tmpDir <- tempfile(pattern = "attractivity_download")
+        dir.create(tmpDir)
 
-          #text info
-          tempTXT_info <- tempfile(pattern = "INFO_", fileext = ".txt")
-          fileConn<-file(tempTXT_info)
-          writeLines(c("Information about old Attractivity map ('DULN')",
-                       "Developed by Kienast et al. 2012",
-                       "Table describing these is available at..." ), fileConn)
-          close(fileConn)
+        # Define clean file names inside that folder
+        tifFile  <- file.path(tmpDir, "attractivity.tif")
+        txtFile  <- file.path(tmpDir, "INFO_attractivity.txt")
+
+        # --- Load raster & write text based on selection ---
+        if (r$attrToDownload == "new") {
+          attr <- terra::rast("www/data/maps/DULN/DULN_nat_majMaxMeanAGGBlur.tif")
+          writeLines(c(
+            "Information about new Attractivity map:",
+            "The raster was developed by aggregating various features known or assumed to attract recreationists, following the method of Kienast et al. 2012",
+            "Relative to Kienast et al. 2012, it is up to date (data from 2025), is more detailed and covers all of Switzerland."
+
+          ), txtFile)
+
+        } else {
+          attr <- terra::rast("www/data/maps/DULN/DULN_old_epsg4326.tif")
+          writeLines(c(
+            "Information about old Attractivity map ('DULN')",
+            "Developed by Kienast et al. 2012",
+            "'GIS-assisted mapping of landscape suitability for nearby recreation'",
+            "Landscape and Urban Planning"
+          ), txtFile)
         }
 
-        #crop to path
-        if(!is.null(r$polygonsList)){
-        attrCrop <- terra::crop(attr, r$polygonsList, mask = TRUE)
-        }else{
-          if(!is.null(r1$finalShape)){
-            attrCrop <- terra::crop(attr, r1$finalShape, mask = TRUE)
-          }
-
+        # --- Crop raster ---
+        attrCrop <- NULL
+        if (!is.null(r$polygonsList)) {
+          attrCrop <- terra::crop(attr, r$polygonsList, mask = TRUE)
+        } else if (!is.null(r1$finalShape)) {
+          attrCrop <- terra::crop(attr, r1$finalShape, mask = TRUE)
         }
 
-        if(!is.null(attrCrop)){
-          terra::writeRaster(attrCrop, filename = tempGDB_attr, overwrite = TRUE)
+        # --- Write & zip ---
+        if (!is.null(attrCrop)) {
+          terra::writeRaster(attrCrop, filename = tifFile, overwrite = TRUE)
 
+          # Zip using relative paths by setting wd to tmpDir
+          oldWd <- setwd(tmpDir)
+          on.exit(setwd(oldWd), add = TRUE)  # always restore wd
 
+          utils::zip(file, files = c("attractivity.tif", "INFO_attractivity.txt"))
 
-          #zip both
-          utils::zip(file, c(tempGDB_attr, tempTXT_info), flags = NULL)
-        }else{
+        } else {
           print("ERROR: could not crop attractivity layer")
         }
-
-
       }
+
+
+      #old
+      # content = function(file){
+      #   #put areas of interest
+      #   tempGDB_attr <- tempfile(pattern = "attractivity_", fileext = ".tif")
+      #
+      #   if(r$attrToDownload == "new"){
+      #     #load attractivity
+      #     attr <- terra::rast( "www/data/maps/DULN/DULN_nat_majMaxMeanAGGBlur.tif")
+      #
+      #     #text info
+      #     tempTXT_info <- tempfile(pattern = "INFO_", fileext = ".txt")
+      #     fileConn<-file(tempTXT_info)
+      #     writeLines(c("Information about new Attractivity map",
+      #                  "The raster was developed by aggregating various features known or assumed to attract recreationists",
+      #                  "Table describing these is available at..." ), fileConn)
+      #     close(fileConn)
+      #   }else{
+      #     attr <- terra::rast( "www/data/maps/DULN/DULN_old_epsg4326.tif")
+      #
+      #     #text info
+      #     tempTXT_info <- tempfile(pattern = "INFO_", fileext = ".txt")
+      #     fileConn<-file(tempTXT_info)
+      #     writeLines(c("Information about old Attractivity map ('DULN')",
+      #                  "Developed by Kienast et al. 2012",
+      #                  "Table describing these is available at..." ), fileConn)
+      #     close(fileConn)
+      #   }
+      #
+      #   #crop to path
+      #   if(!is.null(r$polygonsList)){
+      #   attrCrop <- terra::crop(attr, r$polygonsList, mask = TRUE)
+      #   }else{
+      #     if(!is.null(r1$finalShape)){
+      #       attrCrop <- terra::crop(attr, r1$finalShape, mask = TRUE)
+      #     }
+      #
+      #   }
+      #
+      #   if(!is.null(attrCrop)){
+      #     terra::writeRaster(attrCrop, filename = tempGDB_attr, overwrite = TRUE)
+      #
+      #
+      #
+      #     #zip both
+      #     utils::zip(file, c(tempGDB_attr, tempTXT_info), flags = NULL)
+      #   }else{
+      #     print("ERROR: could not crop attractivity layer")
+      #   }
+      #
+      #
+      # }
     )
     outputOptions(output, "downloadAttr", suspendWhenHidden = FALSE)
 

@@ -19,6 +19,12 @@ step4_server <- function(id, network, shape, confirm, i18n, currentLang,
         #replace /" with ', to avoid problems
         return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
       })
+    }else if(currentLang == "en"){
+      output$bannerUI_4 <- shiny::renderUI({
+        imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/step3_wsl_en.png"), list() )
+        #replace /" with ', to avoid problems
+        return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
+      })
     }
 
     r <- shiny::reactiveValues()
@@ -105,7 +111,7 @@ step4_server <- function(id, network, shape, confirm, i18n, currentLang,
     # #Blur it to make it a smoother selection
     # r$DULN_all <- terra::focal(r$DULN_all, w=matrix(1, 5, 5), mean)
     # DULN <- terra::project(DULN, "epsg:4326")
-    pathMap <- network %>% tidygraph::activate(edges) %>% dplyr::as_tibble() %>% sf::st_as_sf()
+    pathMap <- network |> tidygraph::activate(edges) |> dplyr::as_tibble() |> sf::st_as_sf()
     pathMap <- sf::st_transform(pathMap, 4326)
 
     basemap <- terra::project(basemap, "epsg:4326")
@@ -395,7 +401,7 @@ step4_server <- function(id, network, shape, confirm, i18n, currentLang,
     #           sf::sf_use_s2(FALSE)
     #           natAreas_cropped <- sf::st_crop(natAreas, shape_wgs )
     #           # natAreas_cropped_cast <- sf::st_cast(natAreas_cropped, "POLYGON", do_split = TRUE)
-    #           natAreas_cropped_cast <- natAreas_cropped %>% sf::st_cast("MULTIPOLYGON")  %>% sf::st_cast("POLYGON")
+    #           natAreas_cropped_cast <- natAreas_cropped |> sf::st_cast("MULTIPOLYGON")  |> sf::st_cast("POLYGON")
     #           natAreas_cropped_cast$area <- sf::st_area(natAreas_cropped_cast)
     #
     #           sf::sf_use_s2(TRUE)

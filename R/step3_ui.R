@@ -88,6 +88,9 @@ background: url('infoIcon.png');  background-size: cover; background-position: c
 
              ),
                 shiny::column(4, align = "center", style = " vertical-align: middle; height: 500px",
+                              shiny::uiOutput(outputId = NS(id, "minCutoff_UI")),
+                       shiny::sliderInput(shiny::NS(id, "minValThreshold"), label = i18n$t("Mindestschwellenwert für die Sensitivitätsmatrix [ % ]"), min = 0, max = 100, value = 0,
+                                          ticks = FALSE),
                        shiny::plotOutput(shiny::NS(id, "SDMmap"))
                        ),
                 shiny::column(1),

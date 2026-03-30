@@ -107,6 +107,9 @@ app_server <- function(input, output, session){
       #save spatRaster as a data.frame with geo ref information
       envBase_SM_pres <- terra::as.data.frame(r$SM_pres, xy = TRUE, na.rm = FALSE)
 
+      #save MinCutThreshold
+      envBase_minCutThresh <- r$minCutThresh
+
       return(save(envBase_step,
                   envBase_shape,
                   envBase_toSelectSpAfter,
@@ -138,7 +141,8 @@ app_server <- function(input, output, session){
                   envBase_weightNames,
                   envBase_needHelp,
                   envBase_finalPolygons,
-                  envBase_species, file = file)) #envBase_SMdateTime,
+                  envBase_species,
+                  envBase_minCutThresh, file = file)) #envBase_SMdateTime,
     }
   )
   outputOptions(output, "downloadSave", suspendWhenHidden = FALSE)
@@ -257,6 +261,8 @@ app_server <- function(input, output, session){
         if(exists("envBase_weightInputs")){r$weightInputs <- envBase_weightInputs}
         if(exists("envBase_needHelp")){r$needHelp <- envBase_needHelp}
         if(exists("envBase_species")){r$species <- envBase_species}
+        if(exists("envBase_minCutThresh")){r$minCutThresh <- envBase_minCutThresh}
+
 
         #get r$DULN
         r$DULN <- terra::rast("www/data/maps/attr/allAttrs_COG_final.tif" )
@@ -346,6 +352,7 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
         r$SM_pres <- step3return$SM_pres()
         # r$SM_noPres <- step3return$SM_noPres()
         r$SMcolors <- step3return$SMcolors()
+        r$minCutThresh <- step3return$minCutThresh()
 
         cat(file = stderr(), "STEP 4_2")
 
@@ -665,7 +672,7 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
       # cat(file = stderr(), paste0("contents of envBase: ", ls(envBase)))
       step6return <- step6_server("step6", networkList = r$networkList, SM_pres = r$SM_pres, SMcolors = r$SMcolors, shape = r$shape, confirm = r$confirm, finalPolygons = r$finalPolygons, versionsUI = r$versionsUI, isFirstRun_stp6 = r$step6FirstRun,
                                   needHelp = r$needHelp, basemap = r$basemap, species = r$species,
-                                  i18n = shiny::reactive(i18n), currentLang = r$currentLang)
+                                  i18n = shiny::reactive(i18n), currentLang = r$currentLang, minCutThresh = r$minCutThresh)
       r$step6FirstRun <- FALSE
     }
 
@@ -681,6 +688,7 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
       if(length(step6return$versionsUI()) > 0 ){
         r$versionsUI <- step6return$versionsUI()
       }
+      r$shp_PA <- step6return$shp_PA()
 
 
       r$currentLang <- step6return$currentLang()
@@ -734,7 +742,8 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
         r$pathUsage <- step6return$pathUsage()
         r$versionsUI <- step6return$versionsUI()
         r$networkList <- step6return$networkList()
-
+        r$shp_PA <- step6return$shp_PA()
+browser()
         r$step <- 7
         shinyjs::click("downloadSave", asis = FALSE)
 
@@ -820,7 +829,8 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
     if(triggerNewVersions() > 0 ){
 
       print("newVersions_server")
-      newVersionsReturn <- newVersions_server("newVersions", networkList = r$networkList, SM_pres = r$SM_pres,  SMcolors =  r$SMcolors, finalPolygons = r$finalPolygons, confirm = r$confirm, versionsUI = r$versionsUI, isFirstRun = r$newVersionsFirstRun,
+      newVersionsReturn <- newVersions_server("newVersions", networkList = r$networkList, SM_pres = r$SM_pres,  SMcolors =  r$SMcolors, shp_PA = r$shp_PA,
+                                              finalPolygons = r$finalPolygons, confirm = r$confirm, versionsUI = r$versionsUI, isFirstRun = r$newVersionsFirstRun,
                                               DULN = r$DULN,
                                               i18n = shiny::reactive(i18n), currentLang = r$currentLang)
 
@@ -1004,6 +1014,8 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
     })
   })
 
+
+  #TODO: REMOVE?
 
   #SHORTCUTS:
   if(step == 3){

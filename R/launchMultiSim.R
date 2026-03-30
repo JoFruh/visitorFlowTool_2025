@@ -15,6 +15,7 @@ launchMultiSim <- function(pop, network, days, finalPolygons, iter = 1, progress
   areasOfInterest <- NULL
 
   print("list of Pointers")
+  browser()
   #prepare adjacency lists for pathfinding in C++ (get pointers to C++ objects: avoids converting large tables back to R)
   listOfPointers <- generateAdjListAndDistTbl_cpp(edgeTable = dplyr::as_tibble(tidygraph::activate(network, "edges")),
                                                   vertexTable = dplyr::as_tibble(tidygraph::activate(network, "nodes")))

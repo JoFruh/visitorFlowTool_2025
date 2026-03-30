@@ -53,8 +53,8 @@ background: url('infoIcon.png');  background-size: cover; background-position: c
           shiny::column(12, align = "center",
                  shiny::h5(i18n$t("Bewegen Sie den Schieberegler, um den Umfang der Zielgebiete zu bestimmen. (Dies basiert auf einem 'Attraktivitätsmodell')")),
                  shiny::h5(""),
-                 shiny::h5(i18n$t("Im nächsten Schritt haben Sie die Möglichkeit, Zielgebiete manuell zu korrigieren (hinzufügen/entfernen).")),
-                 shiny::h5(style = "color:#8f0404;font-weight:bold", i18n$t("Tipp: Der ideale Schwellenwert würde eine Auswahl an Erholungszielen (rote Bereiche) bieten, die der Realität am nächsten kommt."))
+                 shiny::h5(i18n$t("Im nächsten Schritt haben Sie die Möglichkeit, Zielgebiete manuell zu korrigieren (hinzufügen/löschen/ausschneiden).")),
+                 shiny::h5(style = "color:#8f0404;font-weight:bold", i18n$t("Tipp: Wählen Sie einen Schwellenwert, der die größten Bereiche erzeugt und diese gleichzeitig voneinander getrennt hält."))
           )
         ),
 
