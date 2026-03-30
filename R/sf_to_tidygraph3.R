@@ -227,31 +227,22 @@ sf_to_tidygraph3 = function(x, shape, directed = FALSE, parkingPolygons = NULL, 
 
   #TODO: GET LATEST COG ATTR
   # attrMaps <- terra::rast("www/data/maps/attr/allAttrs_COG.tif")
-  DULN <- terra::rast("www/data/maps/attr/allAttrs_COG_final.tif" )
+  if (!exists(".vft_DULN_full", envir = .GlobalEnv)) {
+    .GlobalEnv$.vft_DULN_full <- terra::rast("www/data/maps/attr/allAttrs_COG_final.tif")
+  }
 
   #grow shape slightly
   # shape <- terra::vect(sf::st_buffer(shape, dist = 1000))
   #crop
-  DULN <- terra::crop(DULN, terra::project(terra::vect(shape), "EPSG:4326"))#attrMaps
+  DULN <- terra::crop(.GlobalEnv$.vft_DULN_full, terra::project(terra::vect(shape), "EPSG:4326"))#attrMaps
 
   names(DULN) <- c("jog", "dogNat", "ebikeNat", "walkNat","dogProx","walkSoc","bikerSport")
 
 
-  #convert nodes
-  # node_points <- as_tibble( network_Tbl_allCH|>activate("nodes") )
-  node_vect <- terra::vect(nodes)
-
-  # DULN_all <- DULN$all
-  # DULN_all <- terra::aggregate(DULN$all, fact = 2)
-  # terra::plot(terra::focal(DULN_all, w=matrix(1, 3, 3), mean)) #1, 5, 5
-  # #Get a single layer of DULN
-  #
-  # #Blur it to make it a smoother selection
-  # DULN_all <- terra::focal(DULN$walkNat, w=matrix(1, 3, 3), mean)
-  # DULN_all <- terra::aggregate(DULN_all, fact = 2)
-
-  DULN_all <- terra::rast("www/data/maps/DULN/DULN_nat_majMaxMeanAGGBlur.tif")
-  DULN_all <- terra::crop(DULN_all, sf::st_transform(shape, "epsg:4326"))
+  if (!exists(".vft_DULN_all_full", envir = .GlobalEnv)) {
+    .GlobalEnv$.vft_DULN_all_full <- terra::rast("www/data/maps/DULN/DULN_nat_majMaxMeanAGGBlur.tif")
+  }
+  DULN_all <- terra::crop(.GlobalEnv$.vft_DULN_all_full, sf::st_transform(shape, "epsg:4326"))
 
 
   #sample raster with nodes
@@ -267,24 +258,23 @@ sf_to_tidygraph3 = function(x, shape, directed = FALSE, parkingPolygons = NULL, 
 
 # progress$inc(1/4, detail = "extracting relevant spatial data..")
   #RESIDENTIAL DATA ####
-  residential_tif <- terra::rast("www/data/maps/residential/residentialData_raster_final.tif")
+  if (!exists(".vft_residential_full", envir = .GlobalEnv)) {
+    .GlobalEnv$.vft_residential_full <- terra::rast("www/data/maps/residential/residentialData_raster_final.tif")
+  }
 
-  residential_local <- terra::crop(residential_tif, terra::project(terra::vect(shape), "epsg:4326") )
+  residential_local <- terra::crop(.GlobalEnv$.vft_residential_full, terra::project(terra::vect(shape), "epsg:4326"))
 
   #extract residential data into nodes
   extrResults <- terra::extract(residential_local, nodes[,c("X", "Y")], cells = TRUE)
   extrResults <- extrResults[,-1]
-  extrResults_new <- extrResults
 
-  #cycle through all cells of residential raster to determine value of each path node within each cell (cell value spread across nodes within)
-  for(i in min(extrResults_new$cell, na.rm = TRUE):max(extrResults_new$cell, na.rm = TRUE) ){
-    #get nodes within specific cell
-    cellResults <- extrResults_new$cell == i
-    #convert NA to FALSE
-    cellResults[is.na(cellResults)] <- FALSE
-    #divide results of nodes within cell by number of nodes within cell
-    extrResults_new$Band_1[cellResults] <- extrResults$Band_1[cellResults] / sum(cellResults) #divide residents nb in cell by nodes within cell
-  }
+  #distribute cell population across all nodes sharing that cell (vectorized)
+  valid <- !is.na(extrResults$cell)
+  extrResults$Band_1[valid] <- ave(
+    extrResults$Band_1[valid],
+    extrResults$cell[valid],
+    FUN = function(vals) vals / length(vals)
+  )
 
   #add node_DULN data to original nodes
   colnames(extrResults) <- c("Residents", "cell")
