@@ -92,7 +92,7 @@ step1_server <- function(id, i18n){
     ch_basemap2 <- NULL
     # Cache country border — same file for every user, load only once per R session
     if (!exists(".vft_countryshape", envir = .GlobalEnv)) {
-      .GlobalEnv$.vft_countryshape <- sf::st_read(dsn = "www/data/maps/countryBorders/SwissBorder.shp", quiet = TRUE)
+      .GlobalEnv$.vft_countryshape <- sf::st_read(dsn = "www/data/maps/countryBorders/swissBorder_final.gpkg", quiet = TRUE)
       sf::st_crs(.GlobalEnv$.vft_countryshape) <- 4326
     }
     countryshape <- .GlobalEnv$.vft_countryshape

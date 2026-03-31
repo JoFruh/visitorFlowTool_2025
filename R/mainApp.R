@@ -65,7 +65,7 @@
 runVisitorFlowTool <- function(...){
 
   # #clear everything before starting app
-  rm(list = ls())
+  rm(list = ls(all.names = TRUE))
   detach(package:visitorFlowTool)
 
 
