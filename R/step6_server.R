@@ -1458,6 +1458,7 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
 
       #observe agent starting points ####
       obsAgentStart <- shiny::observeEvent(input$startingCheckbox, {
+        browser()
         vertexTable <- dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(nodes) )
         startingPoints <- sf::st_coordinates(sf::st_as_sf( vertexTable[vertexTable$nodeID %in% r$result$dayPop$startV , ]) )
 

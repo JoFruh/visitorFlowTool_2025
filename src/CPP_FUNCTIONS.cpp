@@ -4,6 +4,8 @@
 #include <queue>
 #include <algorithm>
 #include <fstream>
+#include <unordered_map>
+#include <unordered_set>
 
 using namespace Rcpp;
 
@@ -25,11 +27,8 @@ List filterRouteChoices_cpp(List neighbours, NumericVector currentVs, NumericVec
   //prepare List of same length as neighbours
   List finalOutput(n_nghb);
 
-  // for(NumericVector::iterator i = x.begin(); i != x.end(); ++i) {
-  //   total += *i;
-  // }
-
-
+  // Build unordered_set of outside-AOI nodes ONCE for O(1) membership testing
+  std::unordered_set<int> outside_aoi_set(V_outside_aoi.begin(), V_outside_aoi.end());
 
   // loop through List of neighbours
   for(int agentNo = 0; agentNo < n_nghb; agentNo++){
@@ -40,27 +39,12 @@ List filterRouteChoices_cpp(List neighbours, NumericVector currentVs, NumericVec
     int crrnt = currentVs[agentNo];
     int lst = lastVs[agentNo];
 
-    //make logical vectors for all filters (whether nodes are in currentV, lastV or priorVs)
-    LogicalVector in_current = nghb == crrnt;
-    LogicalVector in_last = nghb == lst;
-
-    //if there are priors, check them against neighbours, otherwise keep it a LogicalVector of falses
-    // LogicalVector in_prior = LogicalVector(nghb.size());
-    // if(priorVs[agentNo] != R_NilValue){
-    //   NumericVector prr = priorVs[agentNo];
-    //   in_prior = in(nghb, prr);
-    // }
-
-    //if there are retraced, check them against neighbours, otherwise keep it a LogicalVector of falses
-    LogicalVector in_retraced = LogicalVector(nghb.size());
+    // Build retraced set for O(1) membership testing per agent
+    std::unordered_set<int> retraced_set;
     if(retracedVs[agentNo] != R_NilValue){
       NumericVector rtrcd = retracedVs[agentNo];
-      in_retraced = in(nghb, rtrcd);
+      retraced_set.insert(rtrcd.begin(), rtrcd.end());
     }
-
-    //check if AOI of nodes is "0"  (outside AOI)
-    LogicalVector outside_aoi = LogicalVector(nghb.size());
-    outside_aoi = in(nghb,V_outside_aoi);
 
     //determine how many neighbours
     int n = nghb.size();
@@ -68,32 +52,22 @@ List filterRouteChoices_cpp(List neighbours, NumericVector currentVs, NumericVec
     //prepare output container
     std::vector<int> output;
 
-    //combine vectors of logical values (true if any is true)
-    LogicalVector combined = (in_current | in_last | in_retraced | outside_aoi); // |in_prior
-
-    // //make variable to track whether any node is kept.
-    // int keptVariableTracking = sum();
-    //
-    // if (Rcpp::is_false(Rcpp::all(combined))){
-    //
-    //       // Rprintf("VARIABLE KEPT!");
-    //       output.push_back(nghb[j]);
-    //     }
-    // Rcpp::Rcout << "combined: " << combined  << std::endl;
-
     //keep track of how many routes are kept
     int keptVariableTracking = 0;
-    //cycle through logical vector to filter out TRUE variables (those present in retraced, current, last or outside)
+    //cycle through neighbours, filtering out current, last, retraced, or outside-AOI nodes
     for (int j=0; j < n; ++j) {
+      int node = (int)nghb[j];
 
-      //when the in_ logical is FALSE for all conditions, include it in the final output
-      if (combined[j] == 0 ){
+      //when the node passes all filters, include it in the final output
+      if (node != crrnt && node != lst &&
+          !retraced_set.count(node) &&
+          !outside_aoi_set.count(node)){
 
         //count kept routes
         keptVariableTracking++;
 
         //append to results
-        output.push_back(nghb[j]);
+        output.push_back(node);
       }
     }
 
@@ -140,6 +114,13 @@ List chooseBestRoutes_cpp(List viableRoutes, DataFrame DULN_df, List priorVs, St
   NumericVector DULN_df_nodeID = DULN_df["nodeID"];
   NumericVector V_coords_df_X = V_coords_df["X"];
   NumericVector V_coords_df_Y = V_coords_df["Y"];
+
+  // Build nodeID -> row-index map ONCE for O(1) lookups in all inner loops
+  std::unordered_map<int, int> nodeID_to_row;
+  nodeID_to_row.reserve(DULN_df_nodeID.size());
+  for(int i = 0; i < DULN_df_nodeID.size(); i++){
+    nodeID_to_row[(int)DULN_df_nodeID[i]] = i;
+  }
 
 
   //prepare variables for angle calculations
@@ -195,97 +176,35 @@ List chooseBestRoutes_cpp(List viableRoutes, DataFrame DULN_df, List priorVs, St
     //only if there are priorVs
     if(priorVs[agentNo] != R_NilValue){
 
-      //determine current vertex (cv) to determine angle later
-      for(int j = 0; j < DULN_df_nodeID.size(); j++ ){
-
-
-
-        //find row with same nodeID to extract priorV X and Y
-        if(currentVs[agentNo] == DULN_df_nodeID[j]){
-          cv_x = V_coords_df_X[j];
-          cv_y = V_coords_df_Y[j];
-          break;
+      //determine current vertex (cv) to determine angle later — O(1) map lookup
+      {
+        auto cv_it = nodeID_to_row.find((int)currentVs[agentNo]);
+        if(cv_it != nodeID_to_row.end()){
+          cv_x = V_coords_df_X[cv_it->second];
+          cv_y = V_coords_df_Y[cv_it->second];
         }
-
       }
 
-
+      //prepare var for routes in PriorVs
+      agentPriorVs = priorVs[agentNo];
+      //determine routes that are PriorVs
+      routesInPrr = in(agentRoutes, agentPriorVs);
 
       //is there at least one route not within PriorVs
       if( sum(routesInPrr) < agentRoutes.size() ){
-
-        //prepare var for routes in PriorVs
-        agentPriorVs = priorVs[agentNo];
-        //
-        // //determine routes that are PriorVs
-        routesInPrr = in(agentRoutes, agentPriorVs);
-
-
-        //if so, ONLY consider these
-        // Rprintf("NON PRIORVs");
-
         //instead of removing the path in Prr, set them a probability of 0 (later in the code)
-
-        //LogicalVector test = !routesInPrr;
-
-        //agentRoutes = agentRoutes[test];
-
-
-
-        // Rcpp::Rcout << routesInPrr << std::endl;
-        // Rcpp::Rcout << test << std::endl;
-        // Rcpp::Rcout << "***" << std::endl;
-
-
-
       }
 
-      //determine pv vector based on priorV id
-      for(int i = 0; i < DULN_df_nodeID.size(); i++ ){
-
-        // if(agentNo == 1){
-        //
-        //   Rcpp::Rcout << "agent 1 PriorV #1: "<< agentPriorVs[agentPriorVs.size()-1] << std::endl;
-        //
-        // }
-        // Rcpp::Rcout << "agentPriorVs size: "<< agentPriorVs.size() << std::endl;
-        // Rcpp::Rcout << "agentPriorVs[1]: "<< agentPriorVs << std::endl;
-        //
-        // Rcpp::Rcout << "DULN_df_nodeID size: "<< DULN_df_nodeID.size() << std::endl;
-        // Rcpp::Rcout << "i: "<< i << std::endl;
-
-
-        //find row with same nodeID to extract priorV X and Y
-        // double priorV;
-        // if(agentPriorVs.size() > 1){
-        //   priorV = agentPriorVs[1];
-        // }else{
-        //   priorV = agentPriorVs;
-        // }
-
-
-        if(agentPriorVs[agentPriorVs.size()-1] == DULN_df_nodeID[i]){
-          pv_x = V_coords_df_X[i];
-          pv_y = V_coords_df_Y[i];
-          break;
+      //determine pv vector based on priorV id — O(1) map lookup
+      {
+        auto pv_it = nodeID_to_row.find((int)agentPriorVs[agentPriorVs.size()-1]);
+        if(pv_it != nodeID_to_row.end()){
+          pv_x = V_coords_df_X[pv_it->second];
+          pv_y = V_coords_df_Y[pv_it->second];
+        } else {
+          Rcpp::Rcout << "ERROR: COULD NOT FIND NODE ID FOR PRIORV" << std::endl;
         }
-        // }
-        // else{
-        //   if(agentPriorVs == DULN_df_nodeID[i]){
-        //     pv_x = V_coords_df_X[i];
-        //     pv_y = V_coords_df_Y[i];
-        //     break;
-        //   }
-        // }
-
       }
-      // emit error if no node IDs are found
-      if(pv_x == 1 & pv_y == 1){
-        Rcpp::Rcout << "ERROR: COULD NOT FIND NODE ID FOR PRIORV" << std::endl;
-      }
-
-      //
-      // Rcpp::Rcout << "****" << std::endl;
     }else{
       //if there is no priorV, do not determine angle
       pv_x = 0;
@@ -296,55 +215,27 @@ List chooseBestRoutes_cpp(List viableRoutes, DataFrame DULN_df, List priorVs, St
 
     int routesLength = agentRoutes.size();
 
-    //cycle through these to get agentRoute with highest DULN
-    // double highestDULN = 0.0;
-    // int bestRouteNo = 0;
-
+    // Extract DULN column ONCE per agent (outside the route loop)
+    NumericVector DULN_col = DULN_df[DULN_choice];
 
     //prepare variables for sum of all DULN_values
     double DULNexpSum = 0;
     double alpha = 0.5;
     std::vector<double> v_DULN_values(routesLength);
 
-    // Rcpp::Rcout << "TEST1" << std::endl;
     for(int routeNo = 0; routeNo < routesLength; routeNo++ ){
 
-      // Rcpp::Rcout << "routeNo:" << routeNo << std::endl;
-
-      //determine each node's DULN value (using provided DULN_df)
+      //determine each node's DULN value via O(1) map lookup
       double DULN_value = 0;
-      NumericVector DULN_col = DULN_df[DULN_choice];
-      IntegerVector nodeID_col = DULN_df["nodeID"];
-
-      //lookup the DULN value of a route's nodeID
-      for(int rowNo = 0;rowNo < nodeID_col.size(); rowNo++ ){
-
-
-
-        //if the nodeID of the route is same as row's nodeID
-        if(nodeID_col[rowNo] == agentRoutes[routeNo]){
-          //use the relevant DULN value
-          DULN_value = DULN_col[rowNo];
-
-          // Rcpp::Rcout << "DULN_col size :" << DULN_col.size() << std::endl;
-          // Rcpp::Rcout << "rowNo :" << rowNo << std::endl;
-
-
-
-          //temporary fix
-          //DULN_value should never be NA, however, the current Agent type table has some NA values
-          if( R_IsNA(DULN_value) ){
-
-            DULN_value = 0;
-
-          }
-
-
-
-          nv_x = V_coords_df_X[rowNo];
-          nv_y = V_coords_df_Y[rowNo];
-          break;
+      auto it = nodeID_to_row.find((int)agentRoutes[routeNo]);
+      if(it != nodeID_to_row.end()){
+        int rowNo = it->second;
+        DULN_value = DULN_col[rowNo];
+        if( R_IsNA(DULN_value) ){
+          DULN_value = 0;
         }
+        nv_x = V_coords_df_X[rowNo];
+        nv_y = V_coords_df_Y[rowNo];
       }
 
 
@@ -468,14 +359,21 @@ List getEdges_cpp(IntegerVector currentVs, IntegerVector nextVs, DataFrame edgeT
 
   //TO vector
   IntegerVector To_v = edgeTable["to"];
-  // Rcpp::Rcout << "To_v: " << To_v << std::endl;
 
   //FROM vector
   IntegerVector From_v = edgeTable["from"];
-  // Rcpp::Rcout << "From_v: " << From_v << std::endl;
 
   //edgeID vector
   IntegerVector edgeID_v = edgeTable["edgeID"];
+
+  // Build edge lookup map ONCE: encode(from,to) -> edgeID for O(1) lookup
+  // Uses bit-packing: upper 32 bits = one node, lower 32 bits = other node
+  std::unordered_map<int64_t, int> edgeMap;
+  edgeMap.reserve(To_v.size() * 2);
+  for(int i = 0; i < To_v.size(); i++){
+    edgeMap[((int64_t)To_v[i]   << 32) | (uint32_t)From_v[i]] = edgeID_v[i];
+    edgeMap[((int64_t)From_v[i] << 32) | (uint32_t)To_v[i]]   = edgeID_v[i];
+  }
   // Rcpp::Rcout << "edgeID_v: " << edgeID_v << std::endl;
 
   //prepare output container
@@ -517,49 +415,15 @@ List getEdges_cpp(IntegerVector currentVs, IntegerVector nextVs, DataFrame edgeT
 
         for(int prrV_aNo = 0; prrV_aNo < n; prrV_aNo++){
 
-          //get priorV
+          //get priorV pair and look up edge in O(1)
           int prrV_a = path[prrV_aNo];
           int prrV_b = path[prrV_aNo + 1];
 
-          //determine edge using to and from vectors
-          for(int t = 0; t < To_v.size(); t++){
-
-            //if node a is in "to"
-            if(To_v[t] ==  prrV_a){
-              //see if node b is in "from"
-              if(From_v[t] ==  prrV_b){
-                //add edge to vector
-                priorEs.push_back( edgeID_v[t]);
-
-                // Rcpp::Rcout << "priorE: " << edgeID_v[t] << std::endl;
-
-                goto nextPriorV;//interupt when 1 is found (other edges between two nodes are ignored)
-                //TODO: make this choice based on shortest distance, rather than first one found
-              }
-
-            }
-            if(From_v[t] == prrV_a){
-              //if node a is in "from"
-              if(To_v[t] ==  prrV_b){
-                //see if node b is in "to"
-
-                //add edge to vector
-                priorEs.push_back( edgeID_v[t]);
-
-                // Rcpp::Rcout << "priorE: " << edgeID_v[t] << std::endl;
-
-                goto nextPriorV;//interupt when 1 is found (other edges between two nodes are ignored)
-                //TODO: make this choice based on shortest distance, rather than first one found
-
-
-              }
-
-            }
-
+          int64_t prKey = ((int64_t)prrV_a << 32) | (uint32_t)prrV_b;
+          auto prIt = edgeMap.find(prKey);
+          if(prIt != edgeMap.end()){
+            priorEs.push_back(prIt->second);
           }
-
-          nextPriorV:
-            ;
         }
 
 
@@ -604,49 +468,17 @@ List getEdges_cpp(IntegerVector currentVs, IntegerVector nextVs, DataFrame edgeT
     }
 
     nxt = nextVs[agentNo];
-    // Rcpp::Rcout << "nxt: " << nxt << std::endl;
 
-
-
-    //cycle through all edgeTable rows
-    for(int rowNo = 0; rowNo < To_v.size(); rowNo++){
-
-      //for every hit in the To column, check for a hit for NextVs in the other From column
-      if( (crrnt == To_v[rowNo]) & (nxt == From_v[rowNo]) ){
-        //note edgeID
-        edgeID = edgeID_v[rowNo];
-        // Rcpp::Rcout << "edgeID: " << edgeID << std::endl;
-
-        break;
-
-      }else if( (nxt == To_v[rowNo]) & (crrnt == From_v[rowNo] ) ){//other check the inverse
-        //note edgeID
-        edgeID = edgeID_v[rowNo];
-        // Rcpp::Rcout << "edgeID: " << edgeID << std::endl;
-
-        break;
-
+    // O(1) edge lookup via hash map
+    {
+      int64_t edgeKey = ((int64_t)crrnt << 32) | (uint32_t)nxt;
+      auto edgeIt = edgeMap.find(edgeKey);
+      if(edgeIt != edgeMap.end()){
+        edgeID = edgeIt->second;
+      } else {
+        edgeID = 0;
       }
-
     }
-
-    // InputIt to_match <- std::find(To_v.begin(), To_v.end(), crrnt)
-    // if (to_match != v.end()){
-    //
-    //   edgeID = edgeID_v[to_match]
-    //
-    // }else{
-    //   InputIt from_match <- std::find(From_v.begin(), From_v.end(), crrnt)
-    //   if (std::find(from_match != v.end()){
-    //
-    //     edgeID = edgeID_v[from_match]
-    //
-    //
-    //   }else{
-    //
-    //   }
-    //
-    // }
 
     //catch error
     if(edgeID == 0){
@@ -656,7 +488,6 @@ List getEdges_cpp(IntegerVector currentVs, IntegerVector nextVs, DataFrame edgeT
     }
 
     allEdgeIDs[agentNo] =  edgeID;
-    // Rcpp::Rcout << "edgeID: " << edgeID << std::endl;
 
   }
 
@@ -1565,153 +1396,59 @@ List generateAdjListAndDistTbl_cpp(DataFrame edgeTable, DataFrame vertexTable){
   IntegerVector v_to = edgeTable["to"];
   IntegerVector v_from = edgeTable["from"];
 
-  //cycle through every node
-  for(int nodeID = 0; nodeID < V+1; nodeID++){
+  // Single O(E) pass instead of O(V*E) nested loops.
+  // For each edge, add both directions (undirected graph).
+  for(int edgeRow = 0; edgeRow < v_to.size(); edgeRow++){
+    int toNode   = v_to[edgeRow];
+    int fromNode = v_from[edgeRow];
 
-    //prepare adjacency vectors
-    std::vector<int> adjIDs;
-    std::vector<double> adjDist_walkNat;
-    std::vector<double> adjDist_walkNat_attr;
-    std::vector<double> adjDist_walkNat_ATTR;
+    // to -> from direction
+    adjList_IDs[toNode].push_back(fromNode);
+    adjList_dist_walkNat[toNode].push_back(edge_weights_walkNat[edgeRow]);
+    adjList_dist_walkNat_attr[toNode].push_back(edge_weights_walkNat_attr[edgeRow]);
+    adjList_dist_walkNat_ATTR[toNode].push_back(edge_weights_walkNat_ATTR[edgeRow]);
+    adjList_dist_walkSoc[toNode].push_back(edge_weights_walkSoc[edgeRow]);
+    adjList_dist_walkSoc_attr[toNode].push_back(edge_weights_walkSoc_attr[edgeRow]);
+    adjList_dist_walkSoc_ATTR[toNode].push_back(edge_weights_walkSoc_ATTR[edgeRow]);
+    adjList_dist_dogNat[toNode].push_back(edge_weights_dogNat[edgeRow]);
+    adjList_dist_dogNat_attr[toNode].push_back(edge_weights_dogNat_attr[edgeRow]);
+    adjList_dist_dogNat_ATTR[toNode].push_back(edge_weights_dogNat_ATTR[edgeRow]);
+    adjList_dist_dogProx[toNode].push_back(edge_weights_dogProx[edgeRow]);
+    adjList_dist_dogProx_attr[toNode].push_back(edge_weights_dogProx_attr[edgeRow]);
+    adjList_dist_dogProx_ATTR[toNode].push_back(edge_weights_dogProx_ATTR[edgeRow]);
+    adjList_dist_ebikeNat[toNode].push_back(edge_weights_ebikeNat[edgeRow]);
+    adjList_dist_ebikeNat_attr[toNode].push_back(edge_weights_ebikeNat_attr[edgeRow]);
+    adjList_dist_ebikeNat_ATTR[toNode].push_back(edge_weights_ebikeNat_ATTR[edgeRow]);
+    adjList_dist_bikeSport[toNode].push_back(edge_weights_bikeSport[edgeRow]);
+    adjList_dist_bikeSport_attr[toNode].push_back(edge_weights_bikeSport_attr[edgeRow]);
+    adjList_dist_bikeSport_ATTR[toNode].push_back(edge_weights_bikeSport_ATTR[edgeRow]);
+    adjList_dist_jogger[toNode].push_back(edge_weights_jogger[edgeRow]);
+    adjList_dist_jogger_attr[toNode].push_back(edge_weights_jogger_attr[edgeRow]);
+    adjList_dist_jogger_ATTR[toNode].push_back(edge_weights_jogger_ATTR[edgeRow]);
 
-    std::vector<double> adjDist_walkSoc;
-    std::vector<double> adjDist_walkSoc_attr;
-    std::vector<double> adjDist_walkSoc_ATTR;
-
-    std::vector<double> adjDist_dogNat;
-    std::vector<double> adjDist_dogNat_attr;
-    std::vector<double> adjDist_dogNat_ATTR;
-
-    std::vector<double> adjDist_dogProx;
-    std::vector<double> adjDist_dogProx_attr;
-    std::vector<double> adjDist_dogProx_ATTR;
-
-    std::vector<double> adjDist_ebikeNat;
-    std::vector<double> adjDist_ebikeNat_attr;
-    std::vector<double> adjDist_ebikeNat_ATTR;
-
-    std::vector<double> adjDist_bikeSport;
-    std::vector<double> adjDist_bikeSport_attr;
-    std::vector<double> adjDist_bikeSport_ATTR;
-
-    std::vector<double> adjDist_jogger;
-    std::vector<double> adjDist_jogger_attr;
-    std::vector<double> adjDist_jogger_ATTR;
-
-
-    //cycle every row of edgeTable
-    for(int toRow = 0; toRow < v_to.size(); toRow++){
-      //if the node is the "to" vertex
-      if(nodeID == v_to[toRow]){
-        //get the "from" node
-        int fromNode = v_from[toRow];
-        adjIDs.push_back(fromNode);
-        //and their distance
-        adjDist_walkNat.push_back(edge_weights_walkNat[toRow]);
-        adjDist_walkNat_attr.push_back(edge_weights_walkNat_attr[toRow]);
-        adjDist_walkNat_ATTR.push_back(edge_weights_walkNat_ATTR[toRow]);
-
-        // Rcpp::Rcout<<"adjDist_walkNat[1]: "<<adjDist_walkNat[1]<<std::endl;
-
-        adjDist_dogNat.push_back(edge_weights_dogNat[toRow]);
-        adjDist_dogNat_attr.push_back(edge_weights_dogNat_attr[toRow]);
-        adjDist_dogNat_ATTR.push_back(edge_weights_dogNat_ATTR[toRow]);
-
-        adjDist_dogProx.push_back(edge_weights_dogProx[toRow]);
-        adjDist_dogProx_attr.push_back(edge_weights_dogProx_attr[toRow]);
-        adjDist_dogProx_ATTR.push_back(edge_weights_dogProx_ATTR[toRow]);
-
-        adjDist_ebikeNat.push_back(edge_weights_ebikeNat[toRow]);
-        adjDist_ebikeNat_attr.push_back(edge_weights_ebikeNat_attr[toRow]);
-        adjDist_ebikeNat_ATTR.push_back(edge_weights_ebikeNat_ATTR[toRow]);
-
-        adjDist_bikeSport.push_back(edge_weights_bikeSport[toRow]);
-        adjDist_bikeSport_attr.push_back(edge_weights_bikeSport_attr[toRow]);
-        adjDist_bikeSport_ATTR.push_back(edge_weights_bikeSport_ATTR[toRow]);
-
-        adjDist_walkSoc.push_back(edge_weights_walkSoc[toRow]);
-        adjDist_walkSoc_attr.push_back(edge_weights_walkSoc_attr[toRow]);
-        adjDist_walkSoc_ATTR.push_back(edge_weights_walkSoc_ATTR[toRow]);
-
-        adjDist_jogger.push_back(edge_weights_jogger[toRow]);
-        adjDist_jogger_attr.push_back(edge_weights_jogger_attr[toRow]);
-        adjDist_jogger_ATTR.push_back(edge_weights_jogger_ATTR[toRow]);
-
-      }
-      //if the node is the "from" vertex
-      if(nodeID == v_from[toRow]){
-        //get the "to" node
-        int toNode = v_to[toRow];
-        adjIDs.push_back(toNode);
-        //and their distance
-        adjDist_walkNat.push_back(edge_weights_walkNat[toRow]);
-        adjDist_walkNat_attr.push_back(edge_weights_walkNat_attr[toRow]);
-        adjDist_walkNat_ATTR.push_back(edge_weights_walkNat_ATTR[toRow]);
-
-        // Rcpp::Rcout<<"adjDist_walkNat[1]"<<adjDist_walkNat[1]<<std::endl;
-
-        adjDist_dogNat.push_back(edge_weights_dogNat[toRow]);
-        adjDist_dogNat_attr.push_back(edge_weights_dogNat_attr[toRow]);
-        adjDist_dogNat_ATTR.push_back(edge_weights_dogNat_ATTR[toRow]);
-
-        adjDist_dogProx.push_back(edge_weights_dogProx[toRow]);
-        adjDist_dogProx_attr.push_back(edge_weights_dogProx_attr[toRow]);
-        adjDist_dogProx_ATTR.push_back(edge_weights_dogProx_ATTR[toRow]);
-
-        adjDist_ebikeNat.push_back(edge_weights_ebikeNat[toRow]);
-        adjDist_ebikeNat_attr.push_back(edge_weights_ebikeNat_attr[toRow]);
-        adjDist_ebikeNat_ATTR.push_back(edge_weights_ebikeNat_ATTR[toRow]);
-
-        adjDist_bikeSport.push_back(edge_weights_bikeSport[toRow]);
-        adjDist_bikeSport_attr.push_back(edge_weights_bikeSport_attr[toRow]);
-        adjDist_bikeSport_ATTR.push_back(edge_weights_bikeSport_ATTR[toRow]);
-
-        adjDist_walkSoc.push_back(edge_weights_walkSoc[toRow]);
-        adjDist_walkSoc_attr.push_back(edge_weights_walkSoc_attr[toRow]);
-        adjDist_walkSoc_ATTR.push_back(edge_weights_walkSoc_ATTR[toRow]);
-
-        adjDist_jogger.push_back(edge_weights_jogger[toRow]);
-        adjDist_jogger_attr.push_back(edge_weights_jogger_attr[toRow]);
-        adjDist_jogger_ATTR.push_back(edge_weights_jogger_ATTR[toRow]);
-
-
-      }
-    }
-    //insert adjacency vector in the list of adjacencies
-    adjList_IDs[nodeID] = adjIDs;
-
-    adjList_dist_walkNat[nodeID] = adjDist_walkNat;
-    adjList_dist_walkNat_attr[nodeID] = adjDist_walkNat_attr;
-    adjList_dist_walkNat_ATTR[nodeID] = adjDist_walkNat_ATTR;
-
-    // Rcpp::Rcout<<"adjDist_walkNat[1]: "<<adjDist_walkNat[1]<<std::endl;
-
-
-    adjList_dist_walkSoc[nodeID] = adjDist_walkSoc;
-    adjList_dist_walkSoc_attr[nodeID] = adjDist_walkSoc_attr;
-    adjList_dist_walkSoc_ATTR[nodeID] = adjDist_walkSoc_ATTR;
-
-    adjList_dist_dogNat[nodeID] = adjDist_dogNat;
-    adjList_dist_dogNat_attr[nodeID] = adjDist_dogNat_attr;
-    adjList_dist_dogNat_ATTR[nodeID] = adjDist_dogNat_ATTR;
-
-    adjList_dist_dogProx[nodeID] = adjDist_dogProx;
-    adjList_dist_dogProx_attr[nodeID] = adjDist_dogProx_attr;
-    adjList_dist_dogProx_ATTR[nodeID] = adjDist_dogProx_ATTR;
-
-    adjList_dist_ebikeNat[nodeID] = adjDist_ebikeNat;
-    adjList_dist_ebikeNat_attr[nodeID] = adjDist_ebikeNat_attr;
-    adjList_dist_ebikeNat_ATTR[nodeID] = adjDist_ebikeNat_ATTR;
-
-    adjList_dist_bikeSport[nodeID] = adjDist_bikeSport;
-    adjList_dist_bikeSport_attr[nodeID] = adjDist_bikeSport_attr;
-    adjList_dist_bikeSport_ATTR[nodeID] = adjDist_bikeSport_ATTR;
-
-    adjList_dist_jogger[nodeID] = adjDist_jogger;
-    adjList_dist_jogger_attr[nodeID] = adjDist_jogger_attr;
-    adjList_dist_jogger_ATTR[nodeID] = adjDist_jogger_ATTR;
-
-
+    // from -> to direction
+    adjList_IDs[fromNode].push_back(toNode);
+    adjList_dist_walkNat[fromNode].push_back(edge_weights_walkNat[edgeRow]);
+    adjList_dist_walkNat_attr[fromNode].push_back(edge_weights_walkNat_attr[edgeRow]);
+    adjList_dist_walkNat_ATTR[fromNode].push_back(edge_weights_walkNat_ATTR[edgeRow]);
+    adjList_dist_walkSoc[fromNode].push_back(edge_weights_walkSoc[edgeRow]);
+    adjList_dist_walkSoc_attr[fromNode].push_back(edge_weights_walkSoc_attr[edgeRow]);
+    adjList_dist_walkSoc_ATTR[fromNode].push_back(edge_weights_walkSoc_ATTR[edgeRow]);
+    adjList_dist_dogNat[fromNode].push_back(edge_weights_dogNat[edgeRow]);
+    adjList_dist_dogNat_attr[fromNode].push_back(edge_weights_dogNat_attr[edgeRow]);
+    adjList_dist_dogNat_ATTR[fromNode].push_back(edge_weights_dogNat_ATTR[edgeRow]);
+    adjList_dist_dogProx[fromNode].push_back(edge_weights_dogProx[edgeRow]);
+    adjList_dist_dogProx_attr[fromNode].push_back(edge_weights_dogProx_attr[edgeRow]);
+    adjList_dist_dogProx_ATTR[fromNode].push_back(edge_weights_dogProx_ATTR[edgeRow]);
+    adjList_dist_ebikeNat[fromNode].push_back(edge_weights_ebikeNat[edgeRow]);
+    adjList_dist_ebikeNat_attr[fromNode].push_back(edge_weights_ebikeNat_attr[edgeRow]);
+    adjList_dist_ebikeNat_ATTR[fromNode].push_back(edge_weights_ebikeNat_ATTR[edgeRow]);
+    adjList_dist_bikeSport[fromNode].push_back(edge_weights_bikeSport[edgeRow]);
+    adjList_dist_bikeSport_attr[fromNode].push_back(edge_weights_bikeSport_attr[edgeRow]);
+    adjList_dist_bikeSport_ATTR[fromNode].push_back(edge_weights_bikeSport_ATTR[edgeRow]);
+    adjList_dist_jogger[fromNode].push_back(edge_weights_jogger[edgeRow]);
+    adjList_dist_jogger_attr[fromNode].push_back(edge_weights_jogger_attr[edgeRow]);
+    adjList_dist_jogger_ATTR[fromNode].push_back(edge_weights_jogger_ATTR[edgeRow]);
   }
 
 // Ignore for now: only useful for A*, for now Djkistra is fast enough
@@ -1900,44 +1637,43 @@ List findShortestRoute_cpp( int V_ptr,
 
   //retrieve objects from R that were generated in C++ earlier
   int V = V_ptr;
-  ///////*
 
-  //make a adjList_dist that mixes the different agent types
-  std::vector<std::vector<double>> adjList_dist_walkNat;
-  std::vector<std::vector<double>> adjList_dist_walkSoc;
-  std::vector<std::vector<double>> adjList_dist_dogNat;
-  std::vector<std::vector<double>> adjList_dist_dogProx;
-  std::vector<std::vector<double>> adjList_dist_ebikeNat;
-  std::vector<std::vector<double>> adjList_dist_bikeSport;
-  std::vector<std::vector<double>> adjList_dist_jogger;
+  // Select per-weighingMethod adjacency lists (one copy per call, not per agent)
+  const std::vector<std::vector<double>>* adj_walkNat;
+  const std::vector<std::vector<double>>* adj_walkSoc;
+  const std::vector<std::vector<double>>* adj_dogNat;
+  const std::vector<std::vector<double>>* adj_dogProx;
+  const std::vector<std::vector<double>>* adj_ebikeNat;
+  const std::vector<std::vector<double>>* adj_bikeSport;
+  const std::vector<std::vector<double>>* adj_jogger;
 
   if(weighingMethod == "distance"){
-    adjList_dist_walkNat = adjList_dist_ptr_walkNat;
-    adjList_dist_walkSoc = adjList_dist_ptr_walkSoc;
-    adjList_dist_dogNat = adjList_dist_ptr_dogNat;
-    adjList_dist_dogProx = adjList_dist_ptr_dogProx;
-    adjList_dist_ebikeNat = adjList_dist_ptr_ebikeNat;
-    adjList_dist_bikeSport = adjList_dist_ptr_bikeSport;
-    adjList_dist_jogger = adjList_dist_ptr_jogger;
+    adj_walkNat   = &adjList_dist_ptr_walkNat;
+    adj_walkSoc   = &adjList_dist_ptr_walkSoc;
+    adj_dogNat    = &adjList_dist_ptr_dogNat;
+    adj_dogProx   = &adjList_dist_ptr_dogProx;
+    adj_ebikeNat  = &adjList_dist_ptr_ebikeNat;
+    adj_bikeSport = &adjList_dist_ptr_bikeSport;
+    adj_jogger    = &adjList_dist_ptr_jogger;
   }else if(weighingMethod == "little_attr"){
-    adjList_dist_walkNat = adjList_dist_ptr_walkNat_attr;
-    adjList_dist_walkSoc = adjList_dist_ptr_walkSoc_attr;
-    adjList_dist_dogProx = adjList_dist_ptr_dogProx_attr;
-    adjList_dist_dogNat = adjList_dist_ptr_dogNat_attr;
-    adjList_dist_ebikeNat = adjList_dist_ptr_ebikeNat_attr;
-    adjList_dist_bikeSport = adjList_dist_ptr_bikeSport_attr;
-    adjList_dist_jogger = adjList_dist_ptr_jogger_attr;
-  }else if(weighingMethod == "mostly_attr"){
-    adjList_dist_walkNat = adjList_dist_ptr_walkNat_ATTR;
-    adjList_dist_walkSoc = adjList_dist_ptr_walkSoc_ATTR;
-    adjList_dist_dogNat = adjList_dist_ptr_dogNat_ATTR;
-    adjList_dist_dogProx = adjList_dist_ptr_dogProx_ATTR;
-    adjList_dist_ebikeNat = adjList_dist_ptr_ebikeNat_ATTR;
-    adjList_dist_bikeSport = adjList_dist_ptr_bikeSport_ATTR;
-    adjList_dist_jogger = adjList_dist_ptr_jogger_ATTR;
+    adj_walkNat   = &adjList_dist_ptr_walkNat_attr;
+    adj_walkSoc   = &adjList_dist_ptr_walkSoc_attr;
+    adj_dogNat    = &adjList_dist_ptr_dogNat_attr;
+    adj_dogProx   = &adjList_dist_ptr_dogProx_attr;
+    adj_ebikeNat  = &adjList_dist_ptr_ebikeNat_attr;
+    adj_bikeSport = &adjList_dist_ptr_bikeSport_attr;
+    adj_jogger    = &adjList_dist_ptr_jogger_attr;
+  }else{
+    adj_walkNat   = &adjList_dist_ptr_walkNat_ATTR;
+    adj_walkSoc   = &adjList_dist_ptr_walkSoc_ATTR;
+    adj_dogNat    = &adjList_dist_ptr_dogNat_ATTR;
+    adj_dogProx   = &adjList_dist_ptr_dogProx_ATTR;
+    adj_ebikeNat  = &adjList_dist_ptr_ebikeNat_ATTR;
+    adj_bikeSport = &adjList_dist_ptr_bikeSport_ATTR;
+    adj_jogger    = &adjList_dist_ptr_jogger_ATTR;
   }
-  std::vector<std::vector<int>> adjList_IDs = adjList_IDs_ptr;
-  // std::vector<std::vector<double>> allDistancesTbl = *allDistTbl_ptr;
+  // Use const ref to avoid copying the ID list
+  const std::vector<std::vector<int>>& adjList_IDs = adjList_IDs_ptr;
 
 
   // create original variables used in pathfinding
@@ -1960,23 +1696,23 @@ List findShortestRoute_cpp( int V_ptr,
     //get agent type
     std::string agentType = agentTyps[agentNo];
 
-    //determine adjList_dist based on agentType from among adjList_dist_agentTypes
-    std::vector<std::vector<double>> adjList_dist;
+    // Use pointer to pre-selected adjacency list — no per-agent copy
+    const std::vector<std::vector<double>>* adjList_dist;
 
     if(agentType == "walkNat"){
-      adjList_dist = adjList_dist_walkNat;
+      adjList_dist = adj_walkNat;
     }else if(agentType == "walkSoc"){
-      adjList_dist = adjList_dist_walkSoc;
+      adjList_dist = adj_walkSoc;
     }else if(agentType == "dogNat"){
-      adjList_dist = adjList_dist_dogNat;
+      adjList_dist = adj_dogNat;
     }else if(agentType == "dogProx"){
-      adjList_dist = adjList_dist_dogProx;
+      adjList_dist = adj_dogProx;
     }else if(agentType == "ebikeNat"){
-      adjList_dist = adjList_dist_ebikeNat;
+      adjList_dist = adj_ebikeNat;
     }else if(agentType == "bikeSport"){
-      adjList_dist = adjList_dist_bikeSport;
-    }else if(agentType == "jogger"){
-      adjList_dist = adjList_dist_jogger;
+      adjList_dist = adj_bikeSport;
+    }else{
+      adjList_dist = adj_jogger;
     }
 
 
@@ -2039,9 +1775,9 @@ List findShortestRoute_cpp( int V_ptr,
           goto endAgentLoop;
         }
 
-        //determine relevant adjacency vertices and distances
-        std::vector<int> adjVrts = adjList_IDs[sptv];
-        std::vector<double> adjDist = adjList_dist[sptv];
+        //determine relevant adjacency vertices and distances (const refs — no copy)
+        const std::vector<int>&    adjVrts = adjList_IDs[sptv];
+        const std::vector<double>& adjDist = (*adjList_dist)[sptv];
 
 
         //CYCLE ALL ADJACENT VERTICES
@@ -2135,18 +1871,18 @@ std::ofstream log_file( "C:/Users/frueh/Documents/visitorFlowTool_LOG/rcpp_log.t
   // Rcpp::XPtr< std::vector<std::vector<double>> > adjList_dist_ptr_jogger = adjList_dist_ptrs[7];
 
 
-  std::vector<std::vector<double>> adjList_dist_walkNat = adjList_dist_ptr_walkNat;
-  ////////////////////////////////////////////////////////*
-  std::vector<std::vector<double>> adjList_dist_walkSoc = adjList_dist_ptr_walkSoc;
-  std::vector<std::vector<double>> adjList_dist_dogNat = adjList_dist_ptr_dogNat;
-  std::vector<std::vector<double>> adjList_dist_dogProx = adjList_dist_ptr_dogProx;
-  std::vector<std::vector<double>> adjList_dist_ebikeNat = adjList_dist_ptr_ebikeNat;
-  std::vector<std::vector<double>> adjList_dist_bikeSport = adjList_dist_ptr_bikeSport;
-  std::vector<std::vector<double>> adjList_dist_jogger = adjList_dist_ptr_jogger;
+  // Use const refs to avoid unnecessary deep copies of large adjacency lists
+  const std::vector<std::vector<double>>& adjList_dist_walkNat   = adjList_dist_ptr_walkNat;
+  const std::vector<std::vector<double>>& adjList_dist_walkSoc   = adjList_dist_ptr_walkSoc;
+  const std::vector<std::vector<double>>& adjList_dist_dogNat    = adjList_dist_ptr_dogNat;
+  const std::vector<std::vector<double>>& adjList_dist_dogProx   = adjList_dist_ptr_dogProx;
+  const std::vector<std::vector<double>>& adjList_dist_ebikeNat  = adjList_dist_ptr_ebikeNat;
+  const std::vector<std::vector<double>>& adjList_dist_bikeSport = adjList_dist_ptr_bikeSport;
+  const std::vector<std::vector<double>>& adjList_dist_jogger    = adjList_dist_ptr_jogger;
 
 
 
-  std::vector<std::vector<int>> adjList_IDs = adjList_IDs_ptr;
+  const std::vector<std::vector<int>>& adjList_IDs = adjList_IDs_ptr;
   // std::vector<std::vector<double>> allDistancesTbl = *allDistTbl_ptr;
 
   log_file << "step2" << std::endl;
@@ -2175,9 +1911,6 @@ std::ofstream log_file( "C:/Users/frueh/Documents/visitorFlowTool_LOG/rcpp_log.t
   AOI_v.insert(AOI_v.begin(), "0"); //add element to front so node 1 is on position 1 of vector (rather than pos 0)
 
 
-  //determine adjList_dist based on agentType from among adjList_dist_agentTypes
-  std::vector<std::vector<double>> adjList_dist;
-
   log_file << "step3" << std::endl;
 
   // START EVALUATING DISTANCES FOR EVERY SOURCE-GOAL pair
@@ -2188,26 +1921,22 @@ std::ofstream log_file( "C:/Users/frueh/Documents/visitorFlowTool_LOG/rcpp_log.t
     //get agent type
     std::string agentType = agentTyps[agentNo];
 
-
-
-
+    // Use pointer to const ref — no per-agent copy of large adjacency list
+    const std::vector<std::vector<double>>* adjList_dist;
     if(agentType == "walkNat"){
-
-      adjList_dist = adjList_dist_walkNat;
-
-
+      adjList_dist = &adjList_dist_walkNat;
     }else if(agentType == "walkSoc"){
-      adjList_dist = adjList_dist_walkSoc;
+      adjList_dist = &adjList_dist_walkSoc;
     }else if(agentType == "dogNat"){
-      adjList_dist = adjList_dist_dogNat;
+      adjList_dist = &adjList_dist_dogNat;
     }else if(agentType == "dogProx"){
-      adjList_dist = adjList_dist_dogProx;
+      adjList_dist = &adjList_dist_dogProx;
     }else if(agentType == "ebikeNat"){
-      adjList_dist = adjList_dist_ebikeNat;
+      adjList_dist = &adjList_dist_ebikeNat;
     }else if(agentType == "bikeSport"){
-      adjList_dist = adjList_dist_bikeSport;
-    }else if(agentType == "jogger"){
-      adjList_dist = adjList_dist_jogger;
+      adjList_dist = &adjList_dist_bikeSport;
+    }else{
+      adjList_dist = &adjList_dist_jogger;
     }
 
 
@@ -2281,9 +2010,9 @@ std::ofstream log_file( "C:/Users/frueh/Documents/visitorFlowTool_LOG/rcpp_log.t
         }
       }
 
-      //determine relevant adjacency vertices and distances
-      std::vector<int> adjVrts = adjList_IDs[sptv];
-      std::vector<double> adjDist = adjList_dist[sptv];
+      //determine relevant adjacency vertices and distances (const refs — no copy)
+      const std::vector<int>&    adjVrts = adjList_IDs[sptv];
+      const std::vector<double>& adjDist = (*adjList_dist)[sptv];
 
 
       //CYCLE ALL ADJACENT VERTICES
