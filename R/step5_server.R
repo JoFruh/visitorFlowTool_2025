@@ -946,70 +946,41 @@ step5_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
 
               #problematic to use filtered nodes, use all nodes instead? or buffered areas around parking
               filteredNodes <- sf::st_filter(newvertices, sf::st_buffer(parking, 50) )
+
+              # Pre-compute all spatial relationships ONCE before the loop instead of once per iteration:
+              # 1. Area / agentNb for every parking polygon (vectorised)
+              polyAreas    <- as.numeric(sf::st_area(parking)) / 30
+              # 2. Nearest AOI for every parking polygon (vectorised, single call)
+              nearestAOIs  <- sf::st_nearest_feature(parking, finalPolygons)
+              parkingAttrs <- finalPolygons$DULN[nearestAOIs]
+              # 3. Which filteredNodes fall within each parking polygon (one spatial op for all polygons)
+              nodesInParkings <- sf::st_contains(parking, filteredNodes, sparse = TRUE)
+
+              progress2$inc(1 / 2, detail = "Determining parking potential...")
+
               #cycle through parking polygons
-              for(polyNb in 1:nrow(parking)){
+              for(polyNb in seq_len(nrow(parking))){
 
-
-                progress2$inc((1/nrow(parking))  / 2, detail = "Determining parking potential...")
-                #get polygon size (should be in meters if proj = 4326)
-                polyArea <- sf::st_area(parking[polyNb,])
-                #convert to nb of agents (1agent / 30m^2)
-                agentNb <- polyArea/30
-
-                #get nodes within polygon and distribute number of agents equally among nodes (decimals allowed)
-                # ADD the values to nodes (pre-populated with 0s). This is to avoid conflicts with nodes already filled due to exception below.
-                nodeCount <- nrow(filteredNodes[parking[polyNb,], op = sf::st_within])
+                nodeIndices <- nodesInParkings[[polyNb]]
+                nodeCount   <- length(nodeIndices)
+                agentNb     <- polyAreas[[polyNb]]
+                nearestAttr <- parkingAttrs[[polyNb]]
 
                 if(nodeCount > 0){
-                  #use sf polygon to select terra vect nodes (may have to convert to sf first)
-                  isWithin <- sf::st_within(filteredNodes, parking[polyNb,])
-                  isWithin <- lengths(isWithin)
-                  #add number of agents a parking can hold (per node within parking places)
-                  filteredNodes[isWithin > 0,]$parking <- filteredNodes[isWithin > 0,]$parking + ( as.numeric(agentNb)/nodeCount )
+                  #add number of agents a parking can hold (per node within parking)
+                  filteredNodes$parking[nodeIndices]    <- filteredNodes$parking[nodeIndices] + (agentNb / nodeCount)
+                  filteredNodes$parkingAttr[nodeIndices] <- nearestAttr
 
-                  #determine parking attractivity
-                  #get closest AOI, use its  attractivity
-                  nearestIndex <- sf::st_nearest_feature(parking[polyNb,], finalPolygons)
-                  nearestAttr <- finalPolygons[nearestIndex,]$DULN
-
-                  cat(file = stderr(), paste0("\nParking[PolyNb,]: ", parking[polyNb,]))
-                  cat(file = stderr(), paste0("\nNEAREST_ATTR1: ", nearestAttr))
-                  #plug it back into network
-                  filteredNodes[isWithin > 0,]$parkingAttr <- nearestAttr
-
-                  if(is.na(nearestAttr)){browser()}
-
-                  }else{
+                }else{
                   #CAPTURE EXCEPTION : no nodes in polygon
                   #in this case, find a single closest node outside polygon
-                  nearestIndex <- sf::st_nearest_feature(parking[polyNb,], sf::st_as_sf(filteredNodes))
+                  nearestNodeIdx <- sf::st_nearest_feature(parking[polyNb,], sf::st_as_sf(filteredNodes))
 
-                  if(!is.na(nearestIndex)){
-                    filteredNodes$parking[[nearestIndex]] <- agentNb
-
-                    #determine parking attractivity
-                    #get closest AOI, use its  attractivity
-                    nearestIndex <- sf::st_nearest_feature(parking[polyNb,], finalPolygons)
-                    nearestAttr <- finalPolygons[nearestIndex,]$DULN
-                    cat(file = stderr(), paste0("\nNEAREST_ATTR2: ", nearestAttr))
-
-                    #plug it back into network
-                    filteredNodes$parkingAttr[[nearestIndex]] <- nearestAttr
-
-                    if(is.na(nearestAttr)){browser()}
-
+                  if(!is.na(nearestNodeIdx)){
+                    filteredNodes$parking[[nearestNodeIdx]]    <- filteredNodes$parking[[nearestNodeIdx]] + agentNb
+                    filteredNodes$parkingAttr[[nearestNodeIdx]] <- nearestAttr
                   }
                 }
-
-
-
-                #TODO
-                # filteredNodes[isWithin > 0,]$parkingAttr
-
-              #
-
-
-
               }
               #
               #transfer parking info back to network
