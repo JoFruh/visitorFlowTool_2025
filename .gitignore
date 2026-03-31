@@ -502,3 +502,5 @@ inst/app/www/data/tables_new/speciesInformation_new4.csv
 inst/app/www/data/tables_new/taxonList_final.csv
 inst/app/www/data/tables_new/taxonTable_final.csv
 R/RcppExports.R
+R/sf_to_tidygraph.R
+R/sf_to_tidygraph2.R
