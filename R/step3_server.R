@@ -111,9 +111,10 @@ step3_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE
 
     buildHTMLList <- function(speciesList, speciesData, language){
 
-      #TODO:
-      # if(length(r3$spChoices > 0)){
+      
+      if(length(speciesList > 0)){
 
+      # only go through species list if some species are available
       spChoice_names <- c()
 
 
@@ -137,20 +138,35 @@ step3_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE
             germanN <- speciesData[speciesData$latinN == latinN, "englishN"]
           }
 
-
-          if(length(link) > 0 & !is.na(link)){
-            textTag <- paste0( "<p style = 'display: table-cell'><em>", shiny::a(paste0(latinN), href = link, target = "_blank"),"</em>")
-          }else{
-            textTag <- paste0( "<p style = 'display: table-cell'><em>", latinN, "</em>")
+          # make sure link ignored without an error if not available
+          if (!is.null(link)) {
+            if (length(link) > 0 ) {
+              if(!is.na(link) & link != ""){
+              textTag <- paste0("<p style = 'display: table-cell'><em>", shiny::a(paste0(latinN), href = link, target = "_blank"), "</em>")
+            } else {
+              textTag <- paste0("<p style = 'display: table-cell'><em>", latinN, "</em>")
+            }
+            }else{
+              textTag <- paste0("<p style = 'display: table-cell'><em>", latinN, "</em>")
+            }
+          } else {
+            textTag <- paste0("<p style = 'display: table-cell'><em>", latinN, "</em>")
           }
 
 
           #add vernacular name if present
-          if(germanN != "" & !is.na(germanN)){
-            textTag <- paste0(textTag, "<br/>", germanN, "</p>")
-          }else{
+          if (!is.null(link)) {
+            if (length(link) > 0) {
+              if (germanN != "" & !is.na(germanN)) {
+                textTag <- paste0(textTag, "<br/>", germanN, "</p>")
+              } else {
+                textTag <- paste0(textTag, "</p>")
+              }
+            } else {
+              textTag <- paste0(textTag, "</p>")
+            }
+          } else {
             textTag <- paste0(textTag, "</p>")
-
           }
 
           #columns 7:11 could also give images (priority, umbrella etc.)
@@ -159,39 +175,37 @@ step3_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE
             img <- speciesData[speciesData$latinN == latinN, imageCol]
 
             #if an image is required
-            if(!is.na(img) & img != ""){
+            if (!is.null(img)) {
+              if (length(img) > 0) {
+                if (!is.na(img) & img != "") {
+                  # interpret international priority
+                  if (imageCol == "responsibility") {
+                    if (img %in% c(1, 2)) {
+                      # very high / unique responsibility
+                      imageTag <- paste0("<img src = 'www/HIR.png' style = 'display: inline-block;float: right; vertical-align: bottom; width: 35px; margin: 0 0 0 5px'>")
+                    } else if (img %in% c(3)) {
+                      # high responsibility
+                      imageTag <- paste0("<img src = 'www/MIR.png' style = 'display: inline-block ;float: right; vertical-align: bottom; width: 35px; margin: 0 0 0 5px'>")
+                    } else {
+                      # if no data or 0
+                      imageTag <- NULL
+                    }
+                  } else if (imageCol == "ch.priority") {
+                    if (img %in% 1:4) {
+                      imageTag <- paste0("<img src = 'www/", paste0("PR", img), ".png' style = 'display: inline-block ;float: right; vertical-align: bottom; width: 35px; margin: 0 0 0 5px'>")
+                    } else {
+                      imageTag <- NULL
+                    }
+                  } else {
+                    # filename defined by img
+                    imageTag <- paste0("<img src = 'www/", img, ".png' style = 'display: inline-block;float: right; vertical-align: bottom; width: 35px; margin: 0 0 0 5px'>")
+                  }
 
-              #interpret international priority
-              if(imageCol == "responsibility"){
-                if(img %in% c(1, 2)){
-                  #very high / unique responsibility
-                  imageTag <- paste0("<img src = 'www/HIR.png' style = 'display: inline-block;float: right; vertical-align: bottom; width: 35px; margin: 0 0 0 5px'>" )
-
-                }else if (img %in% c(3)){
-                  #high responsibility
-                  imageTag <- paste0("<img src = 'www/MIR.png' style = 'display: inline-block ;float: right; vertical-align: bottom; width: 35px; margin: 0 0 0 5px'>" )
-
-                }else{
-                  #if no data or 0
-                  imageTag <- NULL
+                  imageTags <- paste0(imageTags, imageTag)
                 }
-
-              }else if(imageCol == "ch.priority"){
-
-                if(img %in% 1:4){
-                  imageTag <- paste0("<img src = 'www/", paste0("PR", img),".png' style = 'display: inline-block ;float: right; vertical-align: bottom; width: 35px; margin: 0 0 0 5px'>" )
-                }else{
-                  imageTag <- NULL
-                }
-              }else{
-                #filename defined by img
-                imageTag <- paste0("<img src = 'www/",img , ".png' style = 'display: inline-block;float: right; vertical-align: bottom; width: 35px; margin: 0 0 0 5px'>" )
-
               }
-
-              imageTags <- paste0(imageTags, imageTag)
-
             }
+
             weightTag <- paste0("<div style = 'display: inline-block;float: right; vertical-align: bottom; width: 60px; margin: 0 0 0 5px' class='form-group shiny-input-container'><label class='control-label shiny-label-null' for='step3-weight_", sp , "' id= 'step3-weight_", sp ,"-label'>Weight</label><input id='step3-weight_", sp ,"' type='number' class='form-control' value='1' min = '1' max = '5'/></div>")
 
             finalTag <- paste0(textTag, weightTag, imageTags)
@@ -206,10 +220,10 @@ step3_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE
       spChoices <- sprintf("c%d",1:length(spChoice_names))
       names(spChoices) <- spChoice_names
 
-      # }
-# TODO:       else{
-#   spChoices <- p("No species for this filter.")
-# }
+      }else{
+# If no species are available, create a dummy choice to avoid errors in the UI
+  spChoices <- NULL
+}
 
       return(spChoices)
     }
@@ -1025,9 +1039,10 @@ cat(file = stderr(), paste0("r3$spChoices = ", r3$spChoices ) )
           return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
         })
 
+
         # #trigger an update of the species choices checkbox
         # r3$triggerSpChckUpdate <- r3$triggerSpChckUpdate  + 1
-        if(!is.null(r3$spChoices)){
+        if(!is.null(r3$spChoices) ){
           r3$spChoices_html <- buildHTMLList(r3$spChoices, speciesData, language = "en")
         }
 
@@ -1769,6 +1784,7 @@ print("CHOSEN")
       #filter spChoices based on inputList
       cat(file = stderr(), paste0("input$filterList = ", input$filterList) )
 
+
       r3$spChoices <- switch(input$filterList,
                             "s1" = r$spChc,
                             "s2" = r$spChc[r$spChc %in% speciesData$latinN[speciesData$ch.priority %in% c("1")] ],
@@ -1780,6 +1796,7 @@ print("CHOSEN")
                             "s8" = r$spChc[r$spChc %in% speciesData$latinN[speciesData$threat %in% c("CR", "EN", "VU")] ],
                             "s9" = r$spChc[r$spChc %in% speciesData$latinN[speciesData$threat %in% c("CR", "EN", "VU", "NT")] ],)
 
+ 
 
 
 

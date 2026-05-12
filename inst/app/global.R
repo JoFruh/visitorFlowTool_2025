@@ -102,7 +102,7 @@
 # }
 
 #PREPARE WORKERS ####
-currentPlan <- future::plan("future::multisession", workers = 2) #temporary fix for live
+currentPlan <- future::plan("future::multisession", workers = 4) #temporary fix for live
 # currentPlan <- future::plan("future::sequential")
 
 # Pre-warm all workers immediately
