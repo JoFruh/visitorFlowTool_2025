@@ -505,3 +505,4 @@ R/RcppExports.R
 R/sf_to_tidygraph.R
 R/sf_to_tidygraph2.R
 inst/app/www/data/maps/countryBorders/swissBorder_final.gpkg
+inst/app/www/data/maps/countryBorders/swissBorder2.gpkg
