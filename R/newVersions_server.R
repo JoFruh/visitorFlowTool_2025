@@ -43,8 +43,8 @@ newVersions_server <- function(id, networkList, confirm, i18n, currentLang, isFi
           choices = list(
             "Wegen/Strassen" = 1,
             "Parken/Wohnen" = 3
-            # ,
-            # "Hitzeminderung" = 4  # new option in dev.
+            ,
+            "Hitzeminderung" = 4  # new option in dev.
           ),
           selected = 1
         )
@@ -56,8 +56,8 @@ newVersions_server <- function(id, networkList, confirm, i18n, currentLang, isFi
           choices = list(
             "Chemins/Routes" = 1,
             "Parkings/Habitations" = 3
-            # ,
-            # "Attenuation de chaleur" = 4  # new option
+            ,
+            "Attenuation de chaleur" = 4  # new option
           ),
           selected = 1
         )
@@ -69,8 +69,8 @@ newVersions_server <- function(id, networkList, confirm, i18n, currentLang, isFi
           choices = list(
             "Paths/Roads" = 1,
             "Parking/Residences" = 3
-            # ,
-            # "Attenuation de chaleur" = 4  # new option
+            ,
+            "Attenuation de chaleur" = 4  # new option
           ),
           selected = 1
         )
