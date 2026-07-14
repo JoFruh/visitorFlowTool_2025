@@ -132,6 +132,47 @@ background: url('infoIcon.png');  background-size: cover; background-position: c
 
                                         shinycssloaders::withSpinner(  leaflet::leafletOutput(shiny::NS(id, "versionMap"), height = 600), type = 3, color = "#069869", color.background = "white" )
 
+                                 ),
+
+                                 #PAINT COLOR BUTTONS (heat mitigation, context 4) ####
+                                 shiny::fluidRow(
+                                   shinyjs::useShinyjs(),
+                                   shinyjs::inlineCSS(list(.colorBtnSelected = "border-width: thick; border-color: black")),
+                                   shinyjs::inlineCSS(list(.colorBtnNotSelected = "border-width: thin; border-color: grey")),
+                                   shiny::column(12, align = "center",
+                                                 shiny::div(
+                                                   id = NS(id, "paintColorButtonsDiv"),
+                                                   style = "display:none;",
+                                                   shiny::div(
+                                                     style = "display:flex; justify-content:center; gap:10px; margin-top:10px;",
+                                                     shiny::actionButton(
+                                                       inputId = shiny::NS(id, "paintColor_grass"), label = i18n$t("Gras"),
+                                                       class = "colorBtnSelected",
+                                                       style = "background-color: lightgreen; width: 90px; height: 45px;"
+                                                     ),
+                                                     shiny::actionButton(
+                                                       inputId = shiny::NS(id, "paintColor_tree"), label = i18n$t("Baum"),
+                                                       class = "colorBtnNotSelected",
+                                                       style = "background-color: darkgreen; color: white; width: 90px; height: 45px;"
+                                                     ),
+                                                     shiny::actionButton(
+                                                       inputId = shiny::NS(id, "paintColor_artificial"), label = i18n$t("Künstlich"),
+                                                       class = "colorBtnNotSelected",
+                                                       style = "background-color: grey; width: 90px; height: 45px;"
+                                                     ),
+                                                     shiny::actionButton(
+                                                       inputId = shiny::NS(id, "paintColor_natural"), label = i18n$t("Natürlich"),
+                                                       class = "colorBtnNotSelected",
+                                                       style = "background-color: #a05a3c; color: white; width: 90px; height: 45px;"
+                                                     ),
+                                                     shiny::actionButton(
+                                                       inputId = shiny::NS(id, "paintColor_water"), label = i18n$t("Wasser"),
+                                                       class = "colorBtnNotSelected",
+                                                       style = "background-color: dodgerblue; color: white; width: 90px; height: 45px;"
+                                                     )
+                                                   )
+                                                 )
+                                   )
                                  )
 
                  ),

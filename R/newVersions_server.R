@@ -232,6 +232,9 @@ if(is.null(r$updateNetworkPlot)){
 
       r$lastSelectedButton <- NULL
 
+      #initialize memory of last selected paint color button (grass is the default/pre-selected color)
+      r$lastSelectedColorButton <- "paintColor_grass"
+
       shinyjs::disable("newVersionsConfirmButton")
       shinyjs::disable("addVersionButton")
       print("BTN$INPUTID: ")
@@ -579,6 +582,10 @@ if(is.null(r$updateNetworkPlot)){
               leaflet::addMapPane("layer1", zIndex = 410)%>% leaflet::addMapPane("layer2", zIndex = 420)%>% leaflet::addMapPane("layer3", zIndex = 450)
 
             session$sendCustomMessage(type="set-paint-active", message=TRUE)
+
+            #show paint color buttons, defaulting back to grass each time context 4 is (re)entered
+            shinyjs::show(id = "paintColorButtonsDiv")
+            setPaintColor(session, r, "paintColor_grass", "144,238,144")
           }
 
         #add or remove dummy group (this is to trigger an observer that determines when the map finished rendering)
@@ -640,6 +647,37 @@ if(is.null(r$updateNetworkPlot)){
 #OBSERVERS ####
 
 # PAINT MODE OBSERVERS
+
+#toggle mutually-exclusive paint color buttons (light green/dark green/grey/brown/blue)
+setPaintColor <- function(session, r, inputId, rgb){
+  if(is.null(r$lastSelectedColorButton) || r$lastSelectedColorButton != inputId){
+    if(!is.null(r$lastSelectedColorButton)){
+      shinyjs::removeClass(r$lastSelectedColorButton, "colorBtnSelected")
+      shinyjs::addClass(r$lastSelectedColorButton, "colorBtnNotSelected")
+    }
+    shinyjs::removeClass(inputId, "colorBtnNotSelected")
+    shinyjs::addClass(inputId, "colorBtnSelected")
+    r$lastSelectedColorButton <- inputId
+    session$sendCustomMessage("set-paint-color", rgb)
+  }
+}
+
+shiny::observeEvent(input$paintColor_grass, {
+  setPaintColor(session, r, "paintColor_grass", "144,238,144")
+})
+shiny::observeEvent(input$paintColor_tree, {
+  setPaintColor(session, r, "paintColor_tree", "0,100,0")
+})
+shiny::observeEvent(input$paintColor_artificial, {
+  setPaintColor(session, r, "paintColor_artificial", "128,128,128")
+})
+shiny::observeEvent(input$paintColor_natural, {
+  setPaintColor(session, r, "paintColor_natural", "160,82,45")
+})
+shiny::observeEvent(input$paintColor_water, {
+  setPaintColor(session, r, "paintColor_water", "30,144,255")
+})
+
 observeEvent(input$confirmPaint, {
   session$sendCustomMessage("send-paint-mask", "paintMask")
   session$sendCustomMessage("end-paintbrush", "newVersions-versionMap")
@@ -1289,6 +1327,7 @@ print("add versions")
 
               #hide confirm paint button
               shinyjs::toggle(id = "confirmPaintDiv", condition = FALSE)  # hides button when not context 4
+              shinyjs::toggle(id = "paintColorButtonsDiv", condition = FALSE)  # hides color buttons when not context 4
 
               print("MARKER WAS CLICKED")
               r$markerWasClicked <- TRUE
@@ -1669,6 +1708,7 @@ print("add versions")
             }else if(input$contextChoice == 3){
               #hide confirm paint button
               shinyjs::toggle(id = "confirmPaintDiv", condition = FALSE)  # hides button when not context 4
+              shinyjs::toggle(id = "paintColorButtonsDiv", condition = FALSE)  # hides color buttons when not context 4
 
             #### CONTEXT 3: HOUSING/PARKING ####
               print("CONTEXT IS NOW HOUSING/PARKING")
