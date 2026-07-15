@@ -574,6 +574,11 @@ if(is.null(r$updateNetworkPlot)){
             }
           }else if(shiny::isolate(input$contextChoice == 4)){
           #RENDER HEAT MITIGATION ####
+            shiny::isolate(r$parkingPolygons <- r$networkList[[r$position]]$parking)
+            if(shiny::isolate(nrow(r$parkingPolygons) == 0)){
+              shiny::isolate(r$parkingPolygons <- r$networkList[[1]]$parking)
+            }
+
             map <- leaflet::leaflet(shiny::isolate(r$parkingPolygons))%>%
               leaflet::addMapPane("layer_SM", zIndex = 405)%>%
               leaflet::addMapPane("layer1", zIndex = 410)%>% leaflet::addMapPane("layer2", zIndex = 420)%>% leaflet::addMapPane("layer3", zIndex = 450) %>%
@@ -585,7 +590,15 @@ if(is.null(r$updateNetworkPlot)){
 
             #show paint color buttons, defaulting back to grass each time context 4 is (re)entered
             shinyjs::show(id = "paintColorButtonsDiv")
-            setPaintColor(session, r, "paintColor_grass", "144,238,144")
+            shiny::isolate(setPaintColor(session, r, "paintColor_grass", "144,238,144"))
+
+            #re-add this version's persisted painted layer (proxy-added layers don't survive a full re-render)
+            savedPaint <- shiny::isolate(r$networkList[[r$position]]$paintedRaster)
+            if(!is.null(savedPaint)){
+              savedPaint4326 <- terra::project(savedPaint, "EPSG:4326", method = "near")
+              map <- map %>% leaflet::addRasterImage(x = raster::raster(savedPaint4326), colors = paintPalette,
+                                                       group = "paintedMask", opacity = 0.5, project = FALSE)
+            }
           }
 
         #add or remove dummy group (this is to trigger an observer that determines when the map finished rendering)
@@ -678,37 +691,40 @@ shiny::observeEvent(input$paintColor_water, {
   setPaintColor(session, r, "paintColor_water", "30,144,255")
 })
 
-observeEvent(input$confirmPaint, {
-  session$sendCustomMessage("send-paint-mask", "paintMask")
-  session$sendCustomMessage("end-paintbrush", "newVersions-versionMap")
-})
+# Convert a completed brush stroke into a georeferenced raster and add it to the map
+observeEvent(input$paintStroke, {
+  tryCatch({
+    stroke <- input$paintStroke
+    b <- stroke$bounds
+    img <- png::readPNG(base64enc::base64decode(
+      gsub("^data:image/png;base64,", "", stroke$dataUrl)
+    ))
 
-# observe({
-#   session$sendCustomMessage("init-paintbrush", "newVersions-versionMap")
-# })
+    ids <- classifyPaintPixels(img)
+    if(all(is.na(ids))) return(NULL)
 
-# Activate paint mode only when contextChoice == 4
-# observe({
-#   active <- input$contextChoice == 4
-#   session$sendCustomMessage("set-paint-active", active)
-# })
+    rawRast <- terra::rast(nrows = stroke$height, ncols = stroke$width,
+                            xmin = b$west, xmax = b$east, ymin = b$south, ymax = b$north, crs = "EPSG:4326")
+    terra::values(rawRast) <- ids
 
-# When confirm button is pressed, send canvas to R
-observeEvent(input$confirmPaint, {
-  session$sendCustomMessage("send-paint-mask", "paintMask")
-})
+    template <- buildStrokeTemplate(b)
+    strokeRast2056 <- terra::project(rawRast, template, method = "near")
 
-# Receive canvas mask as base64
-observeEvent(input$paintMask, {
-  # Decode base64 image to raster
+    existing <- shiny::isolate(r$networkList[[r$position]]$paintedRaster)
+    merged <- if(is.null(existing)) strokeRast2056 else terra::merge(strokeRast2056, existing)
+    r$networkList[[r$position]]$paintedRaster <- merged
 
-  img <- png::readPNG(base64enc::base64decode(
-    gsub("data:image/png;base64,", "", input$paintMask)
-  ))
+    merged4326 <- terra::project(merged, "EPSG:4326", method = "near")
+    leaflet::leafletProxy("versionMap") %>%
+      leaflet::clearGroup("paintedMask") %>%
+      leaflet::addRasterImage(x = raster::raster(merged4326), colors = paintPalette,
+                               group = "paintedMask", opacity = 0.5, project = FALSE)
 
-  # Create raster
-  r <- terra::rast(img[,,1]) # use red channel
-  plot(r, main="Painted raster")
+    session$sendCustomMessage("clear-paint-canvas", TRUE)
+  }, error = function(e){
+    warning("paintStroke observer failed: ", conditionMessage(e))
+    message("paintStroke observer failed: ", conditionMessage(e))
+  })
 })
 
 
@@ -1297,7 +1313,7 @@ print("add versions")
             # networkLst[[length(networkLst)+1]] <- list(network = networkLst[[1]]$network, pathUsage = NULL)
 
             #TODO: copy a group of elements (network, attractivity rasters, residential raster, parking polygons)
-            r$networkList[[length(r$networkList)+1]] <- list(network = r$networkList[[1]]$network, pathUsage = NULL, parking = r$networkList[[1]]$parking)
+            r$networkList[[length(r$networkList)+1]] <- list(network = r$networkList[[1]]$network, pathUsage = NULL, parking = r$networkList[[1]]$parking, paintedRaster = NULL)
             #update reactive
             # ntwrkLst_r(networkLst)
 
@@ -1325,8 +1341,7 @@ print("add versions")
             if(r$context == 1){
               #### CONTEXT 1: INFRASTRUCTURE ####
 
-              #hide confirm paint button
-              shinyjs::toggle(id = "confirmPaintDiv", condition = FALSE)  # hides button when not context 4
+              #hide paint color buttons
               shinyjs::toggle(id = "paintColorButtonsDiv", condition = FALSE)  # hides color buttons when not context 4
 
               print("MARKER WAS CLICKED")
@@ -1419,7 +1434,7 @@ print("add versions")
 
 
 
-                  r$networkList[[r$position]] <- list(network = network,  pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr )
+                  r$networkList[[r$position]] <- list(network = network,  pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster )
                   # r$networkList[[r$position]]$network <- network
 
                   #remove pathUsage results, as new results must be simulated
@@ -1561,7 +1576,7 @@ print("add versions")
                   newNetwork <- tidygraph::tbl_graph(nodes = networkNodes, edges = newNetworkEdges, directed = FALSE)
 
                   #re-insert network in networkList
-                  r$networkList[[r$position]] <- list(network = newNetwork, pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr )
+                  r$networkList[[r$position]] <- list(network = newNetwork, pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster )
                   # r$networkList[[r$position]]$network <- newNetwork
 
                   # tbl <- tbl_graph(edges = networkEdges , nodes = r$networkList[[r$position]]$network %>% tidygraph::activate(nodes) %>% as_tibble())
@@ -1706,8 +1721,7 @@ print("add versions")
             #### CONTEXT 2: SIGNAGE/ATTRACTIVITY ####
 
             }else if(input$contextChoice == 3){
-              #hide confirm paint button
-              shinyjs::toggle(id = "confirmPaintDiv", condition = FALSE)  # hides button when not context 4
+              #hide paint color buttons
               shinyjs::toggle(id = "paintColorButtonsDiv", condition = FALSE)  # hides color buttons when not context 4
 
             #### CONTEXT 3: HOUSING/PARKING ####
@@ -2026,7 +2040,7 @@ obsEvent_deleteEdge <- shiny::observeEvent(input$deleteEdge, {
   network <- r$networkList[[r$position]]$network
   network <- network %>% tidygraph::activate(edges) %>% dplyr::filter(.data$edgeID_2 !=  r$edgID )
 
-  r$networkList[[r$position]] <- list(network = network,  pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr)
+  r$networkList[[r$position]] <- list(network = network,  pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster)
 
   #remove pathUsage results, as new results must be simulated
   r$networkList[[r$position]]$pathUsage <- NULL
@@ -2759,7 +2773,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
                   tbl <- tidygraph::tbl_graph(edges = r$networkList[[r$position]]$network %>% tidygraph::activate(edges) %>% dplyr::as_tibble(), nodes = newNetworkNodes, directed = FALSE)
 
 
-                  r$networkList[[r$position]] <- list(network = tbl,  pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr )
+                  r$networkList[[r$position]] <- list(network = tbl,  pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster )
                   # r$networkList[[r$position]]$network <- network
 
 
@@ -2901,7 +2915,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
                   #recreate network graph and insert in reactives
                   tbl <- tidygraph::tbl_graph(edges = newNetworkEdges , nodes = r$networkList[[r$position]]$network %>% tidygraph::activate(nodes) %>% dplyr::as_tibble(), directed = FALSE)
 
-                  r$networkList[[r$position]] <- list(network = tbl,  pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr )
+                  r$networkList[[r$position]] <- list(network = tbl,  pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster )
                   # r$networkList[[r$position]]$network <- network
 
                   #insert node in dataframe
@@ -3105,7 +3119,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
                   #recreate network graph and insert in reactives
                   tbl <- tidygraph::tbl_graph(edges = r$networkList[[r$position]]$network %>% tidygraph::activate(edges) %>% dplyr::as_tibble(), nodes = networkNodes, directed = FALSE)
 
-                  r$networkList[[r$position]] <- list(network = tbl, pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential ,newAttr = r$networkList[[r$position]]$newAttr )
+                  r$networkList[[r$position]] <- list(network = tbl, pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential ,newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster )
                   # r$networkList[[r$position]]$network <- network
 
                   print(r$networkList[[r$position]]$network)

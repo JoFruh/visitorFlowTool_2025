@@ -228,21 +228,6 @@ background: url('infoIcon.png');  background-size: cover; background-position: c
                          )
                        )
                        ),
-                fluidRow(
-                  column(4,
-                         shiny::div(
-                           id = NS(id, "confirmPaintDiv"),
-                           style = "display:none;",  # hidden initially
-                           shiny::actionButton(
-                             inputId = NS(id, "confirmPaint"),
-                             label = i18n$t("Bestätigen"),
-                             style = "height:50px; width:120px; margin-top:10px"
-                           )
-                         )
-                         ),
-                  column(4),
-                  column(4)
-                )
                 ),
         tagList(
           # ... your normal UI ...,

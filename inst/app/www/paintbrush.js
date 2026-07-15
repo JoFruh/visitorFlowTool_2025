@@ -19,8 +19,19 @@ function drawCircle(x, y) {
   ctx.arc(x, y, r, 0, Math.PI * 2);
   ctx.fillStyle = "rgba(" + paintbrush.color + ",0.5)";
   ctx.fill();
-  var btnDiv = document.getElementById("newVersions-confirmPaintDiv");
-  if (btnDiv && btnDiv.style.display === "none") btnDiv.style.display = "block";
+  paintbrush.strokeActive = true;
+  // track the stroke's bounding box (with brush-radius margin) so only the
+  // painted region gets sent to R, not the whole canvas
+  var m = r + 2;
+  var sb = paintbrush.strokeBounds;
+  if (!sb) {
+    paintbrush.strokeBounds = { minX: x - m, minY: y - m, maxX: x + m, maxY: y + m };
+  } else {
+    if (x - m < sb.minX) sb.minX = x - m;
+    if (y - m < sb.minY) sb.minY = y - m;
+    if (x + m > sb.maxX) sb.maxX = x + m;
+    if (y + m > sb.maxY) sb.maxY = y + m;
+  }
 }
 
 function disableMapInteractions(map) {
@@ -41,9 +52,44 @@ function enableMapInteractions(map) {
   map.keyboard.enable();
 }
 
-function sendPaintMask(id) {
-  if (!paintbrush) return;
-  Shiny.setInputValue(id, paintbrush.canvas.toDataURL(), { priority: "event" });
+function sendPaintStroke() {
+  if (!paintbrush || !paintbrush.strokeBounds) return;
+  // re-fetch the live map instance: the leaflet widget may have been fully
+  // re-rendered since initPaintbrush ran, leaving paintbrush.map stale
+  var mapWidget = HTMLWidgets.find("#newVersions-versionMap");
+  var map = mapWidget ? mapWidget.getMap() : null;
+  if (map) { paintbrush.map = map; } else { map = paintbrush.map; }
+
+  // send only the painted region, not the whole canvas: processing cost in R
+  // scales with the sent area (a 5m grid over the full viewport is huge when
+  // zoomed out), so cropping here is what keeps stroke conversion fast
+  var canvas = paintbrush.canvas;
+  var sb = paintbrush.strokeBounds;
+  var x0 = Math.max(0, Math.floor(sb.minX));
+  var y0 = Math.max(0, Math.floor(sb.minY));
+  var x1 = Math.min(canvas.width,  Math.ceil(sb.maxX));
+  var y1 = Math.min(canvas.height, Math.ceil(sb.maxY));
+  var w = x1 - x0;
+  var h = y1 - y0;
+  if (w <= 0 || h <= 0) return;
+
+  var crop = document.createElement("canvas");
+  crop.width  = w;
+  crop.height = h;
+  crop.getContext("2d").drawImage(canvas, x0, y0, w, h, 0, 0, w, h);
+
+  // canvas pixels coincide with map container points (canvas sits at the map
+  // container's top-left, sized to map.getSize()), so the crop corners can be
+  // georeferenced exactly with containerPointToLatLng
+  var nw = map.containerPointToLatLng([x0, y0]);
+  var se = map.containerPointToLatLng([x1, y1]);
+
+  Shiny.setInputValue("newVersions-paintStroke", {
+    dataUrl: crop.toDataURL(),
+    bounds:  { west: nw.lng, east: se.lng, south: se.lat, north: nw.lat },
+    width:   w,
+    height:  h
+  }, { priority: "event" });
 }
 
 function initPaintbrush(mapId) {
@@ -78,6 +124,7 @@ function initPaintbrush(mapId) {
     e.stopPropagation();
     canvas.setPointerCapture(e.pointerId);
     drawing = true;
+    paintbrush.strokeActive = false;
     var rect = paintbrush.mapDiv.getBoundingClientRect();
     drawCircle(e.clientX - rect.left, e.clientY - rect.top);
   });
@@ -92,7 +139,16 @@ function initPaintbrush(mapId) {
 
   canvas.addEventListener("pointerup", function(e) {
     e.stopPropagation();
+    var hadStroke = paintbrush.strokeActive;
     drawing = false;
+    paintbrush.strokeActive = false;
+    if (hadStroke) {
+      try {
+        sendPaintStroke();
+      } catch (err) {
+        console.error("sendPaintStroke failed:", err);
+      }
+    }
   });
 
   canvas.addEventListener("pointerleave", function() {
@@ -107,7 +163,12 @@ function initPaintbrush(mapId) {
     brushRadius: brushRadius,
     active:      false,
     color:       "144,238,144",
-    clear: function() { ctx.clearRect(0, 0, canvas.width, canvas.height); }
+    strokeActive: false,
+    strokeBounds: null,
+    clear: function() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      paintbrush.strokeBounds = null;
+    }
   };
 
   console.log("initPaintbrush: success ✅");
@@ -154,6 +215,7 @@ Shiny.addCustomMessageHandler("set-paint-color", function(rgb) {
   if (paintbrush.active) updateCursor();
 });
 
-Shiny.addCustomMessageHandler("send-paint-mask", function(inputId) {
-  sendPaintMask(inputId);
+Shiny.addCustomMessageHandler("clear-paint-canvas", function(msg) {
+  if (!paintbrush) return;
+  paintbrush.clear();
 });
