@@ -12,19 +12,15 @@ paintPalette <- leaflet::colorFactor(
   na.color = "transparent"
 )
 
-#' Classify an RGBA PNG array (dims height x width x 4, row 1 = top, values 0-1)
-#' into PAINT_CATEGORIES$id, returned row-major (matches terra's cell order).
-classifyPaintPixels <- function(img, alpha_threshold = 0.05){
-  r255 <- as.vector(t(img[,,1])) * 255
-  g255 <- as.vector(t(img[,,2])) * 255
-  b255 <- as.vector(t(img[,,3])) * 255
-  a    <- as.vector(t(img[,,4]))
-
-  distMat <- sapply(seq_len(nrow(PAINT_CATEGORIES)), function(i){
-    (r255 - PAINT_CATEGORIES$r[i])^2 + (g255 - PAINT_CATEGORIES$g[i])^2 + (b255 - PAINT_CATEGORIES$b[i])^2
-  })
-  ids <- max.col(-distMat)
-  ids[a <= alpha_threshold] <- NA
+#' Turn an RGBA PNG array's alpha channel into raster cell ids: `categoryId`
+#' where painted, NA elsewhere. Only one paint color is ever active at a time
+#' (paintbrush.js echoes back the active PAINT_CATEGORIES$id with every stroke),
+#' so R never needs to inspect painted pixel colors - painted-or-not is the
+#' only distinction the raster needs.
+paintedPixelIds <- function(img, categoryId, alpha_threshold = 0.05){
+  a <- as.vector(t(img[,,4]))
+  ids <- rep(NA_integer_, length(a))
+  ids[a > alpha_threshold] <- categoryId
   ids
 }
 

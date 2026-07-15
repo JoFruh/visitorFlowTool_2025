@@ -662,7 +662,10 @@ if(is.null(r$updateNetworkPlot)){
 # PAINT MODE OBSERVERS
 
 #toggle mutually-exclusive paint color buttons (light green/dark green/grey/brown/blue)
-setPaintColor <- function(session, r, inputId, rgb){
+# id must match the PAINT_CATEGORIES$id for that color (see paintbrush_helpers.R) -
+# it's sent to the browser and echoed back unchanged on every stroke, so R never
+# has to re-derive the category from painted pixel colors
+setPaintColor <- function(session, r, inputId, rgb, id){
   if(is.null(r$lastSelectedColorButton) || r$lastSelectedColorButton != inputId){
     if(!is.null(r$lastSelectedColorButton)){
       shinyjs::removeClass(r$lastSelectedColorButton, "colorBtnSelected")
@@ -671,24 +674,24 @@ setPaintColor <- function(session, r, inputId, rgb){
     shinyjs::removeClass(inputId, "colorBtnNotSelected")
     shinyjs::addClass(inputId, "colorBtnSelected")
     r$lastSelectedColorButton <- inputId
-    session$sendCustomMessage("set-paint-color", rgb)
+    session$sendCustomMessage("set-paint-color", list(rgb = rgb, id = id))
   }
 }
 
 shiny::observeEvent(input$paintColor_grass, {
-  setPaintColor(session, r, "paintColor_grass", "144,238,144")
+  setPaintColor(session, r, "paintColor_grass", "144,238,144", 1)
 })
 shiny::observeEvent(input$paintColor_tree, {
-  setPaintColor(session, r, "paintColor_tree", "0,100,0")
+  setPaintColor(session, r, "paintColor_tree", "0,100,0", 2)
 })
 shiny::observeEvent(input$paintColor_artificial, {
-  setPaintColor(session, r, "paintColor_artificial", "128,128,128")
+  setPaintColor(session, r, "paintColor_artificial", "128,128,128", 3)
 })
 shiny::observeEvent(input$paintColor_natural, {
-  setPaintColor(session, r, "paintColor_natural", "160,82,45")
+  setPaintColor(session, r, "paintColor_natural", "160,82,45", 4)
 })
 shiny::observeEvent(input$paintColor_water, {
-  setPaintColor(session, r, "paintColor_water", "30,144,255")
+  setPaintColor(session, r, "paintColor_water", "30,144,255", 5)
 })
 
 # Convert a completed brush stroke into a georeferenced raster and add it to the map
@@ -700,7 +703,7 @@ observeEvent(input$paintStroke, {
       gsub("^data:image/png;base64,", "", stroke$dataUrl)
     ))
 
-    ids <- classifyPaintPixels(img)
+    ids <- paintedPixelIds(img, stroke$categoryId)
     if(all(is.na(ids))) return(NULL)
 
     rawRast <- terra::rast(nrows = stroke$height, ncols = stroke$width,

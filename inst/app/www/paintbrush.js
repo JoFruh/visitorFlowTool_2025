@@ -73,10 +73,25 @@ function sendPaintStroke() {
   var h = y1 - y0;
   if (w <= 0 || h <= 0) return;
 
+  // downscale before encoding: R snaps the final raster to a fixed 5m grid
+  // (buildStrokeTemplate), so sending pixel-for-pixel screen resolution just
+  // wastes encode/transfer/decode/classification time on precision that gets
+  // thrown away anyway. Capping the longest side bounds that cost regardless
+  // of stroke size or zoom level.
+  var MAX_DIM = 250;
+  var scale = Math.min(1, MAX_DIM / Math.max(w, h));
+  var outW = Math.max(1, Math.round(w * scale));
+  var outH = Math.max(1, Math.round(h * scale));
+
   var crop = document.createElement("canvas");
-  crop.width  = w;
-  crop.height = h;
-  crop.getContext("2d").drawImage(canvas, x0, y0, w, h, 0, 0, w, h);
+  crop.width  = outW;
+  crop.height = outH;
+  var cctx = crop.getContext("2d");
+  // nearest-neighbor, not bilinear: keeps painted regions as solid category
+  // colors instead of blending them at edges into colors that won't match
+  // any PAINT_CATEGORIES entry
+  cctx.imageSmoothingEnabled = false;
+  cctx.drawImage(canvas, x0, y0, w, h, 0, 0, outW, outH);
 
   // canvas pixels coincide with map container points (canvas sits at the map
   // container's top-left, sized to map.getSize()), so the crop corners can be
@@ -85,10 +100,11 @@ function sendPaintStroke() {
   var se = map.containerPointToLatLng([x1, y1]);
 
   Shiny.setInputValue("newVersions-paintStroke", {
-    dataUrl: crop.toDataURL(),
-    bounds:  { west: nw.lng, east: se.lng, south: se.lat, north: nw.lat },
-    width:   w,
-    height:  h
+    dataUrl:    crop.toDataURL(),
+    bounds:     { west: nw.lng, east: se.lng, south: se.lat, north: nw.lat },
+    width:      outW,
+    height:     outH,
+    categoryId: paintbrush.categoryId
   }, { priority: "event" });
 }
 
@@ -163,6 +179,7 @@ function initPaintbrush(mapId) {
     brushRadius: brushRadius,
     active:      false,
     color:       "144,238,144",
+    categoryId:  1,
     strokeActive: false,
     strokeBounds: null,
     clear: function() {
@@ -209,9 +226,10 @@ Shiny.addCustomMessageHandler("set-brush-radius", function(radius) {
   if (paintbrush.active) updateCursor();
 });
 
-Shiny.addCustomMessageHandler("set-paint-color", function(rgb) {
+Shiny.addCustomMessageHandler("set-paint-color", function(msg) {
   if (!paintbrush) return;
-  paintbrush.color = rgb;
+  paintbrush.color = msg.rgb;
+  paintbrush.categoryId = msg.id;
   if (paintbrush.active) updateCursor();
 });
 
