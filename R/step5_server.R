@@ -119,18 +119,28 @@ step5_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
         if(skip == TRUE){ #without starting polygons
           tmap::tmap_leaflet(
             tmap::tm_shape(network |> tidygraph::activate(edges) |> dplyr::as_tibble() |> sf::st_as_sf(), options = leaflet::pathOptions(pane = "layer1")) +
-              tmap::tm_lines(col = "grey", lwd = 2, palette = c("grey"), popup.vars = FALSE,interactive = FALSE) +
-              tmap::tmap_options(basemaps = 'OpenStreetMap', basemap.alpha = c(0.5) )
-          ) |>leaflet::addMapPane("layer1", zIndex = 410) |> leaflet::addMapPane("layer2", zIndex = 420)
+              tmap::tm_lines(col = "grey", lwd = 2, palette = c("grey"), popup.vars = FALSE,interactive = FALSE) 
+              # +
+              # tmap::tmap_options(basemaps = 'OpenStreetMap', basemap.alpha = c(0.5) )
+          ) |>leaflet::addMapPane("layer1", zIndex = 410) |> leaflet::addMapPane("layer2", zIndex = 420) |>
+          leaflet::addProviderTiles(
+            leaflet::providers$OpenStreetMap,
+            options = leaflet::providerTileOptions(noWrap = TRUE)
+          )
 
 
         }else if(skip == FALSE){ #with starting polygons
 
           tmap::tmap_leaflet(
             tmap::tm_shape(network |> tidygraph::activate(edges) |> dplyr::as_tibble() |> sf::st_as_sf(), options = leaflet::pathOptions(pane = "layer1")) +
-              tmap::tm_lines(col = "grey", lwd = 2, palette = c("grey"), popup.vars = FALSE,interactive = FALSE) +
-              tmap::tmap_options(basemaps = 'OpenStreetMap', basemap.alpha = c(0.5) )
+              tmap::tm_lines(col = "grey", lwd = 2, palette = c("grey"), popup.vars = FALSE,interactive = FALSE) 
+              # +
+              # tmap::tmap_options(basemaps = 'OpenStreetMap', basemap.alpha = c(0.5) )
           ) |> leaflet::addMapPane("layer1", zIndex = 410) |> leaflet::addMapPane("layer2", zIndex = 420) |>
+            leaflet::addProviderTiles(
+              leaflet::providers$OpenStreetMap,
+              options = leaflet::providerTileOptions(noWrap = TRUE)
+            ) |>
             leaflet::addGeoJSON(
             geojson = geojsonsf::sf_geojson(r$startingPolygons ),
             stroke = TRUE,
