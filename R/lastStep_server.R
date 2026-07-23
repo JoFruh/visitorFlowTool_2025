@@ -38,7 +38,7 @@ lastStep_server <- function(id, networkList , versionsUI ,
       shiny::insertUI(
         selector = '#placeholder_lastStep',
         ## wrap element in a div with id for ease of removal
-        ui = shiny::tags$div(id = paste0("step6", id_ui_name),
+        ui = shiny::tags$div(id = paste0("step5", id_ui_name),
                              shiny::div(style = "height: 5px"),
 
                              cat(file = stderr(), "TEST9a"),

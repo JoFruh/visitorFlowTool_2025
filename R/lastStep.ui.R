@@ -75,7 +75,7 @@ lastStep_ui <- function(id){
                     ),
                     shiny::tags$script(
                       "
-                          $('#step6-dayCheckbox .radio label span').map(function(choice){
+                          $('#step5-dayCheckbox .radio label span').map(function(choice){
                               this.innerHTML = $(this).text();
 
                           });

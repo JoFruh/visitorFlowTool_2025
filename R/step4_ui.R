@@ -1,9 +1,11 @@
 #### Step 1 UI - determine area ####
 step4_ui <- function(id, i18n){
-print("UI4")
+print("UI5")
       shiny::fluidPage(
         #activate translation for this ui
         shiny.i18n::usei18n(i18n),
+        shinyjs::useShinyjs(),
+
         shiny::fluidRow( style = "display: flex; align-items:center;background-color:#006268; height: 100px; color: #ffffff; ",
                          shiny::column(4, align = "left",  style = "font-family: 'franklin gothic'",
                                        shiny::HTML("<title>Visitor Flow Tool</title>"),
@@ -17,8 +19,7 @@ print("UI4")
                          shiny::column(4,align = "center",
                                        # shiny::h1("Schritt 1")
                                        shiny::uiOutput(NS(id,"bannerUI_4"))
-                                         # imageMap(NS(id, "banner"), 'www/step3_wsl.png' , list(A = "0,0,0,100,70,100,70,0", B = "70,0,70,100,160,100,160,0") )
-
+                                         # imageMap(NS(id, "banner"), 'www/step4_wsl.png' , list(A = "0,0,0,100,70,100,70,0", B = "70,0,70,100,160,100,160,0", C = "160,0,160,100,260,100,260,0") )
 
 
                          ),
@@ -30,79 +31,71 @@ print("UI4")
                                           ")
                                                      )),
                                        shiny::column(2, align = "right", style = "margin-top: 10px",
-                                                     shiny::actionButton(inputId = shiny::NS(id, "helpButton3"), label = "", style = "width: 30px; height: 30px;
+                                                     shiny::actionButton(inputId = shiny::NS(id, "helpButton4"), label = "", style = "width: 30px; height: 30px;
 background: url('helpIcon.png');  background-size: cover; background-position: center; border:none"),
                                                      shiny::div(style = "margin-top:5px"),
-                                                     shiny::actionButton(inputId = shiny::NS(id, "infoButton3"), label = "", style = "width: 30px; height: 30px;
+                                                     shiny::actionButton(inputId = shiny::NS(id, "infoButton4"), label = "", style = "width: 30px; height: 30px;
 background: url('infoIcon.png');  background-size: cover; background-position: center; border: none")
                                        )
                          )
         ),
         shiny::fluidRow(column(12, align = "left", style = "display:inline-block;height:1px;color:#006268; font-family: 'franklin gothic';margin-top:-10px;margin-left:-13px ",
-                               shiny::h5(i18n$t("app designer/contact: johan.frueh@wsl.ch"), href = "mailto:'johan.frueh@wsl.ch'")
+                               shiny::h5("app designer/contact: johan.frueh@wsl.ch", href = "mailto:'johan.frueh@wsl.ch'")
         )),
 
         shiny::fluidRow(
           shiny::column(12, align = "center",
-                 shiny::h3(strong(i18n$t("Bestimmen der Zielgebiete"))),
-                 shiny::h4(i18n$t("Ein Zielgebiet ist ein Areal, das für Naherholungssuchende von Interesse sein kann.")),
-                 shiny::h4(i18n$t("Für die Erholungssimulation müssen wir alle möglichen Zielgebiete definieren, aus denen die simulierten Besucher wählen können."))
+                 shiny::h3(strong(i18n$t("Zielgebiete manuell korrigieren:")))
           )
         ),
         shiny::fluidRow(
-          shiny::column(12, align = "center",
-                 shiny::h5(i18n$t("Bewegen Sie den Schieberegler, um den Umfang der Zielgebiete zu bestimmen. (Dies basiert auf einem 'Attraktivitätsmodell')")),
-                 shiny::h5(""),
-                 shiny::h5(i18n$t("Im nächsten Schritt haben Sie die Möglichkeit, Zielgebiete manuell zu korrigieren (hinzufügen/löschen/ausschneiden).")),
-                 shiny::h5(style = "color:#8f0404;font-weight:bold", i18n$t("Tipp: Wählen Sie einen Schwellenwert, der die größten Bereiche erzeugt und diese gleichzeitig voneinander getrennt hält."))
-          )
-        ),
+          shiny::column(4),
+          shiny::column(4, align = "center",
+                        shiny::h5(i18n$t("Klicken Sie auf ein Zielgebiet, um es zu entfernen.")),
+                        shiny::h5(i18n$t("Klicken Sie mehrmals auf ein leeres Areal, um ein neues zu erstellen.")),
+                        shiny::h5(style = "color:#8f0404;font-weight:bold", i18n$t("Tipp: Jede einzelne Fläche sollte ein spezifisches Erholungsziel darstellen."))
+          ),
+          shiny::column(4, align = "left",
+                        shinyWidgets::materialSwitch(
+                          inputId = shiny::NS(id, "cutButton"),
+                          label = i18n$t("Polygonschnitt-Modus"),
+                          value = FALSE,
+                          status = "danger"
+                        )
+          ) ),
 
               shiny::fluidRow(
-                shiny::column(4),
-                shiny::column(4, align = "center",
-                       shinyWidgets::chooseSliderSkin(skin = "Shiny", color = "#B06161"),
-                       shinyWidgets::sliderTextInput(
-                         inputId =shiny::NS(id, "AOISlider"),
-                         label = i18n$t("Zielgebiete Schwelle"),
-                         choices = as.character(round(seq(from = 20, to = 0, by = -0.1), 1)),
-                         selected = 11)
-                       # sliderInput(NS(id, "AOISlider"), label = "Determine AoI extent", min = 11, max = 0, value = 3, width = "100%")
-                ),
-                shiny::column(4,
-          #                     shinyjs::disabled(
-          #                       shiny::tagList(
-          #                         shiny::checkboxInput(inputId = shiny::NS(id, "naturalAreasCheck"), label = shiny::HTML(as.character(i18n$t(":natGebiete:")))) ,
-          #                         shiny::tags$script(
-          #                           "
-          # $('#step3-speciesCheckbox .checkbox label span').map(function(choice){
-          #     this.innerHTML = $(this).text();
-          #
-          # });
-          # "
-          #                         )
-          #                       )
-          #                     )
+                shiny::column(12, align = "center",
+                              shinyjs::useShinyjs(),
+                              shinyjs::inlineCSS(list(.cutModeOn = "border-color: red; border-style: solid; border-width:5px;")),
+                              shinyjs::inlineCSS(list(.cutModeOff = "border-color: black; border-style: solid; border-width:0px;")),
 
-                )
-              ),
-              shiny::fluidRow(
-                shiny::column(4),
-                shiny::column(4, align = "center",
-                       shiny::plotOutput(shiny::NS(id, "AOIMap"), height = 400),
-                ),
-                shiny::column(4)
+                              shiny::div(id= "mapFrame", class = "cutModeOff",
+                       shinycssloaders::withSpinner(  leaflet::leafletOutput(shiny::NS(id, "finalAOIMap"), height = 500), type = 3, color = "#069869", color.background = "white" )
+                              )
+                       )
               ),
               shiny::div(style = "height: 10px"),
               shiny::fluidRow(
                 shiny::column(12, align = "center", style = "display:table-cell; vertical-align: middle; ",
-                       shiny::actionButton(shiny::NS(id, "confirmButton4"), label = i18n$t("Best\u00E4tigen"), class = "btn-success btn-lg"),
-                       shiny::actionButton(shiny::NS(id, "skipButton"), label = i18n$t("Skip this step"), class = "btn-secondary")
+                       shiny::actionButton(shiny::NS(id, "confirmButton4"), label = i18n$t("Bestätigen"), class = "btn-success btn-lg"),
+
+                       shiny::actionButton(shiny::NS(id, "resetButton"), label = i18n$t("Reset"), class = "btn-warning btn-lg"),
+                       shiny::actionButton(shiny::NS(id, "aoiButton"), label = i18n$t("Download: Zielgebiete [.gpkg]"), class = "btn-warning"),
                        )
               ),
               shiny::div(style = "height: 20px"),
-              # ,
-                # column(4, sliderInput(inputId = NS(id, "threshold"), label = "Threshold", min = 0.1, max = 1, value = 1))
+        shiny::fluidRow(
+          shiny::column(12, align = "center", style = "display:table-cell; vertical-align: middle; ",
+                        shinyjs::useShinyjs(),
+
+                        shinyjs::hidden( shiny::downloadButton(NS(id, "downloadAOI")) )
+
+
+
+          )
+        )
+
 
 )
 

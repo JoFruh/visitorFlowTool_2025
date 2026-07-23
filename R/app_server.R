@@ -11,10 +11,10 @@ app_server <- function(input, output, session){
   step <- 1
 
   #give banners an original value
+  shinyjs::runjs("Shiny.setInputValue('step2-banner', 'O')")
   shinyjs::runjs("Shiny.setInputValue('step3-banner', 'O')")
   shinyjs::runjs("Shiny.setInputValue('step4-banner', 'O')")
   shinyjs::runjs("Shiny.setInputValue('step5-banner', 'O')")
-  shinyjs::runjs("Shiny.setInputValue('step6-banner', 'O')")
   shinyjs::runjs("Shiny.setInputValue('lastStep-banner', 'O')")
 
   #initialise triggers
@@ -24,13 +24,12 @@ app_server <- function(input, output, session){
   triggerStep3 <- shiny::reactiveVal()
   triggerStep4 <- shiny::reactiveVal()
   triggerStep5 <- shiny::reactiveVal()
-  triggerStep6 <- shiny::reactiveVal()
   triggerFinalStep <- shiny::reactiveVal()
   triggerNewVersions <- shiny::reactiveVal()
 
-  #accompanying non reactive (nr) variables, to allow for back and forth access between step6 and newVersions
+  #accompanying non reactive (nr) variables, to allow for back and forth access between step5 and newVersions
   r$triggerNewVersions_nr <- 1
-  r$triggerStep6_nr <- 1
+  r$triggerStep5_nr <- 1
 
   #keep track if tutorial needed
   r$needHelp <- FALSE
@@ -47,13 +46,13 @@ app_server <- function(input, output, session){
       # if(r$step == 4){r$SMdateTime <- dateTime}
       #stepName not same name as programming name
       stepName <- switch(r$step,
-        "3" = "1_bereich",
-        "4" = "ignore",
-        "5" = "2_SM",
-        "6" = "3_schnell",
-        "7" = "4_genau",
-        "8" = "5_simulation",
-        "9" = "finalStep"
+        "2" = "1_bereich",
+        "3" = "ignore",
+        "4" = "2_SM",
+        "5" = "3_schnell",
+        "6" = "4_genau",
+        "7" = "5_simulation",
+        "8" = "finalStep"
       )
 #"2_SM","4_ZG_genau"
 
@@ -213,13 +212,13 @@ app_server <- function(input, output, session){
         r$currentLang <- step1return$currentLang()
         # r$parking <- step1return$parking()
         #activate download
-        r$step <- 3
+        r$step <- 2
         shinyjs::click("downloadSave", asis = FALSE)
         #change reactiveVal
-        if(is.null(triggerStep3()) ){
-          triggerStep3(1)
+        if(is.null(triggerStep2()) ){
+          triggerStep2(1)
         }else{
-          triggerStep3(triggerStep3()+1)
+          triggerStep2(triggerStep2()+1)
         }
 
       }else if(step1return$confirm() == -1){
@@ -305,104 +304,102 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
           triggerStep4(1)
         }else if(r$step == 5){
           triggerStep5(1)
-        }else if(r$step == 6){
-          triggerStep6(1)
         }
       }
     }, once = TRUE)
   }, ignoreInit = FALSE, ignoreNULL = FALSE)
   #
   #
-  #STEP 3:
+  #STEP 2:
   #determine SDM selection, generate sensitivity matrix
 
   #When confirmation button clicked
-  shiny::observeEvent(triggerStep3(), {
-    print("TRIGGERSTEP3()")
-    if(triggerStep3() > 0){
+  shiny::observeEvent(triggerStep2(), {
+    print("TRIGGERSTEP2()")
+    if(triggerStep2() > 0){
 
       #change tabs
       #use shape information to clip, prepare and present SDM information
-      step3return <- step3_server("step3", fshape = r$shape, confirm = step1return$confirm(),
+      step2return <- step2_server("step2", fshape = r$shape, confirm = step1return$confirm(),
                                   needHelp = r$needHelp, filterList = r$filterList, checkboxSave = r$checkboxSave,
                                   i18n = shiny::reactive(i18n), currentLang = r$currentLang)
       #Update UI
-      shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step3" )
+      shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step2" )
     }
 
 
-    shiny::observeEvent(step3return$confirm(), {
+    shiny::observeEvent(step2return$confirm(), {
 
       print("REACTIVE::: STEP2RETURN$CONFIRM")
-      print(step3return$confirm())
+      print(step2return$confirm())
 
-      cat(file = stderr(), "STEP 4 STARTED")
+      cat(file = stderr(), "STEP 3 STARTED")
       #button indirectly triggers step 2, to allow for program intervention
-      if(is.integer(step3return$confirm()) & step3return$confirm() > 0){
+      if(is.integer(step2return$confirm()) & step2return$confirm() > 0){
 
-        # shinyjs::runjs("Shiny.onInputChange('step3-confirmButton3', 0);")
-        shinyjs::reset(id = "step3-confirmButton3")
+        # shinyjs::runjs("Shiny.onInputChange('step2-confirmButton2', 0);")
+        shinyjs::reset(id = "step2-confirmButton2")
 
-        print("PRE-TRIGGER STEP 3")
+        print("PRE-TRIGGER STEP 2")
         #save returns
-        r$toSelectSpAfter <- step3return$toSelectSpAfter()
+        r$toSelectSpAfter <- step2return$toSelectSpAfter()
         #save chosen sensitivity matrix
 
         #
-        r$SM_pres <- step3return$SM_pres()
-        #new sensitivity raster from step 3: invalidate the cached data.frame so the next
+        r$SM_pres <- step2return$SM_pres()
+        #new sensitivity raster from step 2: invalidate the cached data.frame so the next
         #downloadSave recomputes it once (then reuses it for later transitions)
         r$SM_pres_df <- NULL
-        # r$SM_noPres <- step3return$SM_noPres()
-        r$SMcolors <- step3return$SMcolors()
-        r$minCutThresh <- step3return$minCutThresh()
+        # r$SM_noPres <- step2return$SM_noPres()
+        r$SMcolors <- step2return$SMcolors()
+        r$minCutThresh <- step2return$minCutThresh()
 
-        cat(file = stderr(), "STEP 4_2")
+        cat(file = stderr(), "STEP 3_2")
 
-        r$needHelp <- step3return$needHelp()
-        r$groupSave_all <- step3return$groupSave_all()
-        r$groupSave_sens <- step3return$groupSave_sens()
-        r$groupSave_type <- step3return$groupSave_type()
-        r$groupSave_class <- step3return$groupSave_class()
-        r$checkboxSave <- step3return$checkboxSave()
-        r$filterList <- step3return$filterList()
-        r$weightInputs <- step3return$weightInputs()
-        r$weightNames <- step3return$weightNames()
-        r$species <- step3return$species()
+        r$needHelp <- step2return$needHelp()
+        r$groupSave_all <- step2return$groupSave_all()
+        r$groupSave_sens <- step2return$groupSave_sens()
+        r$groupSave_type <- step2return$groupSave_type()
+        r$groupSave_class <- step2return$groupSave_class()
+        r$checkboxSave <- step2return$checkboxSave()
+        r$filterList <- step2return$filterList()
+        r$weightInputs <- step2return$weightInputs()
+        r$weightNames <- step2return$weightNames()
+        r$species <- step2return$species()
 
-        r$currentLang <- step3return$currentLang()
+        r$currentLang <- step2return$currentLang()
 
 
-        cat(file = stderr(), "STEP 4_3")
+        cat(file = stderr(), "STEP 3_3")
 
 
         #activate download
-        r$step <- 4
+        r$step <- 3
         shinyjs::click("downloadSave", asis = FALSE)
         # shinyjs::click("downloadSaveRaster", asis = FALSE)
 
-        print(input$`step3-confirmButton3`)
+        print(input$`step2-confirmButton2`)
         #change reactiveVal
-        if(is.null(triggerStep4()) ){
-          triggerStep4(1)
+        if(is.null(triggerStep3()) ){
+          triggerStep3(1)
         }else{
-          triggerStep4(triggerStep4()+1)
+          triggerStep3(triggerStep3()+1)
         }
 
-        cat(file = stderr(), "STEP 4_3")
+        cat(file = stderr(), "STEP 3_3")
 
 
-      }else if(step3return$confirm() == "A"){
+      }else if(step2return$confirm() == "A"){
         #send app to step 1
         r$step <- 1
         # step1return$confirm <- reactive(0) #reset confirm
         #reset all inputs
         # reset banner value
-        shinyjs::runjs("Shiny.onInputChange('step3-banner', 'O');")
+        shinyjs::runjs("Shiny.onInputChange('step2-banner', 'O');")
 
         #Update UI (go to step 1)
         # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step1" )
-        # shinyjs::reset(id = "step3-banner", asis = TRUE)
+        # shinyjs::reset(id = "step2-banner", asis = TRUE)
         print("RESTART STEP 1")
         if(is.null(restartSteps())){
           restartSteps(1)
@@ -413,75 +410,75 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
     },ignoreInit = TRUE, once = TRUE)
   })
 
-  #STEP 4:
+  #STEP 3:
   #determine Areas of Interest
-  shiny::observeEvent(triggerStep4(), {
-    print("TRIGGERSTEP4()")
+  shiny::observeEvent(triggerStep3(), {
+    print("TRIGGERSTEP3()")
     print(r$toSelectSpAfter)
     print(r$network)
     print(r$shape)
 
-    cat(file = stderr(), "STEP 4_4")
+    cat(file = stderr(), "STEP 3_4")
 
-    if(triggerStep4() > 0){
+    if(triggerStep3() > 0){
       #change tabs
 
       # cat(file = stderr(), paste0("DULN_all: ", r$DULN_all) )
 
-      cat(file = stderr(), "STEP 4_5")
+      cat(file = stderr(), "STEP 3_5")
 
       #use shape information to clip, prepare and present SDM information
       cat(file = stderr(), paste0("DULN ALL 2: ", r$DULN_all))
 
-      step4return <- step4_server("step4", network = r$network, shape = r$shape, confirm = r$confirm,
+      step3return <- step3_server("step3", network = r$network, shape = r$shape, confirm = r$confirm,
                                   i18n = shiny::reactive(i18n), currentLang = r$currentLang,
                                   needHelp = r$needHelp, DULN_all = r$DULN_all
                                   )
       #Update UI
-      shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step4" )
+      shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step3" )
 
-      cat(file = stderr(), "STEP 4_6")
+      cat(file = stderr(), "STEP 3_6")
 
     }
 
 
-    shiny::observeEvent(step4return$confirm(), {
+    shiny::observeEvent(step3return$confirm(), {
       print("REACTIVE::: STEP4RETURN$CONFIRM")
       #button indirectly triggers step 2, to allow for program intervention
-      if(is.integer(step4return$confirm()) & step4return$confirm() > 0 & step4return$isSkip() == 0 ){
-        print("PRE-TRIGGER STEP 5")
+      if(is.integer(step3return$confirm()) & step3return$confirm() > 0 & step3return$isSkip() == 0 ){
+        print("PRE-TRIGGER STEP 4")
         #reset confirm button (even if button is destroyed, input stays in memory)
-        shinyjs::runjs("Shiny.onInputChange('step4-confirmButton4', 0);")
-        # shinyjs::reset(id = "step4-confirmButton4", asis = TRUE)
+        shinyjs::runjs("Shiny.onInputChange('step3-confirmButton3', 0);")
+        # shinyjs::reset(id = "step3-confirmButton3", asis = TRUE)
 
         #save returns
-        r$minThresh <- step4return$minThresh()
-        r$naturalAreas <- step4return$naturalAreas()
-        r$isSkip <- step4return$isSkip()
-        # r$DULN <- step4return$DULN()
-        # r$DULN_all <- step4return$DULN_all()
-        r$needHelp <- step4return$needHelp()
-        r$currentLang <- step4return$currentLang()
+        r$minThresh <- step3return$minThresh()
+        r$naturalAreas <- step3return$naturalAreas()
+        r$isSkip <- step3return$isSkip()
+        # r$DULN <- step3return$DULN()
+        # r$DULN_all <- step3return$DULN_all()
+        r$needHelp <- step3return$needHelp()
+        r$currentLang <- step3return$currentLang()
 
         #change reactiveVal
 
         #activate download
-        r$step <- 5
+        r$step <- 4
         shinyjs::click("downloadSave", asis = FALSE)
 
-        print(input$`step4-confirmButton4`)
+        print(input$`step3-confirmButton3`)
 
         #change reactiveVal
-        if(is.null(triggerStep5()) ){
-          triggerStep5(1)
+        if(is.null(triggerStep4()) ){
+          triggerStep4(1)
         }else{
-          triggerStep5(triggerStep5()+1)
+          triggerStep4(triggerStep4()+1)
         }
-      }else if(step4return$confirm() == "A"){
+      }else if(step3return$confirm() == "A"){
         r$step <- 1
         # step1return$confirm <- reactive(0) #reset confirm
         #reset all inputs
-        shinyjs::runjs("Shiny.onInputChange('step4-banner', 'O');")
+        shinyjs::runjs("Shiny.onInputChange('step3-banner', 'O');")
 
         # shinyjs::reset()
         #Update UI
@@ -497,43 +494,43 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
         # polygonEraser("areaSelectMap", input = input, startingPolygons = NULL, numberOfPolygons = "single")
 
         # restartSteps(restartSteps() + 1)
-      }else if(step4return$confirm() == "B"){
-        r$step <- 3
+      }else if(step3return$confirm() == "B"){
+        r$step <- 2
         # step1return$confirm <- reactive(0) #reset confirm
         #reset all inputs
         # shinyjs::reset()
-        shinyjs::runjs("Shiny.onInputChange('step4-banner', 'O');")
+        shinyjs::runjs("Shiny.onInputChange('step3-banner', 'O');")
 
         #Update UI
-        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step3" )
-        if(is.null(triggerStep3())){
-          triggerStep3(1)
+        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step2" )
+        if(is.null(triggerStep2())){
+          triggerStep2(1)
         }else{
-          triggerStep3(triggerStep3() + 1)
+          triggerStep2(triggerStep2() + 1)
         }
         # restartSteps(restartSteps() + 1)
-      }else if(step4return$isSkip() == TRUE ){
-        r$currentLang <- step4return$currentLang()
+      }else if(step3return$isSkip() == TRUE ){
+        r$currentLang <- step3return$currentLang()
 
         #activate download
-        r$isSkip <- step4return$isSkip()
-        r$step <- 5
+        r$isSkip <- step3return$isSkip()
+        r$step <- 4
         shinyjs::click("downloadSave", asis = FALSE)
 
-        triggerStep5(-1)
+        triggerStep4(-1)
       }
     }, once = TRUE)
 
-    shiny::observeEvent(step4return$skip(), {
-      if(step4return$isSkip() > 0 ){
-        r$currentLang <- step4return$currentLang()
+    shiny::observeEvent(step3return$skip(), {
+      if(step3return$isSkip() > 0 ){
+        r$currentLang <- step3return$currentLang()
 
         #activate download
-        r$isSkip <- step4return$isSkip()
-        r$step <- 5
+        r$isSkip <- step3return$isSkip()
+        r$step <- 4
         shinyjs::click("downloadSave", asis = FALSE)
 
-        triggerStep5(-1)
+        triggerStep4(-1)
       }
     }, once = TRUE)
 
@@ -541,50 +538,50 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
   })
 
 
-  #STEP 5
+  #STEP 4
 
-  shiny::observeEvent(triggerStep5(), {
-    print("TRIGGERSTEP5()")
-    if(triggerStep5() > 0){
+  shiny::observeEvent(triggerStep4(), {
+    print("TRIGGERSTEP4()")
+    if(triggerStep4() > 0){
       # r$isSkip <- 0
       #Skip polygon generation = FALSE
-      step5return <- step5_server("step5", network = r$network, minThresh = r$minThresh, naturalAreas = r$naturalAreas, confirm = r$confirm, skip = r$isSkip,
+      step4return <- step4_server("step4", network = r$network, minThresh = r$minThresh, naturalAreas = r$naturalAreas, confirm = r$confirm, skip = r$isSkip,
                                   DULN = r$DULN, DULN_all = r$DULN_all, needHelp = r$needHelp,
                                   i18n = shiny::reactive(i18n), currentLang = r$currentLang, shape = r$shape)
       #Update UI
-      shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step5" )
-    }else if (triggerStep5() == -1){
+      shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step4" )
+    }else if (triggerStep4() == -1){
       #Skip polygon generation = TRUE
       #change tabs
 
       # r$isSkip <- 1
-      step5return <- step5_server("step5", network = r$network, minThresh = r$minThresh, naturalAreas = r$naturalAreas, confirm = r$confirm, skip = r$isSkip,
+      step4return <- step4_server("step4", network = r$network, minThresh = r$minThresh, naturalAreas = r$naturalAreas, confirm = r$confirm, skip = r$isSkip,
                                   DULN = r$DULN, DULN_all = r$DULN_all, needHelp = r$needHelp,
                                   i18n = shiny::reactive(i18n), currentLang = r$currentLang)
       #Update UI
-      shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step5" )
+      shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step4" )
     }
 
 
 
-    shiny::observeEvent( step5return$confirm() , {
+    shiny::observeEvent( step4return$confirm() , {
       print("REACTIVE::: STEP5RETURN$CONFIRM")
       #button indirectly triggers step 2, to allow for program intervention
-      if(is.integer(step5return$confirm()) & step5return$confirm() > 0){
-        # shinyjs::runjs("Shiny.onInputChange('step5-confirmButton5', 0);")
-        # shinyjs::reset(id = "step5-confirmButton5", asis = TRUE)
-        shinyjs::runjs("Shiny.onInputChange('step5-confirmButton5', 0);")
+      if(is.integer(step4return$confirm()) & step4return$confirm() > 0){
+        # shinyjs::runjs("Shiny.onInputChange('step4-confirmButton4', 0);")
+        # shinyjs::reset(id = "step4-confirmButton4", asis = TRUE)
+        shinyjs::runjs("Shiny.onInputChange('step4-confirmButton4', 0);")
 
-        print("PRE-TRIGGER STEP 6")
+        print("PRE-TRIGGER STEP 5")
 
 
         # shinyjs::reset
         #save returns
-        r$finalPolygons <- step5return$finalPolygons()
-        r$network <- step5return$network()
-        r$needHelp <- step5return$needHelp()
-        r$parking <- step5return$parking()
-        r$currentLang <- step5return$currentLang()
+        r$finalPolygons <- step4return$finalPolygons()
+        r$network <- step4return$network()
+        r$needHelp <- step4return$needHelp()
+        r$parking <- step4return$parking()
+        r$currentLang <- step4return$currentLang()
 
 
         #CREATE NETWORK LIST ####
@@ -595,17 +592,162 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
         r$newVersionsFirstRun <- TRUE
 
         #activate download
-        r$step <- 6
+        r$step <- 5
         shinyjs::click("downloadSave", asis = FALSE)
 
         #change reactiveVal
         #change reactiveVal
-        if(is.null(triggerStep6()) ){
-          triggerStep6(1)
+        if(is.null(triggerStep5()) ){
+          triggerStep5(1)
         }else{
-          triggerStep6(triggerStep6()+1)
+          triggerStep5(triggerStep5()+1)
         }
-        r$triggerStep6_nr <- 1
+        r$triggerStep5_nr <- 1
+      }else if(step4return$confirm() == "A"){
+        r$step <- 1
+        # step1return$confirm <- reactive(0) #reset confirm
+        #reset all inputs
+        # shinyjs::reset()
+        shinyjs::runjs("Shiny.onInputChange('step4-banner', 'O');")
+
+        #Update UI
+        print("RESTART STEP 1")
+        if(is.null(restartSteps())){
+          restartSteps(1)
+        }else{
+          restartSteps(restartSteps() + 1)
+        }
+        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step1" )
+
+        # restartSteps(restartSteps() + 1)
+      }else if(step4return$confirm() == "B"){
+        r$step <- 2
+        # step1return$confirm <- reactive(0) #reset confirm
+        #reset all inputs
+        # shinyjs::reset()
+        shinyjs::runjs("Shiny.onInputChange('step4-banner', 'O');")
+
+        #Update UI
+        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step2" )
+        if(is.null(triggerStep2())){
+          triggerStep2(1)
+        }else{
+          triggerStep2(triggerStep2() + 1)
+        }
+
+        # restartSteps(restartSteps() + 1)
+      }else if(step4return$confirm() == "C"){
+        r$step <- 3
+        # step1return$confirm <- reactive(0) #reset confirm
+        #reset all inputs
+        # shinyjs::reset()
+        shinyjs::runjs("Shiny.onInputChange('step4-banner', 'O');")
+
+        #Update UI
+        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step3" )
+        print("RESTART STEP 3")
+        if(is.null(triggerStep3())){
+          triggerStep3(1)
+        }else{
+          triggerStep3(triggerStep3() + 1)
+        }
+
+
+        # restartSteps(restartSteps() + 1)
+      }
+    }, once = TRUE)
+  })
+
+  #STEP 5
+
+  shiny::observeEvent(triggerStep5(), {
+    print("TRIGGERSTEP5()")
+    if(triggerStep5() > 0 ){
+      cat(file = stderr(), "TEST7")
+      print("triggerStep5() > 0 ")
+      #Update UI
+      shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step5" )
+      #change tabs
+      cat(file = stderr(), "TEST8\n")
+      # cat(file = stderr(), paste0("contents of envBase: ", ls(envBase)))
+      step5return <- step5_server("step5", networkList = r$networkList, SM_pres = r$SM_pres, SMcolors = r$SMcolors, shape = r$shape, confirm = r$confirm, finalPolygons = r$finalPolygons, versionsUI = r$versionsUI, isFirstRun_stp6 = r$step6FirstRun,
+                                  needHelp = r$needHelp, basemap = r$basemap, species = r$species,
+                                  i18n = shiny::reactive(i18n), currentLang = r$currentLang, minCutThresh = r$minCutThresh)
+      r$step6FirstRun <- FALSE
+    }
+
+    #From step 5, go to New Versions
+    shiny::observeEvent(step5return$newVersions(), {
+
+      print("From step 5, go to New Versions")
+      r$triggerStep5_nr <- step5return$trigger()
+      #save returns (but only if larger than null: Avoid overwriting with default empty returns)
+      if(length(step5return$networkList()) > 0 ){
+        r$networkList <- step5return$networkList()
+      }
+      if(length(step5return$versionsUI()) > 0 ){
+        r$versionsUI <- step5return$versionsUI()
+      }
+      r$shp_PA <- step5return$shp_PA()
+
+
+      r$currentLang <- step5return$currentLang()
+
+      #
+      if(step5return$newVersions() > 0 & r$triggerStep5_nr == 1){
+
+        #save returns (but only if larger than null: Avoid overwriting with default empty returns)
+        #get latest change in networkList (ex: if pathUsage was updated)
+        # if(length(step5return$networkList()) > 0 ){
+        #   networkList <<- step5return$networkList()
+        # }
+        # if(length(step5return$versionsUI()) > 0 ){
+        #   versionsUI <<- step5return$versionsUI()
+        # }
+
+        r$triggerNewVersions_nr <- 1
+
+
+        if(length(triggerNewVersions()) > 0){
+          triggerNewVersions(triggerNewVersions()+1)
+        }else{
+          triggerNewVersions(1)
+        }
+
+
+        r$triggerStep5_nr <- 0 #alter triggerStep5 indirectly without triggering reaction (avoids chain reaction)
+
+        # isolate(triggerStep5(0)) #reset value without trigger
+
+      }
+    }, ignoreInit = TRUE, once = TRUE)
+
+
+
+    #From step5, go to Last Step
+    shiny::observeEvent(step5return$confirm(), {
+      #button indirectly triggers step 5, to allow for program intervention
+      if(is.integer(step5return$confirm()) & step5return$confirm() > 0){
+        # shinyjs::runjs("Shiny.onInputChange('step5-confirmButton5', 0);")
+        shinyjs::reset(id = "step5-confirmButton5")
+
+        #Check if simulations need to be run,
+        #if so, run all simulations before going to last step
+
+        #calculate time for 1 simulation, assume time for X simulations,
+        #show over current timeframe
+
+        #CONFIRM SIMULATIONS
+        #save returns
+        r$pathUsage <- step5return$pathUsage()
+        r$versionsUI <- step5return$versionsUI()
+        r$networkList <- step5return$networkList()
+        r$shp_PA <- step5return$shp_PA()
+        r$step <- 6
+        shinyjs::click("downloadSave", asis = FALSE)
+
+        triggerFinalStep(1)
+
       }else if(step5return$confirm() == "A"){
         r$step <- 1
         # step1return$confirm <- reactive(0) #reset confirm
@@ -624,22 +766,38 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
 
         # restartSteps(restartSteps() + 1)
       }else if(step5return$confirm() == "B"){
-        r$step <- 3
+        r$step <- 2
         # step1return$confirm <- reactive(0) #reset confirm
         #reset all inputs
         # shinyjs::reset()
         shinyjs::runjs("Shiny.onInputChange('step5-banner', 'O');")
 
         #Update UI
-        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step3" )
-        if(is.null(triggerStep3())){
-          triggerStep3(1)
+        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step2" )
+        if(is.null(triggerStep2())){
+          triggerStep2(1)
         }else{
-          triggerStep3(triggerStep3() + 1)
+          triggerStep2(triggerStep2() + 1)
         }
 
         # restartSteps(restartSteps() + 1)
       }else if(step5return$confirm() == "C"){
+        r$step <- 3
+        # step1return$confirm <- reactive(0) #reset confirm
+        #reset all inputs
+        # shinyjs::reset()
+        shinyjs::runjs("Shiny.onInputChange('step5-banner', 'O');")
+
+        #Update UI
+        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step3" )
+        print("RESTART STEP 3")
+        if(is.null(triggerStep3())){
+          triggerStep3(1)
+        }else{
+          triggerStep3(triggerStep3() + 1)
+        }
+        # restartSteps(restartSteps() + 1)
+      }else if(step5return$confirm() == "D"){
         r$step <- 4
         # step1return$confirm <- reactive(0) #reset confirm
         #reset all inputs
@@ -653,167 +811,6 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
           triggerStep4(1)
         }else{
           triggerStep4(triggerStep4() + 1)
-        }
-
-
-        # restartSteps(restartSteps() + 1)
-      }
-    }, once = TRUE)
-  })
-
-  #STEP 6
-
-  shiny::observeEvent(triggerStep6(), {
-    print("TRIGGERSTEP6()")
-    if(triggerStep6() > 0 ){
-      cat(file = stderr(), "TEST7")
-      print("triggerStep6() > 0 ")
-      #Update UI
-      shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step6" )
-      #change tabs
-      cat(file = stderr(), "TEST8\n")
-      # cat(file = stderr(), paste0("contents of envBase: ", ls(envBase)))
-      step6return <- step6_server("step6", networkList = r$networkList, SM_pres = r$SM_pres, SMcolors = r$SMcolors, shape = r$shape, confirm = r$confirm, finalPolygons = r$finalPolygons, versionsUI = r$versionsUI, isFirstRun_stp6 = r$step6FirstRun,
-                                  needHelp = r$needHelp, basemap = r$basemap, species = r$species,
-                                  i18n = shiny::reactive(i18n), currentLang = r$currentLang, minCutThresh = r$minCutThresh)
-      r$step6FirstRun <- FALSE
-    }
-
-    #From step 6, go to New Versions
-    shiny::observeEvent(step6return$newVersions(), {
-
-      print("From step 6, go to New Versions")
-      r$triggerStep6_nr <- step6return$trigger()
-      #save returns (but only if larger than null: Avoid overwriting with default empty returns)
-      if(length(step6return$networkList()) > 0 ){
-        r$networkList <- step6return$networkList()
-      }
-      if(length(step6return$versionsUI()) > 0 ){
-        r$versionsUI <- step6return$versionsUI()
-      }
-      r$shp_PA <- step6return$shp_PA()
-
-
-      r$currentLang <- step6return$currentLang()
-
-      #
-      if(step6return$newVersions() > 0 & r$triggerStep6_nr == 1){
-
-        #save returns (but only if larger than null: Avoid overwriting with default empty returns)
-        #get latest change in networkList (ex: if pathUsage was updated)
-        # if(length(step6return$networkList()) > 0 ){
-        #   networkList <<- step6return$networkList()
-        # }
-        # if(length(step6return$versionsUI()) > 0 ){
-        #   versionsUI <<- step6return$versionsUI()
-        # }
-
-        r$triggerNewVersions_nr <- 1
-
-
-        if(length(triggerNewVersions()) > 0){
-          triggerNewVersions(triggerNewVersions()+1)
-        }else{
-          triggerNewVersions(1)
-        }
-
-
-        r$triggerStep6_nr <- 0 #alter triggerStep6 indirectly without triggering reaction (avoids chain reaction)
-
-        # isolate(triggerStep6(0)) #reset value without trigger
-
-      }
-    }, ignoreInit = TRUE, once = TRUE)
-
-
-
-    #From step6, go to Last Step
-    shiny::observeEvent(step6return$confirm(), {
-      #button indirectly triggers step 6, to allow for program intervention
-      if(is.integer(step6return$confirm()) & step6return$confirm() > 0){
-        # shinyjs::runjs("Shiny.onInputChange('step6-confirmButton6', 0);")
-        shinyjs::reset(id = "step6-confirmButton6")
-
-        #Check if simulations need to be run,
-        #if so, run all simulations before going to last step
-
-        #calculate time for 1 simulation, assume time for X simulations,
-        #show over current timeframe
-
-        #CONFIRM SIMULATIONS
-        #save returns
-        r$pathUsage <- step6return$pathUsage()
-        r$versionsUI <- step6return$versionsUI()
-        r$networkList <- step6return$networkList()
-        r$shp_PA <- step6return$shp_PA()
-        r$step <- 7
-        shinyjs::click("downloadSave", asis = FALSE)
-
-        triggerFinalStep(1)
-
-      }else if(step6return$confirm() == "A"){
-        r$step <- 1
-        # step1return$confirm <- reactive(0) #reset confirm
-        #reset all inputs
-        # shinyjs::reset()
-        shinyjs::runjs("Shiny.onInputChange('step6-banner', 'O');")
-
-        #Update UI
-        print("RESTART STEP 1")
-        if(is.null(restartSteps())){
-          restartSteps(1)
-        }else{
-          restartSteps(restartSteps() + 1)
-        }
-        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step1" )
-
-        # restartSteps(restartSteps() + 1)
-      }else if(step6return$confirm() == "B"){
-        r$step <- 3
-        # step1return$confirm <- reactive(0) #reset confirm
-        #reset all inputs
-        # shinyjs::reset()
-        shinyjs::runjs("Shiny.onInputChange('step6-banner', 'O');")
-
-        #Update UI
-        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step3" )
-        if(is.null(triggerStep3())){
-          triggerStep3(1)
-        }else{
-          triggerStep3(triggerStep3() + 1)
-        }
-
-        # restartSteps(restartSteps() + 1)
-      }else if(step6return$confirm() == "C"){
-        r$step <- 4
-        # step1return$confirm <- reactive(0) #reset confirm
-        #reset all inputs
-        # shinyjs::reset()
-        shinyjs::runjs("Shiny.onInputChange('step6-banner', 'O');")
-
-        #Update UI
-        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step4" )
-        print("RESTART STEP 4")
-        if(is.null(triggerStep4())){
-          triggerStep4(1)
-        }else{
-          triggerStep4(triggerStep4() + 1)
-        }
-        # restartSteps(restartSteps() + 1)
-      }else if(step6return$confirm() == "D"){
-        r$step <- 5
-        # step1return$confirm <- reactive(0) #reset confirm
-        #reset all inputs
-        # shinyjs::reset()
-        shinyjs::runjs("Shiny.onInputChange('step6-banner', 'O');")
-
-        #Update UI
-        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step5" )
-        print("RESTART STEP 5")
-        if(is.null(triggerStep5())){
-          triggerStep5(1)
-        }else{
-          triggerStep5(triggerStep5() + 1)
         }
         # restartSteps(restartSteps() + 1)
       }
@@ -860,14 +857,14 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
         r$versionsUI <- newVersionsReturn$versionsUI()
       }
 
-      print("From new versions, return to step 6")
+      print("From new versions, return to step 5")
       cat(file = stderr(), "TESTF")
       cat(file = stderr(), paste0("newVersionsReturn$confirm() : ", newVersionsReturn$confirm()))
       cat(file = stderr(), paste0("r$triggerNewVersions_nr : ", r$triggerNewVersions_nr))
 
-      #button indirectly triggers step 6, to allow for program intervention
+      #button indirectly triggers step 5, to allow for program intervention
       if(newVersionsReturn$confirm() > 0 & r$triggerNewVersions_nr == 1 ){
-        print("PRE-TRIGGER STEP 6 return")
+        print("PRE-TRIGGER STEP 5 return")
         cat(file = stderr(), "TESTFb")
 
         #save returns (but only if non NULL, to avoid overwriting with default)
@@ -876,14 +873,14 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
         # }
 
         #activate download
-        r$step <- 6
+        r$step <- 5
         shinyjs::click("downloadSave", asis = FALSE)
 
         #change reactiveVal
-        if(length(triggerStep6()) > 0){
-          triggerStep6(triggerStep6()+1)
+        if(length(triggerStep5()) > 0){
+          triggerStep5(triggerStep5()+1)
         }else{
-          triggerStep6(1)
+          triggerStep5(1)
         }
         cat(file = stderr(), "TESTFc")
 
@@ -924,14 +921,14 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
 
         #change reactiveVal
         #change reactiveVal
-        # if(is.null(triggerStep6()) ){
-        #   triggerStep6(1)
+        # if(is.null(triggerStep5()) ){
+        #   triggerStep5(1)
         # }else{
-        #   triggerStep6(triggerStep6()+1)
+        #   triggerStep5(triggerStep5()+1)
         # }
         #
 
-      }else if(step6return$confirm() == "A"){
+      }else if(step5return$confirm() == "A"){
         r$step <- 1
         # step1return$confirm <- reactive(0) #reset confirm
         #reset all inputs
@@ -948,7 +945,23 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
         # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step1" )
 
         # restartSteps(restartSteps() + 1)
-      }else if(step6return$confirm() == "B"){
+      }else if(step5return$confirm() == "B"){
+        r$step <- 2
+        # step1return$confirm <- reactive(0) #reset confirm
+        #reset all inputs
+        # shinyjs::reset()
+        shinyjs::runjs("Shiny.onInputChange('lastStep-banner', 'O');")
+
+        #Update UI
+        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step2" )
+        if(is.null(triggerStep2())){
+          triggerStep2(1)
+        }else{
+          triggerStep2(triggerStep2() + 1)
+        }
+
+        # restartSteps(restartSteps() + 1)
+      }else if(step5return$confirm() == "C"){
         r$step <- 3
         # step1return$confirm <- reactive(0) #reset confirm
         #reset all inputs
@@ -957,14 +970,14 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
 
         #Update UI
         # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step3" )
+        print("RESTART STEP 3")
         if(is.null(triggerStep3())){
           triggerStep3(1)
         }else{
           triggerStep3(triggerStep3() + 1)
         }
-
         # restartSteps(restartSteps() + 1)
-      }else if(step6return$confirm() == "C"){
+      }else if(step5return$confirm() == "D"){
         r$step <- 4
         # step1return$confirm <- reactive(0) #reset confirm
         #reset all inputs
@@ -980,36 +993,20 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
           triggerStep4(triggerStep4() + 1)
         }
         # restartSteps(restartSteps() + 1)
-      }else if(step6return$confirm() == "D"){
-        r$step <- 5
+      }else if(step5return$confirm() == "E"){
+        r$step <- 4
         # step1return$confirm <- reactive(0) #reset confirm
         #reset all inputs
         # shinyjs::reset()
         shinyjs::runjs("Shiny.onInputChange('lastStep-banner', 'O');")
 
         #Update UI
-        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step5" )
+        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step4" )
         print("RESTART STEP 5")
-        if(is.null(triggerStep5())){
-          triggerStep5(1)
+        if(is.null(triggerStep4())){
+          triggerStep4(1)
         }else{
-          triggerStep5(triggerStep5() + 1)
-        }
-        # restartSteps(restartSteps() + 1)
-      }else if(step6return$confirm() == "E"){
-        r$step <- 5
-        # step1return$confirm <- reactive(0) #reset confirm
-        #reset all inputs
-        # shinyjs::reset()
-        shinyjs::runjs("Shiny.onInputChange('lastStep-banner', 'O');")
-
-        #Update UI
-        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step5" )
-        print("RESTART STEP 6")
-        if(is.null(triggerStep6())){
-          triggerStep5(1)
-        }else{
-          triggerStep5(triggerStep6() + 1)
+          triggerStep4(triggerStep5() + 1)
         }
         # restartSteps(restartSteps() + 1)
       }
@@ -1020,7 +1017,7 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
   #TODO: REMOVE?
 
   #SHORTCUTS:
-  if(step == 3){
+  if(step == 2){
 
     shp <- sf::st_read("www/data/maps/wiggerPerimeter_shp/wiggerPerimeter_LV95.shp")
     shp <- sf::st_as_sf(shp, coords = c("long", "lat"), crs = sf::st_crs(4326))
@@ -1057,12 +1054,12 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
 
     r$confirm <- shiny::reactiveVal(1)
 
-    #trigger step 3
-    print("TRIGGER STEP 3")
-    triggerStep3(1)
+    #trigger step 2
+    print("TRIGGER STEP 2")
+    triggerStep2(1)
 
 
-  }else if (step == 4){
+  }else if (step == 3){
     shp <- sf::st_read("www/data/maps/wiggerPerimeter_shp/wiggerPerimeter_LV95.shp")
     shp <- sf::st_as_sf(shp, coords = c("long", "lat"), crs = sf::st_crs(4326))
     shp <- sf::st_combine(shp)
@@ -1098,16 +1095,16 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
 
     r$confirm <- shiny::reactiveVal(1)
     #trigger step 3
-    print("TRIGGER STEP 4")
-    triggerStep4(1)
-  }else if(step == 5){
+    print("TRIGGER STEP 3")
+    triggerStep3(1)
+  }else if(step == 4){
 
     load("envBase_step5.RData")
 
-    print("TRIGGERSTEP5")
+    print("TRIGGERSTEP4")
     print(r$finalPolygons)
-    triggerStep5(1)
-  }else if (step == 6){
+    triggerStep4(1)
+  }else if (step == 5){
     cat(file = stderr(), paste0("CURRENT WD: ",getwd()) )
 
 
@@ -1135,9 +1132,9 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
     #try instead
     load("envBase_step6.RData")
 
-    print("TRIGGERSTEP6")
-    triggerStep6(1)
-    r$triggerStep6_nr <- 1
+    print("TRIGGERSTEP5")
+    triggerStep5(1)
+    r$triggerStep5_nr <- 1
 
   }else if(step == 62){
     #make default area shape

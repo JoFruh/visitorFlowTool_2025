@@ -18,9 +18,14 @@ app_ui <- function(){
                                       step1_ui("step1", i18n = i18n),
                      ),
 
+                     shiny::tabPanel( "tab_step2",
+
+                                      step2_ui("step2", i18n = i18n)
+                     ),
                      shiny::tabPanel( "tab_step3",
 
                                       step3_ui("step3", i18n = i18n)
+
                      ),
                      shiny::tabPanel( "tab_step4",
 
@@ -30,11 +35,6 @@ app_ui <- function(){
                      shiny::tabPanel( "tab_step5",
 
                                       step5_ui("step5", i18n = i18n)
-
-                     ),
-                     shiny::tabPanel( "tab_step6",
-
-                                      step6_ui("step6", i18n = i18n)
 
                      ),
                      shiny::tabPanel("tab_newVersions",
