@@ -102,22 +102,52 @@
 # }
 
 #PREPARE WORKERS ####
-currentPlan <- future::plan("future::multisession", workers = 4) #temporary fix for live
-# currentPlan <- future::plan("future::sequential")
+# Async backend selection.
+#
+# Parallel workers (mirai daemons / multisession) are SEPARATE R processes. They can only
+# run the app's compiled Rcpp routines (e.g. generateAdjListAndDistTbl_cpp, used by the
+# step-6 ABM) if visitorFlowTool is *installed* so the worker can library() it. When the
+# app is launched via pkgload::load_all() (dev), the package is NOT installed and its DLL
+# lives only in the main session, so a parallel worker cannot find those functions.
+#
+# Therefore: use parallel mirai daemons only when the package is actually installed
+# (production); otherwise fall back to sequential, which runs the futures in the main
+# session where the load_all'd compiled code is available. To get real concurrency in
+# production, install the package (do not run it via load_all there).
+#
+# mirai is chosen over future::multisession for its persistent daemons + dispatcher (much
+# lower per-task overhead). Existing future({...}) %...>% (...) blocks and
+# ipc::AsyncProgress/shinyQueue keep working unchanged either way. Worker count is
+# env-configurable via VFT_WORKERS.
+vftInstalled <- "visitorFlowTool" %in% rownames(utils::installed.packages())
 
-# Pre-warm all workers immediately
-warming <- lapply(seq_len(future::nbrOfWorkers()), function(i) {
-  future::future({
-    # Rcpp::sourceCpp(system.file("src/CPP_FUNCTIONS.cpp", package = "visitorFlowTool"))
+if (vftInstalled) {
+  workers <- as.integer(Sys.getenv("VFT_WORKERS", "3"))
+  currentPlan <- future::plan(future.mirai::mirai_multisession, workers = workers)
 
-    library(visitorFlowTool)
-
-    TRUE
+  # Pre-warm the daemons so each has visitorFlowTool (incl. its compiled DLL) loaded.
+  warming <- lapply(seq_len(future::nbrOfWorkers()), function(i) {
+    future::future({
+      library(visitorFlowTool)
+      TRUE
+    })
   })
-})
-#waiting for first worker to be ready
-# future::value(warming[[1]])
+} else {
+  # dev / load_all: run async work in the main session (has the compiled code loaded).
+  message("visitorFlowTool not installed: using future::sequential (async runs in the main ",
+          "session). Install the package to enable parallel mirai daemons.")
+  currentPlan <- future::plan("future::sequential")
+}
+# currentPlan <- future::plan("future::multisession", workers = 4) #previous backend
 
+
+
+# Persistent on-disk cache for basemap tiles. maptiles::get_tiles() caches individual
+# XYZ tiles here, so re-entering a step or overlapping study areas (across the 2-5
+# concurrent sessions in this process) reuse downloaded tiles instead of re-hitting the
+# network on the main thread. Lives for the life of the R process (fine for reuse).
+vft_tileCacheDir <- file.path(tempdir(), "vft_maptiles_cache")
+dir.create(vft_tileCacheDir, showWarnings = FALSE, recursive = TRUE)
 
 
 #GLOBAL FUNCTIONS

@@ -748,7 +748,6 @@ obs_info6 <- shiny::observeEvent(input$infoButton6, {
                        h2(i18n()$t("Attraktivitätsmodell für Naherholung:") ),
                        h4(i18n()$t("Die Attraktivitätsmodelle werden dynamisch angepasst, um Änderungen in den Szenarien Rechnung zu tragen.") ),
                        h4(i18n()$t("Im Folgenden beschreiben wir, wie Landschaftselemente die Attraktivität Naherholungsgebiete beeinflussen, indem wir ihre relative Rangfolge darstellen:") ),
-                       browser(),
                        HTML(knitr::kable(tbl, format = "html") |>
                         kableExtra::kable_styling(
                            bootstrap_options = c("striped", "condensed"),
@@ -2191,7 +2190,6 @@ obsEvent_submitPath <- shiny::observeEvent(input$submitPath, {
 
 ## OBSERVE SUBMIT NEW PATH ####
 obsEvent_submitNewPath <- shiny::observeEvent(input$submitNewPath, {
-  browser()
   #alter created path
   network <- r$networkList[[r$position]]$network
 

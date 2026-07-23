@@ -54,6 +54,10 @@ launchSim <- function(dayPop, network, AOIList, listOfPointers, iter = 1, tracka
   edgeTable <- dplyr::as_tibble(network%>%tidygraph::activate(edges))
   vertexTable <- dplyr::as_tibble(network%>%tidygraph::activate(nodes))
 
+  #node coordinates are constant for the whole simulation; compute the coordinate matrix
+  #once here instead of recomputing sf::st_coordinates() on every timestep in the loop below.
+  vertexCoords <- sf::st_coordinates(vertexTable$geometry)
+
   #TODO: implement more detailed behaviour based on surveys, questionnaires, cluster analysis etc.
   #FOR NOW:agents walk towards closest AOI vertex using shortest route. Within AOI they maintain "nicest route" tactic.
 
@@ -478,7 +482,7 @@ cannotRecreate <- dayPop$goalV == -1
                                                                                               "DULN_JOGGE","DULN_WALK_","DULN_WALK1" , "nodeID")],
                                                                     priorVs = dayPop$priorV[areViableChoices],
                                                                     agentTyps = dayPop$agentTyp[areViableChoices],
-                                                                    V_coords_df = sf::st_coordinates(vertexTable$geometry),
+                                                                    V_coords_df = vertexCoords,
                                                                     currentVs = dayPop$currentV[areViableChoices])
 
         #TODO: sample using routeChoicesProbs as probabilities

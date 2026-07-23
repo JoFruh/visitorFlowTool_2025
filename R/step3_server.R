@@ -70,7 +70,7 @@ step3_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE
     shapeBB <- sf::st_bbox(shp)
 
     obsWeights <- NULL
-    basemap <- maptiles::get_tiles(shp_WGS84, provider = "OpenStreetMap")
+    basemap <- maptiles::get_tiles(shp_WGS84, provider = "OpenStreetMap", cachedir = vft_tileCacheDir)
     basemap <- terra::crop(basemap, shp_WGS84)
     basemap <- terra::subset(basemap, 1)
     basemapWhite <- basemap

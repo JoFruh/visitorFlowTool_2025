@@ -690,14 +690,14 @@ step1_server <- function(id, i18n){
       if(is.null(shpdf)){
         return()
       }
-      previouswd <- getwd()
       uploaddirectory <- dirname(shpdf$datapath[1])
-      setwd(uploaddirectory)
 
+      #Consolidate the uploaded shapefile companion files (.shp/.shx/.dbf/...) into a single
+      #directory so st_read can find them. Use absolute paths instead of setwd(): setwd() is
+      #process-global and would race with other sessions' code under concurrent uploads.
       for(i in 1:nrow(shpdf)){
-        file.rename(shpdf$datapath[i], shpdf$name[i])
+        file.rename(shpdf$datapath[i], file.path(uploaddirectory, shpdf$name[i]))
       }
-      setwd(previouswd)
 
       #cycle through imported extensions
       extList <- list()

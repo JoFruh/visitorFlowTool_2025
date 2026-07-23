@@ -456,6 +456,17 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
 
 
 
+    # Cache for the materialized edge sf ("passageTable"). It is a pure function of
+    # r$result$pathUsage, so build it once and reuse across cosmetic checkbox toggles /
+    # re-renders instead of re-converting the whole tidygraph each time. Invalidated
+    # (r$passageTable <- NULL) wherever r$result$pathUsage is reassigned.
+    getPassageTable <- function(){
+      if(is.null(r$passageTable)){
+        r$passageTable <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(edges) ) ), drop = T, what = "ZM")
+      }
+      r$passageTable
+    }
+
     plotPathUsage <- function(){
 
 
@@ -475,13 +486,15 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
           #make current result that of selected version
           shiny::isolate(r$result$pathUsage <- r$networkList[[selectedNetwork_position]]$pathUsage)
           shiny::isolate(r$result$dayPop <- r$networkList[[selectedNetwork_position]]$dayPop)
+          #selected version changed: invalidate the cached passageTable so it rebuilds below
+          shiny::isolate(r$passageTable <- NULL)
 
           #reactiveVal to manually trigger plotting
           print("PLOTRESULTS()")
           # first print blank usageMap (with white color)
           #this is to set plot parameters. Above which a sensitivity matrix can be first plotted if needed
           # pathUsageColor <- c("white", "white")
-          passageTable <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(edges) ) ), drop = T, what = "ZM")
+          passageTable <- getPassageTable()
 
           vertexTable <- dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(nodes) )
           startingPoints <- sf::st_coordinates(sf::st_as_sf( vertexTable[vertexTable$nodeID %in% r$result$dayPop$startV , ]) )
@@ -1161,6 +1174,8 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
         ## TREAT PROMISE RESULT ####
 
         r$result <- results
+        #fresh simulation result: invalidate cached passageTable
+        r$passageTable <- NULL
 
         # gc()
         print("RESULTS DONE")
@@ -1248,7 +1263,7 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
           }else if(input$agentCheckbox == "5"){
             agentTypePassage <- "passageJogAOI"
           }
-          passageTable <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(edges) ) ), drop = T, what = "ZM")
+          passageTable <- getPassageTable()
           pal <- leaflet::colorNumeric(c("darkgrey", colorRampPalette(c("lightblue", "steelblue", "#182db5", "#37046e"))(max(passageTable$passageAOI)-1)), domain = c(0,max(passageTable$passageAOI)) )
           proxy |> leaflet::addPolylines(data = passageTable,
                                           stroke = TRUE,
@@ -1275,7 +1290,7 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
           }else if(input$agentCheckbox == "5"){
             agentTypePassage <- "passageJog"
           }
-          passageTable <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(edges) ) ), drop = T, what = "ZM")
+          passageTable <- getPassageTable()
           pal <- leaflet::colorNumeric(c("darkgrey", colorRampPalette(c("lightblue", "steelblue", "#182db5", "#37046e"))(max(passageTable$passage)-1)), domain = c(0,max(passageTable$passage)) )
 
           proxy |> leaflet::addPolylines(data = passageTable,
@@ -1312,7 +1327,7 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
             }else if(input$agentCheckbox == "5"){
               agentTypePassage <- "passageJogAOI"
             }
-            passageTable <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(edges) ) ), drop = T, what = "ZM")
+            passageTable <- getPassageTable()
             pal <- leaflet::colorNumeric(c("darkgrey", colorRampPalette(c("lightblue", "steelblue", "#182db5", "#37046e"))(max(passageTable$passageAOI)-1)), domain = c(0,max(passageTable$passageAOI)) )
             proxy |> leaflet::addPolylines(data = passageTable,
                                             stroke = TRUE,
@@ -1340,7 +1355,7 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
             )|>
               leaflet::clearGroup(group = "paths")
 
-            passageTable <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(edges) ) ), drop = T, what = "ZM")
+            passageTable <- getPassageTable()
             pal <- leaflet::colorNumeric(c("darkgrey", colorRampPalette(c("lightblue", "steelblue", "#182db5", "#37046e"))(max(passageTable$passage)-1)), domain = c(0,max(passageTable$passage)) )
             proxy |> leaflet::addPolylines(data = passageTable,
                                             stroke = TRUE,
@@ -1458,7 +1473,6 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
 
       #observe agent starting points ####
       obsAgentStart <- shiny::observeEvent(input$startingCheckbox, {
-        browser()
         vertexTable <- dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(nodes) )
         startingPoints <- sf::st_coordinates(sf::st_as_sf( vertexTable[vertexTable$nodeID %in% r$result$dayPop$startV , ]) )
 
@@ -1533,7 +1547,7 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
                  widths = c(5, 1.5, 1))
         }
 
-        passageTable <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(edges) ) ), drop = T, what = "ZM")
+        passageTable <- getPassageTable()
 
         vertexTable <- dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(nodes) )
         # startingPoints <- sf::st_geometry(sf::st_coordinates(sf::st_as_sf( vertexTable[vertexTable$nodeID %in% r$result$dayPop$startV , ]) ) )
@@ -1584,7 +1598,7 @@ step6_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
 
 
         basemap <- maptiles::get_tiles(x = terra::ext(c(mapBounds[[4]], mapBounds[[2]], mapBounds[[3]], mapBounds[[1]])),
-                                       provider = "OpenStreetMap")
+                                       provider = "OpenStreetMap", cachedir = vft_tileCacheDir)
 
         cat(file = stderr(), "plot basemap 1\n")
 
@@ -2201,6 +2215,8 @@ cat(file = stderr(), "FINISHED TIFF\n")
       #select original network
       r$selectedNetwork_r( list(r$networkList[[1]]$network) )
       r$result$pathUsage <- r$networkList[[1]]$pathUsage
+      #pathUsage (re)assigned: invalidate cached passageTable
+      r$passageTable <- NULL
 
       plotPathUsage()
 

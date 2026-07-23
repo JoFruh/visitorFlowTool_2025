@@ -293,7 +293,7 @@ step5_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
 
                 # poly$DULN <- mean(values$Nature_walk, na.rm = TRUE) #[values$all > -20] no longer need to avoid values <= -20
 
-                if(is.na(poly$DULN)){browser()}
+                if(is.na(poly$DULN)){cat(file = stderr(), "WARNING step5: poly$DULN is NA after extraction\n")}
 
                  #add area to polygon
                 poly$area <- as.numeric(sf::st_area(poly$polygons))

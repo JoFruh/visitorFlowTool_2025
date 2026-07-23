@@ -97,7 +97,7 @@ step4_server <- function(id, network, shape, confirm, i18n, currentLang,
 
     plotUpdate <- reactiveVal(1)
 
-    basemap <- maptiles::get_tiles(shape, provider = "OpenStreetMap")
+    basemap <- maptiles::get_tiles(shape, provider = "OpenStreetMap", cachedir = vft_tileCacheDir)
     shape <- sf::st_transform(shape, 3857)
     shape_wgs <- sf::st_transform(shape, 4326)
 

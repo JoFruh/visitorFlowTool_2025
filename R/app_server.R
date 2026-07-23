@@ -104,8 +104,14 @@ app_server <- function(input, output, session){
       envBase_filterList <- r$filterList
       # envBase_weightInputs <- r$weightInputs
 
-      #save spatRaster as a data.frame with geo ref information
-      envBase_SM_pres <- terra::as.data.frame(r$SM_pres, xy = TRUE, na.rm = FALSE)
+      #save spatRaster as a data.frame with geo ref information.
+      #Cached in r$SM_pres_df: SM_pres only changes in step 3 (and on resume), so this
+      #materialization is computed once and reused on every later step transition instead
+      #of being recomputed on the main thread each time downloadSave fires.
+      if(is.null(r$SM_pres_df)){
+        r$SM_pres_df <- terra::as.data.frame(r$SM_pres, xy = TRUE, na.rm = FALSE)
+      }
+      envBase_SM_pres <- r$SM_pres_df
 
       #save MinCutThreshold
       envBase_minCutThresh <- r$minCutThresh
@@ -283,6 +289,8 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
           if(length(envBase_SM_pres > 0)){
             r$SM_pres <- terra::rast(envBase_SM_pres)
             terra::crs(r$SM_pres) <- "epsg:4326"
+            #the loaded object is already the data.frame downloadSave needs: reuse it directly
+            r$SM_pres_df <- envBase_SM_pres
           }
         }
 
@@ -342,6 +350,9 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
 
         #
         r$SM_pres <- step3return$SM_pres()
+        #new sensitivity raster from step 3: invalidate the cached data.frame so the next
+        #downloadSave recomputes it once (then reuses it for later transitions)
+        r$SM_pres_df <- NULL
         # r$SM_noPres <- step3return$SM_noPres()
         r$SMcolors <- step3return$SMcolors()
         r$minCutThresh <- step3return$minCutThresh()
