@@ -311,8 +311,9 @@ if(is.null(r$updateNetworkPlot)){
         #   leaflet.extras2::stopSpinner()
         #
         # map
-        #reset paint mode on every render, so leaving context 4 disarms the brush and hands
-        #map dragging/zooming back to leaflet; the context 4 branch below re-arms it
+        #reset paint mode on every render, so leaving context 4 disarms the brush (the
+        #browser stops intercepting pointer events over the map); the context 4 branch
+        #below re-arms it
         session$sendCustomMessage(type = "set-paint-active", message = FALSE)
         shinyjs::hide(id = "paintColorButtonsDiv")
 
@@ -603,25 +604,22 @@ if(is.null(r$updateNetworkPlot)){
             setPaintLevelButtons(canopyActive)
             shiny::isolate(applyPaintLevelColor(session, r, if(canopyActive) "canopy" else "ground"))
 
-            #re-add this version's persisted painted layers (proxy-added layers don't survive a full re-render).
-            #same opacity/pane rules as redrawPaintLayers(), inlined because `map` here is a plain
-            #leaflet object rather than a proxy
-            savedPaint <- shiny::isolate(r$networkList[[r$position]]$paintedRaster)
-            if(!is.null(savedPaint)){
-              savedPaint4326 <- terra::project(savedPaint, "EPSG:4326", method = "near")
-              map <- map %>% leaflet::addRasterImage(x = raster::raster(savedPaint4326), colors = paintPalette,
-                                                       group = "paintedMask", project = FALSE,
-                                                       opacity = if(canopyActive) PAINT_OPACITY_GROUND_DIMMED else PAINT_OPACITY_GROUND,
-                                                       options = leaflet::gridOptions(pane = "paintPaneGround"))
-            }
-            savedCanopy <- shiny::isolate(r$networkList[[r$position]]$canopyRaster)
-            if(canopyActive && !is.null(savedCanopy)){
-              savedCanopy4326 <- terra::project(savedCanopy, "EPSG:4326", method = "near")
-              map <- map %>% leaflet::addRasterImage(x = raster::raster(savedCanopy4326), colors = paintPalette,
-                                                       group = "canopyMask", project = FALSE,
-                                                       opacity = PAINT_OPACITY_CANOPY,
-                                                       options = leaflet::gridOptions(pane = "paintPaneCanopy"))
-            }
+            #hand this version's painted state to the browser, which owns the display from
+            #here on: R draws no raster layers at all. The coordinate fit is anchored on the
+            #study area rather than the current view, so it stays valid as the user pans
+            #around. The browser holds these messages until the new map instance exists,
+            #so it does not matter that they are sent from inside the render.
+            paintBB <- sf::st_bbox(sf::st_transform(shiny::isolate(r$parkingPolygons), 4326))
+            session$sendCustomMessage("paint-grid-init", paintInitPayload(
+              mean(c(paintBB[["xmin"]], paintBB[["xmax"]])),
+              mean(c(paintBB[["ymin"]], paintBB[["ymax"]]))
+            ))
+            session$sendCustomMessage("paint-grid-load", list(
+              version = shiny::isolate(r$position),
+              ground  = rasterToRuns(shiny::isolate(r$networkList[[r$position]]$paintedRaster)),
+              canopy  = rasterToRuns(shiny::isolate(r$networkList[[r$position]]$canopyRaster))
+            ))
+            session$sendCustomMessage("set-paint-level", list(canopy = canopyActive))
           }
 
         #add or remove dummy group (this is to trigger an observer that determines when the map finished rendering)
@@ -684,19 +682,15 @@ if(is.null(r$updateNetworkPlot)){
 
 # PAINT MODE OBSERVERS
 
-#the paint buttons of both levels in one place: the color observers, the level switch's
-#enable/disable loop and the per-level defaults all read from here rather than repeating
-#literals. `id` must match the PAINT_CATEGORIES$id for that color (see paintbrush_helpers.R) -
-#it's sent to the browser and echoed back unchanged on every stroke, so R never has to
-#re-derive the category from painted pixel colors
+#which button drives which paint category. Everything else about a material - its
+#color and its level - is read from PAINT_CATEGORIES (paintbrush_helpers.R), which
+#the browser also holds a copy of, so a color is defined in exactly one place.
 PAINT_BUTTONS <- data.frame(
   inputId = c("paintColor_grass", "paintColor_tree", "paintColor_artificial",
               "paintColor_natural", "paintColor_water",
               "paintColor_canopyArtificial", "paintColor_canopyTree"),
-  rgb     = c("144,238,144", "0,100,0", "128,128,128", "160,82,45", "30,144,255",
-              "63,63,63", "20,83,45"),
-  id      = 1:7,
-  level   = c(rep("ground", 5), rep("canopy", 2)),
+  id      = PAINT_CATEGORIES$id,
+  level   = PAINT_CATEGORIES$level,
   stringsAsFactors = FALSE
 )
 
@@ -710,7 +704,7 @@ lastColorButtonSlot <- function(level){
 #selected one for its level - needed when the level switch flips, since the newly
 #active level's remembered button is usually unchanged but the brush still has to
 #be re-pointed at it.
-setPaintColor <- function(session, r, inputId, rgb, id, level = "ground", force = FALSE){
+setPaintColor <- function(session, r, inputId, id, level = "ground", force = FALSE){
   slot <- lastColorButtonSlot(level)
   if(force || is.null(r[[slot]]) || r[[slot]] != inputId){
     if(!is.null(r[[slot]]) && r[[slot]] != inputId){
@@ -720,7 +714,8 @@ setPaintColor <- function(session, r, inputId, rgb, id, level = "ground", force 
     shinyjs::removeClass(inputId, "colorBtnNotSelected")
     shinyjs::addClass(inputId, "colorBtnSelected")
     r[[slot]] <- inputId
-    session$sendCustomMessage("set-paint-color", list(rgb = rgb, id = id))
+    #only the id travels: the browser already has every material's color
+    session$sendCustomMessage("set-paint-color", list(id = id))
   }
 }
 
@@ -728,7 +723,7 @@ setPaintColor <- function(session, r, inputId, rgb, id, level = "ground", force 
 applyPaintLevelColor <- function(session, r, level, force = TRUE){
   btn <- shiny::isolate(r[[lastColorButtonSlot(level)]])
   row <- PAINT_BUTTONS[match(btn, PAINT_BUTTONS$inputId), ]
-  setPaintColor(session, r, row$inputId, row$rgb, row$id, level = level, force = force)
+  setPaintColor(session, r, row$inputId, row$id, level = level, force = force)
 }
 
 #enable the buttons of the active level and dim/disable the other level's
@@ -746,96 +741,68 @@ setPaintLevelButtons <- function(canopyActive){
   }
 }
 
-#redraw both painted layers of the current version. Ground is always shown, dimmed while
-#canopy is being edited so you can see what you're painting canopy over; canopy is only
-#shown in canopy mode. Stacking is by map pane (declared in the context 4 render branch)
-#rather than add order.
-redrawPaintLayers <- function(r, canopyActive){
-  ground <- shiny::isolate(r$networkList[[r$position]]$paintedRaster)
-  canopy <- shiny::isolate(r$networkList[[r$position]]$canopyRaster)
-
-  p <- leaflet::leafletProxy("versionMap") %>%
-    leaflet::clearGroup("paintedMask") %>%
-    leaflet::clearGroup("canopyMask")
-
-  if(!is.null(ground)){
-    p <- p %>% leaflet::addRasterImage(
-      x = raster::raster(terra::project(ground, "EPSG:4326", method = "near")),
-      colors = paintPalette, group = "paintedMask", project = FALSE,
-      opacity = if(canopyActive) PAINT_OPACITY_GROUND_DIMMED else PAINT_OPACITY_GROUND,
-      options = leaflet::gridOptions(pane = "paintPaneGround"))
-  }
-  if(canopyActive && !is.null(canopy)){
-    p <- p %>% leaflet::addRasterImage(
-      x = raster::raster(terra::project(canopy, "EPSG:4326", method = "near")),
-      colors = paintPalette, group = "canopyMask", project = FALSE,
-      opacity = PAINT_OPACITY_CANOPY,
-      options = leaflet::gridOptions(pane = "paintPaneCanopy"))
-  }
-  p
-}
-
 shiny::observeEvent(input$paintColor_grass, {
-  setPaintColor(session, r, "paintColor_grass", "144,238,144", 1)
+  setPaintColor(session, r, "paintColor_grass", 1)
 })
 shiny::observeEvent(input$paintColor_tree, {
-  setPaintColor(session, r, "paintColor_tree", "0,100,0", 2)
+  setPaintColor(session, r, "paintColor_tree", 2)
 })
 shiny::observeEvent(input$paintColor_artificial, {
-  setPaintColor(session, r, "paintColor_artificial", "128,128,128", 3)
+  setPaintColor(session, r, "paintColor_artificial", 3)
 })
 shiny::observeEvent(input$paintColor_natural, {
-  setPaintColor(session, r, "paintColor_natural", "160,82,45", 4)
+  setPaintColor(session, r, "paintColor_natural", 4)
 })
 shiny::observeEvent(input$paintColor_water, {
-  setPaintColor(session, r, "paintColor_water", "30,144,255", 5)
+  setPaintColor(session, r, "paintColor_water", 5)
 })
 shiny::observeEvent(input$paintColor_canopyArtificial, {
-  setPaintColor(session, r, "paintColor_canopyArtificial", "63,63,63", 6, level = "canopy")
+  setPaintColor(session, r, "paintColor_canopyArtificial", 6, level = "canopy")
 })
 shiny::observeEvent(input$paintColor_canopyTree, {
-  setPaintColor(session, r, "paintColor_canopyTree", "20,83,45", 7, level = "canopy")
+  setPaintColor(session, r, "paintColor_canopyTree", 7, level = "canopy")
 })
 
-# Switch between painting the ground layer and the canopy layer
+# Switch between painting the ground layer and the canopy layer.
+# Both layers are permanently on the map in the browser, so switching level only
+# changes their CSS: the canopy layer is hidden rather than removed, and the ground
+# layer is dimmed rather than redrawn. No raster work happens here at all.
 shiny::observeEvent(input$paintLevel, {
   canopyActive <- isTRUE(input$paintLevel)
   setPaintLevelButtons(canopyActive)
   applyPaintLevelColor(session, r, if(canopyActive) "canopy" else "ground")
-  redrawPaintLayers(r, canopyActive)
+  session$sendCustomMessage("set-paint-level", list(canopy = canopyActive))
 }, ignoreInit = TRUE)
 
-# Convert a completed brush stroke into a georeferenced raster and add it to the map
-observeEvent(input$paintStroke, {
+# Persist the cells the browser has painted since its last flush.
+#
+# The browser has already drawn them - this observer is purely about making the
+# paint survive a version switch or a reload, which is why it does no projection,
+# no image encoding and sends nothing back but an acknowledgement. If it throws,
+# the ack is skipped and the browser puts the same cells back in its queue.
+observeEvent(input$paintCells, {
   tryCatch({
-    stroke <- input$paintStroke
-    b <- stroke$bounds
-    img <- png::readPNG(base64enc::base64decode(
-      gsub("^data:image/png;base64,", "", stroke$dataUrl)
-    ))
+    delta <- input$paintCells
 
-    ids <- paintedPixelIds(img, stroke$categoryId)
-    if(all(is.na(ids))) return(NULL)
+    #the flush carries the version it was painted on. A flush racing a version
+    #switch must land on that version, not on whichever one is selected by the
+    #time the observer runs
+    pos <- suppressWarnings(as.integer(delta$version))
+    if(length(pos) != 1 || is.na(pos) || pos < 1 ||
+       pos > length(shiny::isolate(r$networkList))) return(NULL)
 
-    rawRast <- terra::rast(nrows = stroke$height, ncols = stroke$width,
-                            xmin = b$west, xmax = b$east, ymin = b$south, ymax = b$north, crs = "EPSG:4326")
-    terra::values(rawRast) <- ids
+    for(fld in c("paintedRaster", "canopyRaster")){
+      runs <- if(fld == "canopyRaster") delta$canopy else delta$ground
+      if(is.null(runs) || length(runs) == 0) next
+      r$networkList[[pos]][[fld]] <- applyPaintRuns(
+        shiny::isolate(r$networkList[[pos]][[fld]]), runs
+      )
+    }
 
-    template <- buildStrokeTemplate(b)
-    strokeRast2056 <- terra::project(rawRast, template, method = "near")
-
-    #the material painted with decides which of the two stacked rasters the stroke lands in
-    fld <- if(paintLevelOf(stroke$categoryId) == "canopy") "canopyRaster" else "paintedRaster"
-    existing <- shiny::isolate(r$networkList[[r$position]][[fld]])
-    r$networkList[[r$position]][[fld]] <- if(is.null(existing)) strokeRast2056
-                                          else terra::merge(strokeRast2056, existing)
-
-    redrawPaintLayers(r, isTRUE(shiny::isolate(input$paintLevel)))
-
-    session$sendCustomMessage("clear-paint-canvas", TRUE)
+    session$sendCustomMessage("paint-cells-ack", list(seq = delta$seq))
   }, error = function(e){
-    warning("paintStroke observer failed: ", conditionMessage(e))
-    message("paintStroke observer failed: ", conditionMessage(e))
+    warning("paintCells observer failed: ", conditionMessage(e))
+    message("paintCells observer failed: ", conditionMessage(e))
   })
 })
 

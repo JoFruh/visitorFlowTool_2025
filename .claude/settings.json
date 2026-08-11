@@ -5,7 +5,13 @@
       "Bash(node --check inst/app/www/paintbrush.js)",
       "Bash(Rscript -e ' *)",
       "Bash(git --no-pager diff R/newVersions_server.R)",
-      "Bash(git --no-pager diff R/newVersions_ui.R R/paintbrush_helpers.R inst/app/www/paintbrush.js)"
+      "Bash(git --no-pager diff R/newVersions_ui.R R/paintbrush_helpers.R inst/app/www/paintbrush.js)",
+      "Bash(Rscript -e 'for \\(f in c\\(\"R/paintbrush_helpers.R\",\"R/newVersions_server.R\"\\)\\) { r <- tryCatch\\({parse\\(f\\); \"OK\"}, error=function\\(e\\) paste\\(\"PARSE ERROR:\", conditionMessage\\(e\\)\\)\\); cat\\(f, \"->\", r, \"\\\\n\"\\) }')",
+      "PowerShell($rs = \\(Get-Command Rscript -ErrorAction SilentlyContinue\\).Source; if \\($rs\\) { $rs } else { Get-ChildItem \"C:\\\\Program Files\\\\R\" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName })",
+      "PowerShell(& \"C:\\\\Program Files\\\\R\\\\R-4.5.3\\\\bin\\\\Rscript.exe\" -e \"for \\(f in c\\('R/paintbrush_helpers.R','R/newVersions_server.R'\\)\\) { res <- tryCatch\\({parse\\(f\\); 'OK'}, error=function\\(e\\) paste\\('PARSE ERROR:', conditionMessage\\(e\\)\\)\\); cat\\(f, '->', res, '\\\\n'\\) }\")",
+      "PowerShell(& \"C:\\\\Program Files\\\\R\\\\R-4.5.3\\\\bin\\\\Rscript.exe\" \"C:\\\\Users\\\\frueh\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-frueh-VScode-GitClones-visitorFlowTool-2025\\\\f285b685-8697-4eed-af16-767960c2b9c8\\\\scratchpad\\\\test_paint.R\")",
+      "PowerShell(& \"C:\\\\Program Files\\\\R\\\\R-4.5.3\\\\bin\\\\Rscript.exe\" \"C:\\\\Users\\\\frueh\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-frueh-VScode-GitClones-visitorFlowTool-2025\\\\f285b685-8697-4eed-af16-767960c2b9c8\\\\scratchpad\\\\test_transform.R\")",
+      "PowerShell($n = \\(Get-Command node -ErrorAction SilentlyContinue\\); if \\($n\\) { node --version; node --check \"c:\\\\Users\\\\frueh\\\\VScode_GitClones\\\\visitorFlowTool_2025\\\\inst\\\\app\\\\www\\\\paintbrush.js\"; if \\($?\\) { \"SYNTAX OK\" } } else { \"node not installed\" })"
     ]
   }
 }
