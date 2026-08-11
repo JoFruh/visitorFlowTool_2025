@@ -236,6 +236,9 @@ if(is.null(r$updateNetworkPlot)){
       #ground/canopy switch restores that level's own previously selected material
       r$lastSelectedGroundButton <- "paintColor_grass"
       r$lastSelectedCanopyButton <- "paintColor_canopyTree"
+      #the one button currently highlighted, which may be a "both" material belonging
+      #to neither level. Matches the class the UI ships paintColor_grass with.
+      r$selectedPaintButton      <- "paintColor_grass"
 
       shinyjs::disable("newVersionsConfirmButton")
       shinyjs::disable("addVersionButton")
@@ -688,35 +691,43 @@ if(is.null(r$updateNetworkPlot)){
 PAINT_BUTTONS <- data.frame(
   inputId = c("paintColor_grass", "paintColor_tree", "paintColor_artificial",
               "paintColor_natural", "paintColor_water",
-              "paintColor_canopyArtificial", "paintColor_canopyTree"),
+              "paintColor_canopyArtificial", "paintColor_canopyTree",
+              "paintColor_block"),
   id      = PAINT_CATEGORIES$id,
   level   = PAINT_CATEGORIES$level,
   stringsAsFactors = FALSE
 )
 
-#name of the reactiveValues slot remembering the selected button of a given level
+#name of the reactiveValues slot remembering the selected button of a given level,
+#or NULL for a material that belongs to no level ("both") and so is never the thing
+#the level switch restores
 lastColorButtonSlot <- function(level){
-  if(level == "canopy") "lastSelectedCanopyButton" else "lastSelectedGroundButton"
+  switch(level, canopy = "lastSelectedCanopyButton", ground = "lastSelectedGroundButton", NULL)
 }
 
-#toggle mutually-exclusive paint color buttons, within the given level.
+#toggle mutually-exclusive paint color buttons. Selection is global - only one
+#material is ever armed - while the per-level memory is what the level switch
+#restores, so a "both" material can be selected without displacing either level's
+#remembered choice.
 #`force` re-sends the color to the browser even when the button is already the
-#selected one for its level - needed when the level switch flips, since the newly
-#active level's remembered button is usually unchanged but the brush still has to
-#be re-pointed at it.
+#selected one - needed when the level switch flips, since the newly active level's
+#remembered button is usually unchanged but the brush still has to be re-pointed at it.
 setPaintColor <- function(session, r, inputId, id, level = "ground", force = FALSE){
-  slot <- lastColorButtonSlot(level)
-  if(force || is.null(r[[slot]]) || r[[slot]] != inputId){
-    if(!is.null(r[[slot]]) && r[[slot]] != inputId){
-      shinyjs::removeClass(r[[slot]], "colorBtnSelected")
-      shinyjs::addClass(r[[slot]], "colorBtnNotSelected")
-    }
-    shinyjs::removeClass(inputId, "colorBtnNotSelected")
-    shinyjs::addClass(inputId, "colorBtnSelected")
-    r[[slot]] <- inputId
-    #only the id travels: the browser already has every material's color
-    session$sendCustomMessage("set-paint-color", list(id = id))
+  if(!force && identical(r$selectedPaintButton, inputId)) return(invisible(NULL))
+
+  if(!is.null(r$selectedPaintButton) && r$selectedPaintButton != inputId){
+    shinyjs::removeClass(r$selectedPaintButton, "colorBtnSelected")
+    shinyjs::addClass(r$selectedPaintButton, "colorBtnNotSelected")
   }
+  shinyjs::removeClass(inputId, "colorBtnNotSelected")
+  shinyjs::addClass(inputId, "colorBtnSelected")
+  r$selectedPaintButton <- inputId
+
+  slot <- lastColorButtonSlot(level)
+  if(!is.null(slot)) r[[slot]] <- inputId
+
+  #only the id travels: the browser already has every material's color and level
+  session$sendCustomMessage("set-paint-color", list(id = id))
 }
 
 #select the remembered material of `level` and point the brush at it
@@ -726,12 +737,14 @@ applyPaintLevelColor <- function(session, r, level, force = TRUE){
   setPaintColor(session, r, row$inputId, row$id, level = level, force = force)
 }
 
-#enable the buttons of the active level and dim/disable the other level's
+#enable the buttons of the active level and dim/disable the other level's.
+#"both" materials are always available - the switch says which layer you are
+#editing, and they edit every layer regardless.
 setPaintLevelButtons <- function(canopyActive){
   activeLevel <- if(canopyActive) "canopy" else "ground"
   for(i in seq_len(nrow(PAINT_BUTTONS))){
     btn <- PAINT_BUTTONS$inputId[i]
-    if(PAINT_BUTTONS$level[i] == activeLevel){
+    if(PAINT_BUTTONS$level[i] %in% c(activeLevel, "both")){
       shinyjs::enable(btn)
       shinyjs::removeClass(btn, "paintBtnDisabled")
     }else{
@@ -761,6 +774,12 @@ shiny::observeEvent(input$paintColor_canopyArtificial, {
 })
 shiny::observeEvent(input$paintColor_canopyTree, {
   setPaintColor(session, r, "paintColor_canopyTree", 7, level = "canopy")
+})
+#fills the ground and canopy rasters at once; selecting it leaves both levels'
+#remembered materials alone, so flipping the switch returns to the last real
+#ground/canopy material rather than staying on the block
+shiny::observeEvent(input$paintColor_block, {
+  setPaintColor(session, r, "paintColor_block", 8, level = "both")
 })
 
 # Switch between painting the ground layer and the canopy layer.

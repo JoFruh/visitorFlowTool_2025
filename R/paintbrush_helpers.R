@@ -1,18 +1,25 @@
 #' Paint materials, one row per button. `level` says which of the two stacked
 #' rasters a stroke of that material lands in: "ground" -> paintedRaster,
-#' "canopy" -> canopyRaster. The canopy colors are deliberately darker than
-#' their ground counterparts (artificial/tree) so the two levels stay
-#' distinguishable when the canopy layer is drawn over the ground layer.
+#' "canopy" -> canopyRaster, "both" -> the same cells in each. The canopy colors
+#' are deliberately darker than their ground counterparts (artificial/tree) so
+#' the two levels stay distinguishable when the canopy layer is drawn over the
+#' ground layer.
+#'
+#' "both" exists for a building: a solid block occupies the ground and everything
+#' above it, so one stroke has to fill either raster at once. It belongs to no
+#' level, which is why its button is never disabled by the level switch.
 #'
 #' `hex` is the single source of truth for a material's color: it is what the
 #' UI buttons are styled with (newVersions_ui.R), what the brush cursor is drawn
 #' in, and what the browser fills painted cells with. There is no server-side
 #' palette any more - R never renders the painted layers.
 PAINT_CATEGORIES <- data.frame(
-  id    = 1:7,
-  name  = c("grass", "tree", "artificial", "natural", "water", "canopy_artificial", "canopy_tree"),
-  level = c(rep("ground", 5), rep("canopy", 2)),
-  hex   = c("lightgreen", "darkgreen", "grey", "#a05a3c", "dodgerblue", "#3f3f3f", "#14532d"),
+  id    = 1:8,
+  name  = c("grass", "tree", "artificial", "natural", "water",
+            "canopy_artificial", "canopy_tree", "artificial_block"),
+  level = c(rep("ground", 5), rep("canopy", 2), "both"),
+  hex   = c("lightgreen", "darkgreen", "grey", "#a05a3c", "dodgerblue",
+            "#3f3f3f", "#14532d", "#1f1f1f"),
   stringsAsFactors = FALSE
 )
 
@@ -38,6 +45,9 @@ paintInitPayload <- function(refLng, refLat){
     res       = PAINT_RES,
     transform = paintTransform2056(refLng, refLat),
     colors    = stats::setNames(as.list(PAINT_CATEGORIES$hex), as.character(PAINT_CATEGORIES$id)),
+    #which raster(s) a material's strokes land in. Sent as the plain level string
+    #rather than an array so it survives Shiny's auto_unbox unambiguously
+    levels    = stats::setNames(as.list(PAINT_CATEGORIES$level), as.character(PAINT_CATEGORIES$id)),
     opacity   = list(ground       = PAINT_OPACITY_GROUND,
                      groundDimmed = PAINT_OPACITY_GROUND_DIMMED,
                      canopy       = PAINT_OPACITY_CANOPY)

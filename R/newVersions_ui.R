@@ -239,6 +239,19 @@ background: url('infoIcon.png');  background-size: cover; background-position: c
                                                          )
                                                        )
                                                      ),
+                                                     #BOTH LEVELS AT ONCE - a solid block occupies the ground and everything
+                                                     #above it, so it belongs to neither row and is never disabled by the level
+                                                     #switch. Its height is the two rows plus the 10px gap between them, so it
+                                                     #lines up with them exactly.
+                                                     shiny::actionButton(
+                                                       inputId = shiny::NS(id, "paintColor_block"), label = i18n$t("Artificial block"),
+                                                       class = "colorBtnNotSelected",
+                                                       #white-space/flex override Bootstrap's nowrap and top-aligned label, which
+                                                       #a two-word caption in a 90px-wide, 100px-tall button would otherwise show up
+                                                       style = paste("background-color: #1f1f1f; color: white; width: 90px; height: 100px;",
+                                                                     "white-space: normal; display: flex; align-items: center;",
+                                                                     "justify-content: center; text-align: center;")
+                                                     ),
                                                      #LEVEL SWITCH (up = canopy, down = ground)
                                                      tags$label(
                                                        class = "paintLevelSwitch",

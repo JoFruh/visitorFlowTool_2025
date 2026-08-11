@@ -32,6 +32,7 @@
     res:          5,
     transform:    null,
     colors:       {},
+    levels:       {},   //category id -> "ground" | "canopy" | "both"
     opacity:      { ground: 0.5, groundDimmed: 0.2, canopy: 0.7 },
     grids:        { ground: new PaintGrid(), canopy: new PaintGrid() },
     layers:       { ground: null, canopy: null },
@@ -326,6 +327,18 @@
     return state.canopyActive ? "canopy" : "ground";
   }
 
+  /* Which grids a material's strokes go into. Materials declare their own level
+   * (PAINT_CATEGORIES), so this does not depend on the switch: a "both" material
+   * such as a building block fills the ground and canopy grids together, whichever
+   * level is being edited. Falls back to the switch only if R has not sent the
+   * level table yet. */
+  function targetLevels(catId) {
+    var level = state.levels[catId];
+    if (level === "both") return ["ground", "canopy"];
+    if (level === "canopy" || level === "ground") return [level];
+    return [activeLevel()];
+  }
+
   /* Stamp a disc in cell space. Cell centres are at (col+0.5, row+0.5), so the
    * result is exactly the set of 5 m cells whose centre falls inside the brush -
    * the same binary rule R's raster would have applied. */
@@ -346,14 +359,11 @@
   /* Stamp along the segment between two pointer samples. Without this, fast
    * strokes leave gaps wherever the browser skipped a pointermove. */
   function stampSegment(map, from, to) {
-    var level = activeLevel();
-    var grid  = state.grids[level];
     var catId = state.categoryId;
     var color = state.colors[catId];
     if (!color || !state.transform) return;
 
-    var pending = state.pending[level];
-    var rCells  = (state.brushRadius * metresPerPixel(map, to.x, to.y)) / state.res;
+    var rCells = (state.brushRadius * metresPerPixel(map, to.x, to.y)) / state.res;
     if (!(rCells > 0)) return;
 
     var a = containerToCell(map, from.x, from.y);
@@ -362,11 +372,14 @@
     var dist  = Math.sqrt(dc * dc + dr * dr);
     var steps = Math.max(1, Math.ceil(dist / Math.max(0.5, rCells * 0.5)));
 
-    for (var i = 1; i <= steps; i++) {
-      var t = i / steps;
-      stampDisc(grid, a.c + dc * t, a.r + dr * t, rCells, catId, color, pending);
-    }
-    if (state.layers[level]) state.layers[level].requestRedraw();
+    targetLevels(catId).forEach(function (level) {
+      var grid = state.grids[level], pending = state.pending[level];
+      for (var i = 1; i <= steps; i++) {
+        var t = i / steps;
+        stampDisc(grid, a.c + dc * t, a.r + dr * t, rCells, catId, color, pending);
+      }
+      if (state.layers[level]) state.layers[level].requestRedraw();
+    });
     scheduleFlush();
   }
 
@@ -683,6 +696,7 @@
     state.res       = msg.res;
     state.transform = msg.transform;
     state.colors    = msg.colors || {};
+    state.levels    = msg.levels || {};
     state.opacity   = msg.opacity || state.opacity;
     applyLevelStyles();
     updateCursor();
