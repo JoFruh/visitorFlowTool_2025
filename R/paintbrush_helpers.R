@@ -1,16 +1,38 @@
+#' Paint materials, one row per button. `level` says which of the two stacked
+#' rasters a stroke of that material lands in: "ground" -> paintedRaster,
+#' "canopy" -> canopyRaster. The canopy colors are deliberately darker than
+#' their ground counterparts (artificial/tree) so the two levels stay
+#' distinguishable when the canopy layer is drawn over the ground layer.
 PAINT_CATEGORIES <- data.frame(
-  id   = 1:5,
-  name = c("grass", "tree", "artificial", "natural", "water"),
-  r    = c(144,   0, 128, 160,  30),
-  g    = c(238, 100, 128,  82, 144),
-  b    = c(144,   0, 128,  45, 255)
+  id    = 1:7,
+  name  = c("grass", "tree", "artificial", "natural", "water", "canopy_artificial", "canopy_tree"),
+  level = c(rep("ground", 5), rep("canopy", 2)),
+  r     = c(144,   0, 128, 160,  30, 63, 20),
+  g     = c(238, 100, 128,  82, 144, 63, 83),
+  b     = c(144,   0, 128,  45, 255, 63, 45)
 )
 
+#' One palette for both rasters - the category ids are unique across levels, so
+#' a single colorFactor covers ground and canopy alike.
 paintPalette <- leaflet::colorFactor(
-  palette  = c("lightgreen", "darkgreen", "grey", "#a05a3c", "dodgerblue"),
+  palette  = c("lightgreen", "darkgreen", "grey", "#a05a3c", "dodgerblue", "#3f3f3f", "#14532d"),
   levels   = PAINT_CATEGORIES$id,
   na.color = "transparent"
 )
+
+#' Opacities of the two painted layers. The ground layer is dimmed (rather than
+#' hidden) while canopy is being edited, so you can still see what you are
+#' painting canopy over.
+PAINT_OPACITY_GROUND        <- 0.5
+PAINT_OPACITY_GROUND_DIMMED <- 0.2
+PAINT_OPACITY_CANOPY        <- 0.7
+
+#' Which raster a stroke belongs in, derived from the category id the browser
+#' echoes back with every stroke - so the level never has to travel as its own
+#' payload field.
+paintLevelOf <- function(categoryId){
+  PAINT_CATEGORIES$level[match(categoryId, PAINT_CATEGORIES$id)]
+}
 
 #' Turn an RGBA PNG array's alpha channel into raster cell ids: `categoryId`
 #' where painted, NA elsewhere. Only one paint color is ever active at a time

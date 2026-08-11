@@ -232,8 +232,10 @@ if(is.null(r$updateNetworkPlot)){
 
       r$lastSelectedButton <- NULL
 
-      #initialize memory of last selected paint color button (grass is the default/pre-selected color)
-      r$lastSelectedColorButton <- "paintColor_grass"
+      #initialize memory of last selected paint color button, per paint level, so flipping the
+      #ground/canopy switch restores that level's own previously selected material
+      r$lastSelectedGroundButton <- "paintColor_grass"
+      r$lastSelectedCanopyButton <- "paintColor_canopyTree"
 
       shinyjs::disable("newVersionsConfirmButton")
       shinyjs::disable("addVersionButton")
@@ -309,6 +311,11 @@ if(is.null(r$updateNetworkPlot)){
         #   leaflet.extras2::stopSpinner()
         #
         # map
+        #reset paint mode on every render, so leaving context 4 disarms the brush and hands
+        #map dragging/zooming back to leaflet; the context 4 branch below re-arms it
+        session$sendCustomMessage(type = "set-paint-active", message = FALSE)
+        shinyjs::hide(id = "paintColorButtonsDiv")
+
         #RENDERING INFRASTRUCTURE/SIGNAGE
         # if(shiny::isolate(!is.null(input$contextChoice))){
           if(shiny::isolate(input$contextChoice == 1)){
@@ -584,20 +591,36 @@ if(is.null(r$updateNetworkPlot)){
               leaflet::addMapPane("layer1", zIndex = 410)%>% leaflet::addMapPane("layer2", zIndex = 420)%>% leaflet::addMapPane("layer3", zIndex = 450) %>%
               leaflet::addProviderTiles("OpenStreetMap.CH", options = leaflet::providerTileOptions(opacity = 0.3, zIndex = 400)) %>%
               leaflet::addMapPane("layer_SM", zIndex = 405)%>%
-              leaflet::addMapPane("layer1", zIndex = 410)%>% leaflet::addMapPane("layer2", zIndex = 420)%>% leaflet::addMapPane("layer3", zIndex = 450)
+              leaflet::addMapPane("layer1", zIndex = 410)%>% leaflet::addMapPane("layer2", zIndex = 420)%>% leaflet::addMapPane("layer3", zIndex = 450)%>%
+              #panes keeping the canopy layer above the ground layer
+              leaflet::addMapPane("paintPaneGround", zIndex = 415)%>% leaflet::addMapPane("paintPaneCanopy", zIndex = 425)
 
             session$sendCustomMessage(type="set-paint-active", message=TRUE)
 
-            #show paint color buttons, defaulting back to grass each time context 4 is (re)entered
+            #show paint color buttons, restoring the material remembered for the active level
+            canopyActive <- shiny::isolate(isTRUE(input$paintLevel))
             shinyjs::show(id = "paintColorButtonsDiv")
-            shiny::isolate(setPaintColor(session, r, "paintColor_grass", "144,238,144"))
+            setPaintLevelButtons(canopyActive)
+            shiny::isolate(applyPaintLevelColor(session, r, if(canopyActive) "canopy" else "ground"))
 
-            #re-add this version's persisted painted layer (proxy-added layers don't survive a full re-render)
+            #re-add this version's persisted painted layers (proxy-added layers don't survive a full re-render).
+            #same opacity/pane rules as redrawPaintLayers(), inlined because `map` here is a plain
+            #leaflet object rather than a proxy
             savedPaint <- shiny::isolate(r$networkList[[r$position]]$paintedRaster)
             if(!is.null(savedPaint)){
               savedPaint4326 <- terra::project(savedPaint, "EPSG:4326", method = "near")
               map <- map %>% leaflet::addRasterImage(x = raster::raster(savedPaint4326), colors = paintPalette,
-                                                       group = "paintedMask", opacity = 0.5, project = FALSE)
+                                                       group = "paintedMask", project = FALSE,
+                                                       opacity = if(canopyActive) PAINT_OPACITY_GROUND_DIMMED else PAINT_OPACITY_GROUND,
+                                                       options = leaflet::gridOptions(pane = "paintPaneGround"))
+            }
+            savedCanopy <- shiny::isolate(r$networkList[[r$position]]$canopyRaster)
+            if(canopyActive && !is.null(savedCanopy)){
+              savedCanopy4326 <- terra::project(savedCanopy, "EPSG:4326", method = "near")
+              map <- map %>% leaflet::addRasterImage(x = raster::raster(savedCanopy4326), colors = paintPalette,
+                                                       group = "canopyMask", project = FALSE,
+                                                       opacity = PAINT_OPACITY_CANOPY,
+                                                       options = leaflet::gridOptions(pane = "paintPaneCanopy"))
             }
           }
 
@@ -661,21 +684,95 @@ if(is.null(r$updateNetworkPlot)){
 
 # PAINT MODE OBSERVERS
 
-#toggle mutually-exclusive paint color buttons (light green/dark green/grey/brown/blue)
-# id must match the PAINT_CATEGORIES$id for that color (see paintbrush_helpers.R) -
-# it's sent to the browser and echoed back unchanged on every stroke, so R never
-# has to re-derive the category from painted pixel colors
-setPaintColor <- function(session, r, inputId, rgb, id){
-  if(is.null(r$lastSelectedColorButton) || r$lastSelectedColorButton != inputId){
-    if(!is.null(r$lastSelectedColorButton)){
-      shinyjs::removeClass(r$lastSelectedColorButton, "colorBtnSelected")
-      shinyjs::addClass(r$lastSelectedColorButton, "colorBtnNotSelected")
+#the paint buttons of both levels in one place: the color observers, the level switch's
+#enable/disable loop and the per-level defaults all read from here rather than repeating
+#literals. `id` must match the PAINT_CATEGORIES$id for that color (see paintbrush_helpers.R) -
+#it's sent to the browser and echoed back unchanged on every stroke, so R never has to
+#re-derive the category from painted pixel colors
+PAINT_BUTTONS <- data.frame(
+  inputId = c("paintColor_grass", "paintColor_tree", "paintColor_artificial",
+              "paintColor_natural", "paintColor_water",
+              "paintColor_canopyArtificial", "paintColor_canopyTree"),
+  rgb     = c("144,238,144", "0,100,0", "128,128,128", "160,82,45", "30,144,255",
+              "63,63,63", "20,83,45"),
+  id      = 1:7,
+  level   = c(rep("ground", 5), rep("canopy", 2)),
+  stringsAsFactors = FALSE
+)
+
+#name of the reactiveValues slot remembering the selected button of a given level
+lastColorButtonSlot <- function(level){
+  if(level == "canopy") "lastSelectedCanopyButton" else "lastSelectedGroundButton"
+}
+
+#toggle mutually-exclusive paint color buttons, within the given level.
+#`force` re-sends the color to the browser even when the button is already the
+#selected one for its level - needed when the level switch flips, since the newly
+#active level's remembered button is usually unchanged but the brush still has to
+#be re-pointed at it.
+setPaintColor <- function(session, r, inputId, rgb, id, level = "ground", force = FALSE){
+  slot <- lastColorButtonSlot(level)
+  if(force || is.null(r[[slot]]) || r[[slot]] != inputId){
+    if(!is.null(r[[slot]]) && r[[slot]] != inputId){
+      shinyjs::removeClass(r[[slot]], "colorBtnSelected")
+      shinyjs::addClass(r[[slot]], "colorBtnNotSelected")
     }
     shinyjs::removeClass(inputId, "colorBtnNotSelected")
     shinyjs::addClass(inputId, "colorBtnSelected")
-    r$lastSelectedColorButton <- inputId
+    r[[slot]] <- inputId
     session$sendCustomMessage("set-paint-color", list(rgb = rgb, id = id))
   }
+}
+
+#select the remembered material of `level` and point the brush at it
+applyPaintLevelColor <- function(session, r, level, force = TRUE){
+  btn <- shiny::isolate(r[[lastColorButtonSlot(level)]])
+  row <- PAINT_BUTTONS[match(btn, PAINT_BUTTONS$inputId), ]
+  setPaintColor(session, r, row$inputId, row$rgb, row$id, level = level, force = force)
+}
+
+#enable the buttons of the active level and dim/disable the other level's
+setPaintLevelButtons <- function(canopyActive){
+  activeLevel <- if(canopyActive) "canopy" else "ground"
+  for(i in seq_len(nrow(PAINT_BUTTONS))){
+    btn <- PAINT_BUTTONS$inputId[i]
+    if(PAINT_BUTTONS$level[i] == activeLevel){
+      shinyjs::enable(btn)
+      shinyjs::removeClass(btn, "paintBtnDisabled")
+    }else{
+      shinyjs::disable(btn)
+      shinyjs::addClass(btn, "paintBtnDisabled")
+    }
+  }
+}
+
+#redraw both painted layers of the current version. Ground is always shown, dimmed while
+#canopy is being edited so you can see what you're painting canopy over; canopy is only
+#shown in canopy mode. Stacking is by map pane (declared in the context 4 render branch)
+#rather than add order.
+redrawPaintLayers <- function(r, canopyActive){
+  ground <- shiny::isolate(r$networkList[[r$position]]$paintedRaster)
+  canopy <- shiny::isolate(r$networkList[[r$position]]$canopyRaster)
+
+  p <- leaflet::leafletProxy("versionMap") %>%
+    leaflet::clearGroup("paintedMask") %>%
+    leaflet::clearGroup("canopyMask")
+
+  if(!is.null(ground)){
+    p <- p %>% leaflet::addRasterImage(
+      x = raster::raster(terra::project(ground, "EPSG:4326", method = "near")),
+      colors = paintPalette, group = "paintedMask", project = FALSE,
+      opacity = if(canopyActive) PAINT_OPACITY_GROUND_DIMMED else PAINT_OPACITY_GROUND,
+      options = leaflet::gridOptions(pane = "paintPaneGround"))
+  }
+  if(canopyActive && !is.null(canopy)){
+    p <- p %>% leaflet::addRasterImage(
+      x = raster::raster(terra::project(canopy, "EPSG:4326", method = "near")),
+      colors = paintPalette, group = "canopyMask", project = FALSE,
+      opacity = PAINT_OPACITY_CANOPY,
+      options = leaflet::gridOptions(pane = "paintPaneCanopy"))
+  }
+  p
 }
 
 shiny::observeEvent(input$paintColor_grass, {
@@ -693,6 +790,20 @@ shiny::observeEvent(input$paintColor_natural, {
 shiny::observeEvent(input$paintColor_water, {
   setPaintColor(session, r, "paintColor_water", "30,144,255", 5)
 })
+shiny::observeEvent(input$paintColor_canopyArtificial, {
+  setPaintColor(session, r, "paintColor_canopyArtificial", "63,63,63", 6, level = "canopy")
+})
+shiny::observeEvent(input$paintColor_canopyTree, {
+  setPaintColor(session, r, "paintColor_canopyTree", "20,83,45", 7, level = "canopy")
+})
+
+# Switch between painting the ground layer and the canopy layer
+shiny::observeEvent(input$paintLevel, {
+  canopyActive <- isTRUE(input$paintLevel)
+  setPaintLevelButtons(canopyActive)
+  applyPaintLevelColor(session, r, if(canopyActive) "canopy" else "ground")
+  redrawPaintLayers(r, canopyActive)
+}, ignoreInit = TRUE)
 
 # Convert a completed brush stroke into a georeferenced raster and add it to the map
 observeEvent(input$paintStroke, {
@@ -713,15 +824,13 @@ observeEvent(input$paintStroke, {
     template <- buildStrokeTemplate(b)
     strokeRast2056 <- terra::project(rawRast, template, method = "near")
 
-    existing <- shiny::isolate(r$networkList[[r$position]]$paintedRaster)
-    merged <- if(is.null(existing)) strokeRast2056 else terra::merge(strokeRast2056, existing)
-    r$networkList[[r$position]]$paintedRaster <- merged
+    #the material painted with decides which of the two stacked rasters the stroke lands in
+    fld <- if(paintLevelOf(stroke$categoryId) == "canopy") "canopyRaster" else "paintedRaster"
+    existing <- shiny::isolate(r$networkList[[r$position]][[fld]])
+    r$networkList[[r$position]][[fld]] <- if(is.null(existing)) strokeRast2056
+                                          else terra::merge(strokeRast2056, existing)
 
-    merged4326 <- terra::project(merged, "EPSG:4326", method = "near")
-    leaflet::leafletProxy("versionMap") %>%
-      leaflet::clearGroup("paintedMask") %>%
-      leaflet::addRasterImage(x = raster::raster(merged4326), colors = paintPalette,
-                               group = "paintedMask", opacity = 0.5, project = FALSE)
+    redrawPaintLayers(r, isTRUE(shiny::isolate(input$paintLevel)))
 
     session$sendCustomMessage("clear-paint-canvas", TRUE)
   }, error = function(e){
@@ -1315,7 +1424,7 @@ print("add versions")
             # networkLst[[length(networkLst)+1]] <- list(network = networkLst[[1]]$network, pathUsage = NULL)
 
             #TODO: copy a group of elements (network, attractivity rasters, residential raster, parking polygons)
-            r$networkList[[length(r$networkList)+1]] <- list(network = r$networkList[[1]]$network, pathUsage = NULL, parking = r$networkList[[1]]$parking, paintedRaster = NULL)
+            r$networkList[[length(r$networkList)+1]] <- list(network = r$networkList[[1]]$network, pathUsage = NULL, parking = r$networkList[[1]]$parking, paintedRaster = NULL, canopyRaster = NULL)
             #update reactive
             # ntwrkLst_r(networkLst)
 
@@ -1342,9 +1451,6 @@ print("add versions")
 
             if(r$context == 1){
               #### CONTEXT 1: INFRASTRUCTURE ####
-
-              #hide paint color buttons
-              shinyjs::toggle(id = "paintColorButtonsDiv", condition = FALSE)  # hides color buttons when not context 4
 
               print("MARKER WAS CLICKED")
               r$markerWasClicked <- TRUE
@@ -1436,7 +1542,7 @@ print("add versions")
 
 
 
-                  r$networkList[[r$position]] <- list(network = network,  pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster )
+                  r$networkList[[r$position]] <- list(network = network,  pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster, canopyRaster = r$networkList[[r$position]]$canopyRaster )
                   # r$networkList[[r$position]]$network <- network
 
                   #remove pathUsage results, as new results must be simulated
@@ -1578,7 +1684,7 @@ print("add versions")
                   newNetwork <- tidygraph::tbl_graph(nodes = networkNodes, edges = newNetworkEdges, directed = FALSE)
 
                   #re-insert network in networkList
-                  r$networkList[[r$position]] <- list(network = newNetwork, pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster )
+                  r$networkList[[r$position]] <- list(network = newNetwork, pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster, canopyRaster = r$networkList[[r$position]]$canopyRaster )
                   # r$networkList[[r$position]]$network <- newNetwork
 
                   # tbl <- tbl_graph(edges = networkEdges , nodes = r$networkList[[r$position]]$network %>% tidygraph::activate(nodes) %>% as_tibble())
@@ -1723,8 +1829,6 @@ print("add versions")
             #### CONTEXT 2: SIGNAGE/ATTRACTIVITY ####
 
             }else if(input$contextChoice == 3){
-              #hide paint color buttons
-              shinyjs::toggle(id = "paintColorButtonsDiv", condition = FALSE)  # hides color buttons when not context 4
 
             #### CONTEXT 3: HOUSING/PARKING ####
               print("CONTEXT IS NOW HOUSING/PARKING")
@@ -2042,7 +2146,7 @@ obsEvent_deleteEdge <- shiny::observeEvent(input$deleteEdge, {
   network <- r$networkList[[r$position]]$network
   network <- network %>% tidygraph::activate(edges) %>% dplyr::filter(.data$edgeID_2 !=  r$edgID )
 
-  r$networkList[[r$position]] <- list(network = network,  pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster)
+  r$networkList[[r$position]] <- list(network = network,  pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster, canopyRaster = r$networkList[[r$position]]$canopyRaster)
 
   #remove pathUsage results, as new results must be simulated
   r$networkList[[r$position]]$pathUsage <- NULL
@@ -2774,7 +2878,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
                   tbl <- tidygraph::tbl_graph(edges = r$networkList[[r$position]]$network %>% tidygraph::activate(edges) %>% dplyr::as_tibble(), nodes = newNetworkNodes, directed = FALSE)
 
 
-                  r$networkList[[r$position]] <- list(network = tbl,  pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster )
+                  r$networkList[[r$position]] <- list(network = tbl,  pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster, canopyRaster = r$networkList[[r$position]]$canopyRaster )
                   # r$networkList[[r$position]]$network <- network
 
 
@@ -2916,7 +3020,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
                   #recreate network graph and insert in reactives
                   tbl <- tidygraph::tbl_graph(edges = newNetworkEdges , nodes = r$networkList[[r$position]]$network %>% tidygraph::activate(nodes) %>% dplyr::as_tibble(), directed = FALSE)
 
-                  r$networkList[[r$position]] <- list(network = tbl,  pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster )
+                  r$networkList[[r$position]] <- list(network = tbl,  pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster, canopyRaster = r$networkList[[r$position]]$canopyRaster )
                   # r$networkList[[r$position]]$network <- network
 
                   #insert node in dataframe
@@ -3120,7 +3224,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
                   #recreate network graph and insert in reactives
                   tbl <- tidygraph::tbl_graph(edges = r$networkList[[r$position]]$network %>% tidygraph::activate(edges) %>% dplyr::as_tibble(), nodes = networkNodes, directed = FALSE)
 
-                  r$networkList[[r$position]] <- list(network = tbl, pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential ,newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster )
+                  r$networkList[[r$position]] <- list(network = tbl, pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential ,newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster, canopyRaster = r$networkList[[r$position]]$canopyRaster )
                   # r$networkList[[r$position]]$network <- network
 
                   print(r$networkList[[r$position]]$network)

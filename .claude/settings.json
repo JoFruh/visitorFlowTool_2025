@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Rscript -e \"for \\(f in c\\('R/paintbrush_helpers.R','R/newVersions_ui.R','R/newVersions_server.R'\\)\\) { r <- tryCatch\\({parse\\(f\\); 'OK'}, error=function\\(e\\) paste\\('FAIL:', conditionMessage\\(e\\)\\)\\); cat\\(f, '->', r, '\\\\n'\\) }\")",
+      "Bash(node --check inst/app/www/paintbrush.js)",
+      "Bash(Rscript -e ' *)",
+      "Bash(git --no-pager diff R/newVersions_server.R)",
+      "Bash(git --no-pager diff R/newVersions_ui.R R/paintbrush_helpers.R inst/app/www/paintbrush.js)"
+    ]
+  }
+}

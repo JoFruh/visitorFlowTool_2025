@@ -49,7 +49,9 @@ lastStep_ui <- function(id){
         height: 20px; /*Desired height*/
         line-height: 20px;
       }
-      span {
+      /* scoped to radio/checkbox labels only: a bare `span` rule here lands in <head>
+         and would apply to every span in the whole app, not just this module */
+      .radio span, .radio-inline span, .checkbox span, .checkbox-inline span {
           margin-left: 10px;  /*set the margin, so boxes don't overlap labels*/
           line-height: 20px;
       }

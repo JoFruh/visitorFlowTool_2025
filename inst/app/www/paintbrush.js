@@ -217,6 +217,8 @@ Shiny.addCustomMessageHandler("set-paint-active", function(active) {
     enableMapInteractions(paintbrush.map);
     paintbrush.canvas.style.pointerEvents = "none";
     paintbrush.canvas.style.cursor = "default";
+    // drop any half-drawn, never-sent stroke so it can't linger over another context's map
+    paintbrush.clear();
   }
 });
 
