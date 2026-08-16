@@ -1,9 +1,17 @@
 #' Paint materials, one row per button. `level` says which of the two stacked
 #' rasters a stroke of that material lands in: "ground" -> paintedRaster,
 #' "canopy" -> canopyRaster, "both" -> the same cells in each. The canopy colors
-#' are deliberately darker than their ground counterparts (artificial/tree) so
-#' the two levels stay distinguishable when the canopy layer is drawn over the
+#' are deliberately darker than their ground counterparts (artificial/vegetation)
+#' so the two levels stay distinguishable when the canopy layer is drawn over the
 #' ground layer.
+#'
+#' Vegetation is split by height across the two levels rather than duplicated:
+#' "bush" is ground-level woody growth that does not reach a canopy (roughly
+#' 0.5-3 m), while anything taller is "canopy_tree" on the canopy level. That is
+#' why there is no ground-level tree - a tree's crown is the canopy, and what it
+#' stands on is the ground class underneath it. The three greens are ordered by
+#' height so the map reads bottom-up: lightgreen grass, #6aa84f bush, #14532d
+#' canopy.
 #'
 #' "both" exists for a building: a solid block occupies the ground and everything
 #' above it, so one stroke has to fill either raster at once. It belongs to no
@@ -15,10 +23,10 @@
 #' palette any more - R never renders the painted layers.
 PAINT_CATEGORIES <- data.frame(
   id    = 1:8,
-  name  = c("grass", "tree", "artificial", "natural", "water",
+  name  = c("grass", "bush", "artificial", "natural", "water",
             "canopy_artificial", "canopy_tree", "artificial_block"),
   level = c(rep("ground", 5), rep("canopy", 2), "both"),
-  hex   = c("lightgreen", "darkgreen", "grey", "#a05a3c", "dodgerblue",
+  hex   = c("lightgreen", "#6aa84f", "grey", "#a05a3c", "dodgerblue",
             "#3f3f3f", "#14532d", "#1f1f1f"),
   stringsAsFactors = FALSE
 )

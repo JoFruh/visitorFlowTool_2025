@@ -218,9 +218,9 @@ background: url('infoIcon.png');  background-size: cover; background-position: c
                                                            style = "background-color: lightgreen; width: 90px; height: 45px;"
                                                          ),
                                                          shiny::actionButton(
-                                                           inputId = shiny::NS(id, "paintColor_tree"), label = i18n$t("Baum"),
+                                                           inputId = shiny::NS(id, "paintColor_bush"), label = i18n$t("Busch"),
                                                            class = "colorBtnNotSelected",
-                                                           style = "background-color: darkgreen; color: white; width: 90px; height: 45px;"
+                                                           style = "background-color: #6aa84f; color: white; width: 90px; height: 45px;"
                                                          ),
                                                          shiny::actionButton(
                                                            inputId = shiny::NS(id, "paintColor_artificial"), label = i18n$t("Künstlich"),

@@ -689,7 +689,7 @@ if(is.null(r$updateNetworkPlot)){
 #color and its level - is read from PAINT_CATEGORIES (paintbrush_helpers.R), which
 #the browser also holds a copy of, so a color is defined in exactly one place.
 PAINT_BUTTONS <- data.frame(
-  inputId = c("paintColor_grass", "paintColor_tree", "paintColor_artificial",
+  inputId = c("paintColor_grass", "paintColor_bush", "paintColor_artificial",
               "paintColor_natural", "paintColor_water",
               "paintColor_canopyArtificial", "paintColor_canopyTree",
               "paintColor_block"),
@@ -757,8 +757,8 @@ setPaintLevelButtons <- function(canopyActive){
 shiny::observeEvent(input$paintColor_grass, {
   setPaintColor(session, r, "paintColor_grass", 1)
 })
-shiny::observeEvent(input$paintColor_tree, {
-  setPaintColor(session, r, "paintColor_tree", 2)
+shiny::observeEvent(input$paintColor_bush, {
+  setPaintColor(session, r, "paintColor_bush", 2)
 })
 shiny::observeEvent(input$paintColor_artificial, {
   setPaintColor(session, r, "paintColor_artificial", 3)
