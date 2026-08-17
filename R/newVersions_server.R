@@ -596,8 +596,10 @@ if(is.null(r$updateNetworkPlot)){
               leaflet::addProviderTiles("OpenStreetMap.CH", options = leaflet::providerTileOptions(opacity = 0.3, zIndex = 400)) %>%
               leaflet::addMapPane("layer_SM", zIndex = 405)%>%
               leaflet::addMapPane("layer1", zIndex = 410)%>% leaflet::addMapPane("layer2", zIndex = 420)%>% leaflet::addMapPane("layer3", zIndex = 450)%>%
-              #panes keeping the canopy layer above the ground layer
-              leaflet::addMapPane("paintPaneGround", zIndex = 415)%>% leaflet::addMapPane("paintPaneCanopy", zIndex = 425)
+              #panes keeping the canopy layer above the ground layer, each with the
+              #surveyed land cover baseline immediately beneath it
+              leaflet::addMapPane("paintPaneBaseGround", zIndex = 413)%>% leaflet::addMapPane("paintPaneGround", zIndex = 415)%>%
+              leaflet::addMapPane("paintPaneBaseCanopy", zIndex = 423)%>% leaflet::addMapPane("paintPaneCanopy", zIndex = 425)
 
             session$sendCustomMessage(type="set-paint-active", message=TRUE)
 
@@ -617,6 +619,20 @@ if(is.null(r$updateNetworkPlot)){
               mean(c(paintBB[["xmin"]], paintBB[["xmax"]])),
               mean(c(paintBB[["ymin"]], paintBB[["ymax"]]))
             ))
+            #the surveyed land cover for this area, as a read-only layer under the
+            #paint. It is deliberately NOT merged into paintedRaster: keeping the
+            #two apart is what leaves "what was already there" and "what the user
+            #changed" still separable afterwards, which is the whole point of a
+            #heat-mitigation before/after. It also keeps saves small, since a
+            #version stores only edits.
+            #
+            #NULL (rasters not built, or an area past paintLandcoverSeed()'s
+            #ceiling) sends NULL images, which clears the baseline rather than
+            #leaving the previous version's on screen.
+            baseMsg <- paintLandcoverBaselinePNG(shiny::isolate(r$parkingPolygons))
+            if(is.null(baseMsg)) baseMsg <- list(ground = NULL, canopy = NULL)
+            session$sendCustomMessage("paint-base-load", baseMsg)
+
             session$sendCustomMessage("paint-grid-load", list(
               version = shiny::isolate(r$position),
               ground  = rasterToRuns(shiny::isolate(r$networkList[[r$position]]$paintedRaster)),

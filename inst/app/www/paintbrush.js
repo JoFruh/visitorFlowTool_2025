@@ -10,7 +10,7 @@
  * Mercator metres to EPSG:2056, accurate to millimetres over tens of kilometres.
  * Brush strokes go through it directly; drawing linearises it about the viewport
  * centre and composes it with Leaflet's own (exactly affine) Mercator -> pixel
- * mapping, so a redraw costs one drawImage per 256x256-cell chunk no matter how
+ * mapping, so a redraw costs one drawImage per CHUNK-square chunk no matter how
  * much has been painted.
  *
  * Opacity lives on the map *panes*, not on the layers, and chunk pixels are fully
@@ -21,21 +21,37 @@
   "use strict";
 
   var MAP_ID      = "newVersions-versionMap";
-  var CHUNK       = 256;        //cells per chunk side
-  var COL_BITS    = 2097152;    //2^21; key = row*COL_BITS + col, ordering keys row-major
+  //cells per chunk side. A chunk covers CHUNK*res metres, so at 1 m this is
+  //512 m rather than the 1280 m it was at 5 m: enough to keep a viewport-sized
+  //redraw to ~100 drawImage calls. The total canvas memory for a view is set by
+  //its cell count, not by this, so 1 m painting costs ~25x a 5 m view whatever
+  //value is chosen here - CHUNK only trades draw calls against canvas size.
+  var CHUNK       = 512;
+  //2^22; key = row*COL_BITS + col, ordering keys row-major. This has to exceed
+  //the largest global column index, and at PAINT_RES = 1 that is the LV95
+  //easting itself: Switzerland runs to E 2840000, so 2^21 would overflow col
+  //into the row field and silently corrupt every stroke in the country.
+  var COL_BITS    = 4194304;
   var FLUSH_IDLE  = 800;        //ms of no painting before the delta is sent to R
   var ACK_TIMEOUT = 8000;       //ms before an unacked flush is put back in the queue
   var PANES       = { ground: "paintPaneGround", canopy: "paintPaneCanopy" };
+  //the surveyed land cover, drawn *under* the corresponding paint pane. Read
+  //only: it is context, never something the user edits, so it has no cell map,
+  //no pending set and no path back to R.
+  var BASE_PANES  = { ground: "paintPaneBaseGround", canopy: "paintPaneBaseCanopy" };
 
   var state = {
     map:          null,
-    res:          5,
+    res:          1,          //overwritten by msg.res from paintInitPayload
     transform:    null,
     colors:       {},
     levels:       {},   //category id -> "ground" | "canopy" | "both"
     opacity:      { ground: 0.5, groundDimmed: 0.2, canopy: 0.7 },
     grids:        { ground: new PaintGrid(), canopy: new PaintGrid() },
+    bases:        { ground: new BaseGrid(),  canopy: new BaseGrid()  },
     layers:       { ground: null, canopy: null },
+    baseLayers:   { ground: null, canopy: null },
+    lastBase:     null,
     overlay:      null,
     canopyActive: false,
     active:       false,
@@ -52,8 +68,23 @@
 
   // ── The painted grid ────────────────────────────────────────────────────────
 
+  /* Chunk allocation, shared by the painted grid and the land cover baseline so
+   * both land on the same chunk lattice - which is what lets one layer class
+   * draw either of them without knowing which it has. */
+  function chunkAt(store, cx, cy) {
+    var key = cx * 65536 + cy;
+    var ch  = store.get(key);
+    if (!ch) {
+      var cv = document.createElement("canvas");
+      cv.width = CHUNK; cv.height = CHUNK;
+      ch = { cx: cx, cy: cy, canvas: cv, ctx: cv.getContext("2d") };
+      store.set(key, ch);
+    }
+    return ch;
+  }
+
   /* Cell values plus the offscreen canvases they are drawn on. Chunks are
-   * 256x256 cells (1.28 km at 5 m), so a park spans a handful of them. */
+   * CHUNK cells square, so a park spans a handful of them. */
   function PaintGrid() {
     this.cells  = new Map();   //key -> categoryId
     this.chunks = new Map();   //chunkKey -> {cx, cy, canvas, ctx}
@@ -65,15 +96,100 @@
   };
 
   PaintGrid.prototype.chunkAt = function (cx, cy) {
-    var key = cx * 65536 + cy;
-    var ch  = this.chunks.get(key);
-    if (!ch) {
-      var cv = document.createElement("canvas");
-      cv.width = CHUNK; cv.height = CHUNK;
-      ch = { cx: cx, cy: cy, canvas: cv, ctx: cv.getContext("2d") };
-      this.chunks.set(key, ch);
+    return chunkAt(this.chunks, cx, cy);
+  };
+
+  // ── The land cover baseline ─────────────────────────────────────────────────
+
+  /* The surveyed land cover under the paint, decoded from a PNG in which the
+   * *pixel value is the class id*.
+   *
+   * Why an image and not the row-run encoding the painted grid uses: runs were
+   * designed for brush strokes, which are contiguous blobs. Real 1 m land cover
+   * is the opposite - every kerb and building edge breaks a run - so one square
+   * kilometre encodes to ~150k runs and megabytes of JSON. The same square as a
+   * PNG is ~150 KB, because a 9-value class raster is exactly what PNG's filters
+   * compress well.
+   *
+   * It exposes `chunks` and nothing else, which is the whole interface the
+   * layer class needs. There is deliberately no `cells` map: the baseline is
+   * never edited, never diffed and never sent back, so remembering per-cell ids
+   * would be memory spent on a question nobody asks. */
+  function BaseGrid() {
+    this.chunks = new Map();
+  }
+
+  BaseGrid.prototype.reset = function () {
+    this.chunks.clear();
+  };
+
+  /* CSS colour -> [r,g,b], resolved by the browser so "lightgreen" and "#6aa84f"
+   * work the same way. One 1x1 canvas, memoised per id. */
+  var rgbCache = {};
+  function rgbFor(id) {
+    if (rgbCache[id]) return rgbCache[id];
+    var color = state.colors[id];
+    if (!color) return null;
+    var cv = document.createElement("canvas");
+    cv.width = cv.height = 1;
+    var cx = cv.getContext("2d");
+    cx.fillStyle = color;
+    cx.fillRect(0, 0, 1, 1);
+    var d = cx.getImageData(0, 0, 1, 1).data;
+    rgbCache[id] = [d[0], d[1], d[2]];
+    return rgbCache[id];
+  }
+
+  /* Decode one baseline image onto the chunk lattice.
+   *
+   * `col0`/`rowTop` are the global grid indices of the image's top-left cell, in
+   * the same convention rasterToRuns() uses, so the baseline lands cell-for-cell
+   * on top of anything painted. Image row 0 is north, matching terra's row
+   * order; grid rows count north, canvas rows count south, hence the py flip -
+   * the same flip fillRun() does.
+   *
+   * Pixels are written into per-chunk ImageData buffers and blitted once at the
+   * end. Per-pixel fillRect() would be millions of canvas calls for an AOI this
+   * size; this is two passes over a typed array. */
+  BaseGrid.prototype.loadImage = function (img, col0, rowTop) {
+    this.reset();
+    var w = img.width, h = img.height;
+    if (!w || !h) return;
+
+    var tmp = document.createElement("canvas");
+    tmp.width = w; tmp.height = h;
+    var tctx = tmp.getContext("2d");
+    tctx.drawImage(img, 0, 0);
+    var src = tctx.getImageData(0, 0, w, h).data;
+
+    var bufs = new Map();   //chunkKey -> {ch, data}
+    for (var j = 0; j < h; j++) {
+      var grow = rowTop - j;
+      var cy   = Math.floor(grow / CHUNK);
+      var py   = CHUNK - 1 - (grow - cy * CHUNK);
+      for (var i = 0; i < w; i++) {
+        var id = src[(j * w + i) * 4];        //grayscale: R channel is the class id
+        if (!id) continue;                    //0 = unclassified / open sky = transparent
+        var rgb = rgbFor(id);
+        if (!rgb) continue;
+
+        var gcol = col0 + i;
+        var cx   = Math.floor(gcol / CHUNK);
+        var key  = cx * 65536 + cy;
+        var buf  = bufs.get(key);
+        if (!buf) {
+          var ch = chunkAt(this.chunks, cx, cy);
+          buf = { ch: ch, data: ch.ctx.createImageData(CHUNK, CHUNK) };
+          bufs.set(key, buf);
+        }
+        var o = (py * CHUNK + (gcol - cx * CHUNK)) * 4;
+        buf.data.data[o]     = rgb[0];
+        buf.data.data[o + 1] = rgb[1];
+        buf.data.data[o + 2] = rgb[2];
+        buf.data.data[o + 3] = 255;
+      }
     }
-    return ch;
+    bufs.forEach(function (b) { b.ch.ctx.putImageData(b.data, 0, 0); });
   };
 
   /* Paint one horizontal run of cells. The chunk canvas is filled span-wise
@@ -304,6 +420,8 @@
   }
 
   function redrawLayers() {
+    if (state.baseLayers.ground) state.baseLayers.ground.redraw();
+    if (state.baseLayers.canopy) state.baseLayers.canopy.redraw();
     if (state.layers.ground) state.layers.ground.redraw();
     if (state.layers.canopy) state.layers.canopy.redraw();
   }
@@ -340,7 +458,7 @@
   }
 
   /* Stamp a disc in cell space. Cell centres are at (col+0.5, row+0.5), so the
-   * result is exactly the set of 5 m cells whose centre falls inside the brush -
+   * result is exactly the set of grid cells whose centre falls inside the brush -
    * the same binary rule R's raster would have applied. */
   function stampDisc(grid, fc, fr, rCells, catId, color, pending) {
     var r2 = rCells * rCells;
@@ -598,15 +716,22 @@
   function applyLevelStyles() {
     var map = state.map;
     if (!map) return;
-    var g = map.getPane(PANES.ground), c = map.getPane(PANES.canopy);
-    if (g) {
-      g.style.opacity = state.canopyActive ? state.opacity.groundDimmed : state.opacity.ground;
-      g.style.display = state.active ? "" : "none";
-    }
-    if (c) {
-      c.style.opacity = state.opacity.canopy;
-      c.style.display = (state.active && state.canopyActive) ? "" : "none";
-    }
+    var groundOpacity = state.canopyActive ? state.opacity.groundDimmed : state.opacity.ground;
+    var groundShown   = state.active;
+    var canopyShown   = state.active && state.canopyActive;
+
+    //the baseline follows its level's paint pane exactly - same opacity, same
+    //show/hide - so land cover and paint read as one surface rather than two
+    [[PANES.ground, BASE_PANES.ground, groundOpacity, groundShown],
+     [PANES.canopy, BASE_PANES.canopy, state.opacity.canopy, canopyShown]
+    ].forEach(function (spec) {
+      [spec[0], spec[1]].forEach(function (name) {
+        var p = map.getPane(name);
+        if (!p) return;
+        p.style.opacity = spec[2];
+        p.style.display = spec[3] ? "" : "none";
+      });
+    });
   }
 
   /* Drop everything bound to the previous map instance. The old map is usually
@@ -618,9 +743,11 @@
     }
     state.overlay = null;
     ["ground", "canopy"].forEach(function (level) {
-      var layer = state.layers[level];
-      if (layer && layer._map) { try { layer.remove(); } catch (err) { /* map already torn down */ } }
-      state.layers[level] = null;
+      [state.layers, state.baseLayers].forEach(function (set) {
+        var layer = set[level];
+        if (layer && layer._map) { try { layer.remove(); } catch (err) { /* map already torn down */ } }
+        set[level] = null;
+      });
     });
     if (state.map) { try { state.map.off("zoomstart movestart", flush); } catch (err) { /* ditto */ } }
     state.map = null;
@@ -632,12 +759,20 @@
   function attach(map) {
     detach();
     state.map = map;
+    //baseline panes sit just under their paint counterparts, and above the
+    //network layers (layer1 410, layer2 420) so the land cover does not bury them
+    ensurePane(map, BASE_PANES.ground, 413);
     ensurePane(map, PANES.ground, 415);
+    ensurePane(map, BASE_PANES.canopy, 423);
     ensurePane(map, PANES.canopy, 425);
 
     var Layer = paintLayerClass();
+    state.baseLayers.ground = new Layer(state.bases.ground, BASE_PANES.ground);
+    state.baseLayers.canopy = new Layer(state.bases.canopy, BASE_PANES.canopy);
     state.layers.ground = new Layer(state.grids.ground, PANES.ground);
     state.layers.canopy = new Layer(state.grids.canopy, PANES.canopy);
+    state.baseLayers.ground.addTo(map);
+    state.baseLayers.canopy.addTo(map);
     state.layers.ground.addTo(map);
     state.layers.canopy.addTo(map);
 
@@ -670,6 +805,9 @@
                  !ground || !ground._canvas || !ground._canvas.isConnected;
     if (!stale) return;
     attach(map);
+    //a re-render builds new panes and canvases, so both the paint and the
+    //baseline have to be replayed onto them
+    if (state.lastBase) loadBase(state.lastBase);
     if (state.lastLoad) loadPayload(state.lastLoad);
   }
 
@@ -719,6 +857,35 @@
 
   Shiny.addCustomMessageHandler("paint-grid-load", function (msg) {
     loadPayload(msg);
+  });
+
+  /* The land cover baseline for this version's area. Images decode
+   * asynchronously, so each one redraws as it arrives rather than waiting for
+   * both - the ground layer is the one the user looks at first.
+   *
+   * A null/absent image clears that level, which is what makes "no rasters
+   * built yet" and "AOI too big" degrade to the old blank canvas rather than
+   * leaving a stale baseline from the previous version on screen. */
+  function loadBase(msg) {
+    state.lastBase = msg;
+    ["ground", "canopy"].forEach(function (level) {
+      var uri = msg && msg[level];
+      if (!uri) {
+        state.bases[level].reset();
+        if (state.baseLayers[level]) state.baseLayers[level].redraw();
+        return;
+      }
+      var img = new Image();
+      img.onload = function () {
+        state.bases[level].loadImage(img, msg.col0, msg.rowTop);
+        if (state.baseLayers[level]) state.baseLayers[level].redraw();
+      };
+      img.src = uri;
+    });
+  }
+
+  Shiny.addCustomMessageHandler("paint-base-load", function (msg) {
+    loadBase(msg);
   });
 
   Shiny.addCustomMessageHandler("paint-cells-ack", function (msg) {
