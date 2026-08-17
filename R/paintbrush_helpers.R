@@ -49,11 +49,19 @@ PAINT_CATEGORIES <- data.frame(
 #' portable across it.
 PAINT_RES <- 1
 
-#' Opacities of the two painted layers. The ground layer is dimmed (rather than
+#' Opacities of the painted layers. The ground layer is dimmed (rather than
 #' hidden) while canopy is being edited, so you can still see what you are
 #' painting canopy over. These are applied by the browser as the CSS opacity of
 #' the *map pane*, not of individual overlays: that is what keeps overlapping
 #' strokes from compounding into darker patches.
+#'
+#' One opacity per level, applied to the land cover baseline and the paint
+#' together: they share a canvas, so a painted grass cell and a surveyed grass
+#' cell are the same colour and cannot be told apart. The map reads as one
+#' surface rather than as edits highlighted against a backdrop.
+#'
+#' The ground dim is the only distinction drawn anywhere, and it is between
+#' levels, not between paint and baseline.
 PAINT_OPACITY_GROUND        <- 0.5
 PAINT_OPACITY_GROUND_DIMMED <- 0.2
 PAINT_OPACITY_CANOPY        <- 0.7
@@ -147,28 +155,58 @@ paintLandcoverDir <- function(){
 #' R thread for everyone. That capped useful AOIs at ~1.4 km.
 #'
 #' paintLandcoverBaselinePNG() sends the same 1500 m window as a 158 KB PNG, so
-#' payload is no longer what binds. Browser memory is: the baseline decodes into
-#' RGBA chunk canvases at 4 bytes a cell, so 12 M cells is ~48 MB of canvas -
-#' about a 3.4 km square, and roughly a 700 KB message. Past that the tab starts
-#' paying for land cover it cannot show at a useful zoom anyway.
+#' payload stopped being what binds, and the guard became about browser memory.
 #'
-#' Over the ceiling this returns NULL rather than quietly wedging the browser,
+#' Bounding-box cells then turned out to be a poor proxy for memory too. Chunk
+#' canvases are only allocated where a classified pixel lands, and the image is
+#' decoded in strips rather than in one buffer, so a study area of 17 scattered
+#' polygons costs its 0.03 km2 of content and not its 21 km2 of bounding box. A
+#' 12 M ceiling rejected exactly that case - a real study area whose baseline
+#' would have been almost entirely empty, and cheap.
+#'
+#' What the window size still bounds is the crop read and the decode loop, both
+#' linear in it and both cheap, so the ceiling sits at 40 M cells (a ~6.3 km
+#' square). Over it this returns NULL rather than quietly wedging the browser,
 #' because the baseline is a convenience and failing to load it must never cost
 #' you the map.
-paintLandcoverSeed <- function(aoi, buffer_m = 250, max_cells = 12e6,
-                               dir = paintLandcoverDir(), res = PAINT_RES){
+#'
+#' `aoi` is the study area drawn in step 1 (`r$polygonsList`, EPSG:4326). It is
+#' buffered by `buffer_m` and the result is used two ways: its bounding box sets
+#' the crop window, and the buffered shape itself masks the result, so an
+#' irregular study area does not drag in a rectangle of land cover around it.
+#' Masked-out cells become NA, which paintLandcoverBaselinePNG() writes as class
+#' 0 and the browser renders as nothing - the baseline ends up the shape of the
+#' study area. Pass `mask = FALSE` for the plain bounding box.
+paintLandcoverSeed <- function(aoi, buffer_m = 250, max_cells = 40e6,
+                               dir = paintLandcoverDir(), res = PAINT_RES,
+                               mask = TRUE){
   if(is.null(aoi)) return(NULL)
+  if(inherits(aoi, c("sf", "data.frame")) && nrow(aoi) == 0) return(NULL)
   f_ground <- file.path(dir, sprintf("ground_CH_%gm.tif", res))
   f_canopy <- file.path(dir, sprintf("canopy_CH_%gm.tif", res))
   if(!file.exists(f_ground) || !file.exists(f_canopy)) return(NULL)
 
-  bb <- sf::st_bbox(sf::st_transform(sf::st_as_sfc(sf::st_bbox(aoi)), 2056))
+  #union first: step 1 keeps a single polygon today, but the polygon list is a
+  #list, and a multi-part area must give one shape rather than one per part
+  geom <- sf::st_geometry(aoi)
+  #A CRS-less geometry would fail st_transform and take the whole baseline with
+  #it. The app already assumes 4326 for geometries that arrive without one (see
+  #the border load in step1_server.R), so do the same rather than give up - but
+  #say so, because silently guessing a projection is how things end up 100 km
+  #from where they belong.
+  if(is.na(sf::st_crs(geom))){
+    warning("land cover AOI has no CRS; assuming EPSG:4326")
+    sf::st_crs(geom) <- 4326
+  }
+  shp <- try(sf::st_union(sf::st_transform(geom, 2056)), silent = TRUE)
+  if(inherits(shp, "try-error")) return(NULL)
+  if(buffer_m > 0) shp <- sf::st_buffer(shp, buffer_m)
+  bb <- sf::st_bbox(shp)
+
   #snap outward to the paint grid: floor the minima, ceiling the maxima, so the
   #window is a whole number of cells and shares the global grid's cell edges
-  e <- terra::ext(floor((bb[["xmin"]] - buffer_m) / res) * res,
-                  ceiling((bb[["xmax"]] + buffer_m) / res) * res,
-                  floor((bb[["ymin"]] - buffer_m) / res) * res,
-                  ceiling((bb[["ymax"]] + buffer_m) / res) * res)
+  e <- terra::ext(floor(bb[["xmin"]] / res) * res, ceiling(bb[["xmax"]] / res) * res,
+                  floor(bb[["ymin"]] / res) * res, ceiling(bb[["ymax"]] / res) * res)
 
   n <- ((terra::xmax(e) - terra::xmin(e)) / res) * ((terra::ymax(e) - terra::ymin(e)) / res)
   if(n > max_cells){
@@ -182,8 +220,13 @@ paintLandcoverSeed <- function(aoi, buffer_m = 250, max_cells = 12e6,
   if(terra::relate(terra::ext(g), e, "intersects")[1] == FALSE) return(NULL)
   e <- terra::intersect(e, terra::ext(g))
 
-  list(ground = terra::crop(g, e),
-       canopy = terra::crop(terra::rast(f_canopy), e))
+  out <- list(ground = terra::crop(g, e),
+              canopy = terra::crop(terra::rast(f_canopy), e))
+  if(mask){
+    mv  <- terra::vect(shp)
+    out <- lapply(out, function(r) terra::mask(r, mv))
+  }
+  out
 }
 
 #' The land cover baseline for an area, as PNGs the browser can decode directly.
@@ -222,13 +265,22 @@ paintLandcoverSeed <- function(aoi, buffer_m = 250, max_cells = 12e6,
 paintLandcoverBaselinePNG <- function(aoi, ..., cache = TRUE){
   key <- NULL
   if(cache && !is.null(aoi)){
-    bb  <- try(sf::st_bbox(sf::st_transform(sf::st_as_sfc(sf::st_bbox(aoi)), 2056)),
+    #the whole outline, not just its bounding box: the result is masked to the
+    #shape now, so two different outlines sharing a bbox are different baselines
+    #and must not share an entry.
+    #
+    #Built from rounded coordinates rather than WKT. st_as_text(digits = ) is not
+    #a rounding knob - format() rejects digits = 0 outright - and the failure
+    #mode is silent: the error lands in try(), the key stays NULL, and caching
+    #turns itself off without a word. Rounding the coordinates to the metre is
+    #both the snapping we actually want (float noise in the last decimal is the
+    #same outline) and something that cannot throw.
+    crd <- try(sf::st_coordinates(
+                 sf::st_transform(sf::st_union(sf::st_geometry(aoi)), 2056)),
                silent = TRUE)
-    if(!inherits(bb, "try-error")){
-      #rounded to the metre: a bbox that differs in the 9th decimal is the same
-      #window, and float noise must not cost a cache miss
-      key <- paste(c(round(as.numeric(bb)), PAINT_RES, paintLandcoverDir()),
-                   collapse = "|")
+    if(!inherits(crd, "try-error") && length(crd)){
+      key <- paste(c(round(crd[, 1]), round(crd[, 2]),
+                     PAINT_RES, paintLandcoverDir()), collapse = ",")
       hit <- .paintBaseCache[[key]]
       if(!is.null(hit)) return(hit$value)
     }
@@ -237,9 +289,20 @@ paintLandcoverBaselinePNG <- function(aoi, ..., cache = TRUE){
   seed <- paintLandcoverSeed(aoi, ...)
   if(is.null(seed)) return(NULL)
 
+  valid <- c(0L, PAINT_CATEGORIES$id)
+
   encode <- function(r){
     v <- terra::values(r)
     v[is.na(v)] <- 0
+    #Anything that is not a category id becomes 0 (unclassified). The national
+    #build produced 776 such cells in 166 billion - always a valid class with a
+    #high bit set (3 -> 67, 4 -> 68, 0 -> 128), which is the signature of memory
+    #bit-flips during a long saturating run rather than of a crosswalk fault.
+    #Too rare to matter statistically, but a stray 128 would miss the palette
+    #and draw nothing while still counting as painted, so it is squashed at the
+    #edge rather than left to surface as an unexplained hole.
+    bad <- !v %in% valid
+    if(any(bad)) v[bad] <- 0
     #byrow: terra hands back cells row-major from the north-west, which is also
     #PNG's row order, so the image needs no flip
     m <- matrix(as.numeric(v), nrow = terra::nrow(r), byrow = TRUE)
@@ -271,6 +334,69 @@ paintLandcoverBaselinePNG <- function(aoi, ..., cache = TRUE){
     assign(key, list(value = out, t = as.numeric(Sys.time())), envir = .paintBaseCache)
   }
   out
+}
+
+#' Why is there no land cover baseline?
+#'
+#' paintLandcoverSeed() returns NULL for half a dozen unrelated reasons and says
+#' nothing about which, because on the server the right response to all of them
+#' is the same: carry on without a baseline. When you are looking at a blank
+#' canvas and want to know why, call this with the same AOI - it walks the same
+#' gates in the same order and prints where it stopped.
+#'
+#'   paintLandcoverDiagnose(shiny::isolate(r$polygonsList))
+paintLandcoverDiagnose <- function(aoi, dir = paintLandcoverDir(), res = PAINT_RES,
+                                   buffer_m = 250, max_cells = 40e6){
+  say <- function(...) cat(sprintf(...), "\n", sep = "")
+  say("PAINT_RES              : %s", res)
+  say("land cover directory   : %s", dir)
+  say("  directory exists     : %s", dir.exists(dir))
+  for(w in c("ground", "canopy")){
+    f <- file.path(dir, sprintf("%s_CH_%gm.tif", w, res))
+    say("  %-20s: %s", basename(f), if(file.exists(f))
+        sprintf("found, %.2f GB", file.size(f) / 1e9) else "MISSING")
+  }
+  if(is.null(aoi)){ say("AOI                    : NULL  <- nothing to crop to"); return(invisible(NULL)) }
+  if(inherits(aoi, c("sf", "data.frame")) && nrow(aoi) == 0){
+    say("AOI                    : 0 rows  <- nothing to crop to"); return(invisible(NULL))
+  }
+  geom <- sf::st_geometry(aoi)
+  say("AOI class              : %s", paste(class(aoi), collapse = "/"))
+  say("AOI rows               : %s", if(is.null(nrow(aoi))) length(geom) else nrow(aoi))
+  say("AOI CRS                : %s", if(is.na(sf::st_crs(geom))) "NONE (will assume 4326)"
+                                     else paste0("EPSG:", sf::st_crs(geom)$epsg))
+  if(is.na(sf::st_crs(geom))) sf::st_crs(geom) <- 4326
+
+  shp <- try(sf::st_union(sf::st_transform(geom, 2056)), silent = TRUE)
+  if(inherits(shp, "try-error")){ say("transform to 2056      : FAILED"); return(invisible(NULL)) }
+  say("AOI area               : %.3f km2", sum(as.numeric(sf::st_area(shp))) / 1e6)
+  bb <- sf::st_bbox(if(buffer_m > 0) sf::st_buffer(shp, buffer_m) else shp)
+  say("buffered bbox (LV95)   : %.0f %.0f %.0f %.0f",
+      bb[["xmin"]], bb[["xmax"]], bb[["ymin"]], bb[["ymax"]])
+  n <- ceiling((bb[["xmax"]] - bb[["xmin"]]) / res) * ceiling((bb[["ymax"]] - bb[["ymin"]]) / res)
+  say("cells needed           : %.2f M  (ceiling %.0f M) %s",
+      n / 1e6, max_cells / 1e6, if(n > max_cells) " <- OVER, would return NULL" else "")
+
+  s <- suppressWarnings(paintLandcoverSeed(aoi, buffer_m = buffer_m,
+                                           max_cells = max_cells, dir = dir, res = res))
+  if(is.null(s)){ say("paintLandcoverSeed     : NULL  <- see gates above"); return(invisible(NULL)) }
+  for(w in names(s)){
+    v  <- terra::values(s[[w]])
+    nz <- sum(!is.na(v) & v != 0)
+    say("%-6s crop            : %d x %d, %.1f%% masked out, %.1f%% classified",
+        w, terra::nrow(s[[w]]), terra::ncol(s[[w]]),
+        100 * sum(is.na(v)) / length(v), 100 * nz / length(v))
+    if(nz == 0) say("        ^ nothing classified here - the baseline would render blank")
+  }
+  msg <- suppressWarnings(paintLandcoverBaselinePNG(aoi, buffer_m = buffer_m,
+                                                    max_cells = max_cells, dir = dir,
+                                                    res = res, cache = FALSE))
+  if(is.null(msg)){ say("baseline message       : NULL"); return(invisible(NULL)) }
+  say("baseline message       : ok, %.0f KB (%d x %d, col0 %d, rowTop %d)",
+      (nchar(msg$ground) + nchar(msg$canopy)) / 1e3, msg$w, msg$h, msg$col0, msg$rowTop)
+  say("=> R side is fine. If the map is still blank the message is not reaching")
+  say("   the browser, or paintbrush.js is a cached copy without the handler.")
+  invisible(msg)
 }
 
 #' Row-run encoding of a painted SpatRaster, for shipping to the browser.
@@ -310,7 +436,45 @@ rasterToRuns <- function(rast, res = PAINT_RES){
   }))
 }
 
+#' The effective land cover for a version: baseline with the user's edits on top.
+#'
+#' This is what downstream work should read, and what "the raster" means from
+#' the outside - a version opens as the surveyed land cover, painting replaces
+#' cells in it, and a reset returns it to the baseline exactly.
+#'
+#' Composed on demand rather than stored. A version's `paintedRaster` keeps only
+#' the cells the user changed, which is what makes versions cheap (a stroke, not
+#' a study area), keeps a reset to a single NULL, and keeps the browser payload
+#' split between a PNG baseline and a handful of runs. The composite is fully
+#' determined by the AOI and those edits, so storing it as well would be
+#' duplicating derivable state - and duplicating it once per version, across
+#' every session, on a single-process server.
+#'
+#' `level` picks which of the two the edits belong to.
+paintCompositeRaster <- function(edits, aoi, level = c("ground", "canopy"), ...){
+  level <- match.arg(level)
+  seed  <- paintLandcoverSeed(aoi, ...)
+  if(is.null(seed)) return(edits)
+  base <- seed[[level]]
+  if(is.null(edits)) return(base)
+
+  #edits are on the same LV95 grid by construction, so this aligns without
+  #resampling; extend to the union first so a stroke just outside the AOI is not
+  #silently dropped
+  e <- terra::union(terra::ext(base), terra::ext(edits))
+  base  <- terra::extend(base, e)
+  edits <- terra::extend(edits, e)
+  #0 is "erased" on the wire as well as "unpainted", so it must not overwrite
+  edits <- terra::ifel(edits == 0, NA, edits)
+  terra::cover(edits, base)
+}
+
 #' Merge row-run encoded cells from the browser into a version's SpatRaster.
+#'
+#' Category 0 means *erase*: the browser sends it for cells the eraser cleared,
+#' and writing it here is what makes that stick, since rasterToRuns() already
+#' treats 0 as unpainted on the way back out. So a cleared cell round-trips as
+#' "nothing painted here" and the land cover baseline shows through again.
 #'
 #' This is the whole server-side cost of painting: decode runs to cell indices,
 #' grow the raster to cover them, one vectorised write. No reprojection, no PNG,

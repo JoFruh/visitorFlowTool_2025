@@ -8,8 +8,13 @@
 # envUpdate <- new.env(parent = emptyenv())
 # envBtn <- new.env(parent = emptyenv())
 
+#' @param shape the overall study perimeter from step 1 (app-level `r$shape`).
+#'   Used to crop the land cover baseline under the paint. It has to be passed in
+#'   rather than read off `r`: this module makes its own reactiveValues, so the
+#'   `r` in here is module-local and its `polygonsList` is the AoI polygons, not
+#'   the perimeter. step5_server and lastStep_server take `shape` the same way.
 newVersions_server <- function(id, networkList, confirm, i18n, currentLang, isFirstRun, SM_pres, SMcolors, shp_PA, finalPolygons = NULL, versionsUI = list(), trigger = 0,
-                               DULN = NULL){
+                               DULN = NULL, shape = NULL){
 
   # r$mapRefresh <- 0
   shiny::moduleServer(id, function(input, output, session) {
@@ -314,11 +319,44 @@ if(is.null(r$updateNetworkPlot)){
         #   leaflet.extras2::stopSpinner()
         #
         # map
-        #reset paint mode on every render, so leaving context 4 disarms the brush (the
-        #browser stops intercepting pointer events over the map); the context 4 branch
-        #below re-arms it
-        session$sendCustomMessage(type = "set-paint-active", message = FALSE)
-        shinyjs::hide(id = "paintColorButtonsDiv")
+        #Arm or disarm paint mode from the context itself, in one place.
+        #
+        #This used to send FALSE here and rely on the context 4 branch below to
+        #send TRUE again, which made the brush depend on both messages arriving
+        #in one render. Any render that reached this line without reaching that
+        #branch - and the dummy-group trick further down deliberately causes
+        #re-renders - left paint disarmed with nothing to turn it back on. The
+        #symptom is silent and total: `active` false hides both paint panes and
+        #switches off the input overlay, so the land cover vanishes and the brush
+        #stops responding, with no error anywhere.
+        #
+        #Deriving it from contextChoice removes the ordering entirely: whatever
+        #else a render does, it leaves paint armed if and only if the user is on
+        #the paint context.
+        #
+        #"Unknown" is not "no". input$contextChoice is empty on a render that
+        #runs before the radio button has reported in - which happens, because
+        #the dummy-group trick below deliberately provokes re-renders - and
+        #treating that as "not context 4" is what disarms the brush behind the
+        #user's back. Silence leaves the flag alone instead, so only a render
+        #that positively knows the context can change it.
+        ctxChoice    <- shiny::isolate(input$contextChoice)
+        ctxKnown     <- length(ctxChoice) == 1 && !is.na(ctxChoice)
+        paintContext <- ctxKnown && isTRUE(ctxChoice == 4)
+
+        #only the unusual case is worth a line: a render that cannot tell which
+        #context it is in, which is the one that used to disarm the brush
+        if(!ctxKnown || isTRUE(getOption("vft.paintDebug", FALSE))){
+          message(sprintf("paint: render, contextChoice=%s -> %s",
+                          if(!ctxKnown) "<unset>" else as.character(ctxChoice),
+                          if(!ctxKnown) "left as is" else if(paintContext) "ARMED" else "disarmed"))
+        }
+
+        if(ctxKnown){
+          session$sendCustomMessage(type = "set-paint-active", message = paintContext)
+          if(paintContext) shinyjs::show(id = "paintColorButtonsDiv")
+          else             shinyjs::hide(id = "paintColorButtonsDiv")
+        }
 
         #RENDERING INFRASTRUCTURE/SIGNAGE
         # if(shiny::isolate(!is.null(input$contextChoice))){
@@ -596,10 +634,10 @@ if(is.null(r$updateNetworkPlot)){
               leaflet::addProviderTiles("OpenStreetMap.CH", options = leaflet::providerTileOptions(opacity = 0.3, zIndex = 400)) %>%
               leaflet::addMapPane("layer_SM", zIndex = 405)%>%
               leaflet::addMapPane("layer1", zIndex = 410)%>% leaflet::addMapPane("layer2", zIndex = 420)%>% leaflet::addMapPane("layer3", zIndex = 450)%>%
-              #panes keeping the canopy layer above the ground layer, each with the
-              #surveyed land cover baseline immediately beneath it
-              leaflet::addMapPane("paintPaneBaseGround", zIndex = 413)%>% leaflet::addMapPane("paintPaneGround", zIndex = 415)%>%
-              leaflet::addMapPane("paintPaneBaseCanopy", zIndex = 423)%>% leaflet::addMapPane("paintPaneCanopy", zIndex = 425)
+              #panes keeping the canopy layer above the ground layer. One pane per
+              #level: the land cover baseline and the paint share a canvas inside
+              #it, so that paint occludes the baseline instead of blending with it
+              leaflet::addMapPane("paintPaneGround", zIndex = 415)%>% leaflet::addMapPane("paintPaneCanopy", zIndex = 425)
 
             session$sendCustomMessage(type="set-paint-active", message=TRUE)
 
@@ -614,11 +652,46 @@ if(is.null(r$updateNetworkPlot)){
             #study area rather than the current view, so it stays valid as the user pans
             #around. The browser holds these messages until the new map instance exists,
             #so it does not matter that they are sent from inside the render.
-            paintBB <- sf::st_bbox(sf::st_transform(shiny::isolate(r$parkingPolygons), 4326))
-            session$sendCustomMessage("paint-grid-init", paintInitPayload(
-              mean(c(paintBB[["xmin"]], paintBB[["xmax"]])),
-              mean(c(paintBB[["ymin"]], paintBB[["ymax"]]))
-            ))
+            #The area to work on is the overall perimeter from step 1, passed in
+            #as `shape`. Deliberately not r$polygonsList: `r` here is this
+            #module's own reactiveValues and its polygonsList holds the AoI
+            #polygons - a scatter of small areas whose bounding box spans the
+            #whole site while covering almost none of it. Cropping to those gives
+            #a handful of disconnected patches instead of the working area.
+            #
+            #The parking polygons remain the fallback, so a session that somehow
+            #arrives here without a perimeter still gets an anchor rather than an
+            #error out of st_bbox().
+            paintAOI <- shape
+            if(is.null(paintAOI) || length(sf::st_geometry(paintAOI)) == 0){
+              paintAOI <- shiny::isolate(r$parkingPolygons)
+            }
+
+            #paint-grid-init is the message the browser cannot do without: it
+            #carries the coordinate fit, and with no fit chunkTransform() returns
+            #null, so nothing draws AND no stroke registers. Anything that throws
+            #on the way to sending it therefore takes out the whole brush, and
+            #does it silently - the map just sits there looking empty.
+            #
+            #So it is sent defensively, and a failure says which of the two it
+            #was rather than leaving a blank canvas to be interpreted.
+            paintOK <- tryCatch({
+              paintBB <- sf::st_bbox(sf::st_transform(paintAOI, 4326))
+              stopifnot(all(is.finite(as.numeric(paintBB))))
+              session$sendCustomMessage("paint-grid-init", paintInitPayload(
+                mean(c(paintBB[["xmin"]], paintBB[["xmax"]])),
+                mean(c(paintBB[["ymin"]], paintBB[["ymax"]]))
+              ))
+              TRUE
+            }, error = function(e){
+              message("paint: could NOT initialise the paint grid - the brush and ",
+                      "the land cover will both be inert. ", conditionMessage(e))
+              message("paint: AOI was ", if(is.null(paintAOI)) "NULL" else
+                      paste(class(paintAOI), collapse = "/"),
+                      "; shape arg was ", if(is.null(shape)) "NULL" else
+                      paste(class(shape), collapse = "/"))
+              FALSE
+            })
             #the surveyed land cover for this area, as a read-only layer under the
             #paint. It is deliberately NOT merged into paintedRaster: keeping the
             #two apart is what leaves "what was already there" and "what the user
@@ -626,11 +699,33 @@ if(is.null(r$updateNetworkPlot)){
             #heat-mitigation before/after. It also keeps saves small, since a
             #version stores only edits.
             #
+            #Cropped and masked to the step-1 outline, so the land cover appears
+            #in the shape of the study area rather than as a rectangle around it.
+            #
             #NULL (rasters not built, or an area past paintLandcoverSeed()'s
             #ceiling) sends NULL images, which clears the baseline rather than
             #leaving the previous version's on screen.
-            baseMsg <- paintLandcoverBaselinePNG(shiny::isolate(r$parkingPolygons))
-            if(is.null(baseMsg)) baseMsg <- list(ground = NULL, canopy = NULL)
+            baseMsg <- if(paintOK) tryCatch(paintLandcoverBaselinePNG(paintAOI),
+                                            error = function(e){
+                                              message("paint: baseline encode failed - ",
+                                                      conditionMessage(e))
+                                              NULL
+                                            }) else NULL
+            if(is.null(baseMsg)){
+              #print the whole diagnosis here rather than inviting the user to run
+              #it: the app owns the console while it is running, so "call this
+              #function to find out why" is advice that cannot be taken. A blank
+              #canvas looks identical whether the rasters are missing, the area is
+              #too big, or step 1 left no outline, so the reason has to arrive
+              #unasked. Wrapped because a diagnostic must never break the render.
+              message("paint: no land cover baseline for this area -")
+              try(paintLandcoverDiagnose(paintAOI), silent = FALSE)
+              baseMsg <- list(ground = NULL, canopy = NULL)
+            }else{
+              message(sprintf("paint: land cover baseline %d x %d, %.0f KB",
+                              baseMsg$w, baseMsg$h,
+                              (nchar(baseMsg$ground) + nchar(baseMsg$canopy)) / 1e3))
+            }
             session$sendCustomMessage("paint-base-load", baseMsg)
 
             session$sendCustomMessage("paint-grid-load", list(
@@ -797,6 +892,119 @@ shiny::observeEvent(input$paintColor_canopyTree, {
 shiny::observeEvent(input$paintColor_block, {
   setPaintColor(session, r, "paintColor_block", 8, level = "both")
 })
+
+# The browser's own view of the paint state, printed in the R console.
+#
+# Sent unasked whenever the paint layers attach, arm, or finish decoding a
+# baseline. The browser console is not always reachable - an embedded viewer may
+# have none - and a blank map is exactly when its internals matter, so they are
+# brought to the console that is always there rather than left behind a
+# developer-tools window.
+#
+# Read it top down: mapFound false means the widget was never located and
+# nothing else ran; hasTransform false means the coordinate fit never arrived,
+# which disables drawing AND painting together; panes MISSING means attach never
+# completed; baseGround 0 chunks means the land cover never decoded.
+shiny::observeEvent(input$paintDebug, {
+  d <- input$paintDebug
+  s <- d$state
+  if(is.null(s)) return(NULL)
+
+  yn  <- function(x) if(isTRUE(x)) "yes" else "NO"
+  pane <- function(p){
+    if(is.character(p)) return(p)
+    sprintf("opacity %s, display '%s'",
+            if(is.null(p$opacity) || !nzchar(as.character(p$opacity))) "unset" else p$opacity,
+            if(is.null(p$display)) "" else p$display)
+  }
+
+  #Only speak up when something is actually wrong, or when explicitly asked.
+  #A healthy paint step reports on three events per render, and a diagnostic
+  #that prints on every success trains you to skim past it - which is precisely
+  #when you stop noticing the run where it says something different. Set
+  #options(vft.paintDebug = TRUE) to see it regardless.
+  healthy <- isTRUE(s$mapFound) && isTRUE(s$attached) && isTRUE(s$overlay) &&
+             isTRUE(s$active)   && isTRUE(s$hasTransform) &&
+             !identical(s$panes$paintPaneGround, "MISSING") &&
+             (is.null(s$lastBase) || s$chunks$baseGround > 0)
+  if(healthy && !isTRUE(getOption("vft.paintDebug", FALSE))) return(NULL)
+
+  message("\n--- paint state in the browser (", d$why, ") ---")
+  message(sprintf("  map found        : %s   attached: %s   overlay: %s",
+                  yn(s$mapFound), yn(s$attached), yn(s$overlay)))
+  message(sprintf("  paint armed      : %s   canopy level: %s   erasing: %s",
+                  yn(s$active), yn(s$canopyActive), yn(s$erasing)))
+  message(sprintf("  coordinate fit   : %s   res: %s   colours: %s",
+                  yn(s$hasTransform), s$res, s$colors))
+  message(sprintf("  layers on map    : ground %s, canopy %s",
+                  yn(s$layers$ground), yn(s$layers$canopy)))
+  message(sprintf("  pane ground      : %s", pane(s$panes$paintPaneGround)))
+  message(sprintf("  pane canopy      : %s", pane(s$panes$paintPaneCanopy)))
+  message(sprintf("  chunks drawn     : baseline %s/%s, paint %s/%s (ground/canopy)",
+                  s$chunks$baseGround, s$chunks$baseCanopy,
+                  s$chunks$paintGround, s$chunks$paintCanopy))
+  if(is.null(s$lastBase)){
+    message("  baseline message : none received")
+  }else{
+    message(sprintf("  baseline message : %s x %s at col0 %s rowTop %s (ground %s, canopy %s)",
+                    s$lastBase$w, s$lastBase$h, s$lastBase$col0, s$lastBase$rowTop,
+                    yn(s$lastBase$ground), yn(s$lastBase$canopy)))
+  }
+
+  #the order events actually happened in. A single end-state flag says what is
+  #true, not who made it so, and that distinction is the whole difficulty when
+  #something arms and is then quietly disarmed.
+  if(length(s$trace)){
+    message("  event trace (oldest first):")
+    for(i in seq_along(s$trace)) message(sprintf("    %2d. %s", i, s$trace[[i]]))
+  }
+
+  #say what the numbers mean, so the first line of the diagnosis is not left to
+  #whoever is reading the log at the time
+  if(!isTRUE(s$mapFound)){
+    message("  => the map widget was not found; nothing attaches. Everything below is moot.")
+  }else if(!isTRUE(s$hasTransform)){
+    message("  => no coordinate fit: paint-grid-init never arrived. Brush and drawing are both inert.")
+  }else if(identical(s$panes$paintPaneGround, "MISSING")){
+    message("  => panes missing: attach() did not complete.")
+  }else if(isTRUE(s$active) && s$chunks$baseGround == 0 && !is.null(s$lastBase)){
+    message("  => baseline was sent but decoded to 0 chunks: the PNG is empty or failed to decode.")
+  }else if(isTRUE(s$active) && s$chunks$baseGround > 0){
+    message("  => browser state looks healthy; if the map is blank the issue is in drawing/transform.")
+  }
+}, ignoreInit = TRUE)
+
+# ERASER: a toggle, not a material.
+#
+# It deliberately does not touch r$paintEraser's remembered colour, so switching
+# the eraser off returns to whatever was being painted before. The browser owns
+# the actual rubbing out; all that happens here is the mode flag and the button's
+# held-down state.
+shiny::observeEvent(input$paintEraser, {
+  erasing <- !isTRUE(shiny::isolate(r$erasing))
+  r$erasing <- erasing
+  if(erasing){
+    shinyjs::addClass("paintEraser", "paintToolActive")
+  }else{
+    shinyjs::removeClass("paintEraser", "paintToolActive")
+  }
+  session$sendCustomMessage("set-paint-erase", list(erasing = erasing))
+}, ignoreInit = TRUE)
+
+# RESET: drop every stroke on this version, revealing the land cover underneath.
+#
+# Both ends are cleared from here. R drops its two rasters - the version stores
+# only edits, so clearing them *is* "back to the baseline" - and the browser is
+# told to clear its grids and redecode the baseline PNG it already holds. Doing
+# it in one observer is what keeps the two from disagreeing.
+shiny::observeEvent(input$paintReset, {
+  pos <- shiny::isolate(r$position)
+  if(is.null(pos) || pos < 1 || pos > length(shiny::isolate(r$networkList))) return(NULL)
+  r$networkList[[pos]]$paintedRaster <- NULL
+  r$networkList[[pos]]$canopyRaster  <- NULL
+  session$sendCustomMessage("paint-reset", list(version = pos))
+  message("paint: reset version ", pos, " to the land cover baseline")
+}, ignoreInit = TRUE)
 
 # Switch between painting the ground layer and the canopy layer.
 # Both layers are permanently on the map in the browser, so switching level only

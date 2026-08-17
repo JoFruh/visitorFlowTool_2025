@@ -35,10 +35,6 @@
   var FLUSH_IDLE  = 800;        //ms of no painting before the delta is sent to R
   var ACK_TIMEOUT = 8000;       //ms before an unacked flush is put back in the queue
   var PANES       = { ground: "paintPaneGround", canopy: "paintPaneCanopy" };
-  //the surveyed land cover, drawn *under* the corresponding paint pane. Read
-  //only: it is context, never something the user edits, so it has no cell map,
-  //no pending set and no path back to R.
-  var BASE_PANES  = { ground: "paintPaneBaseGround", canopy: "paintPaneBaseCanopy" };
 
   var state = {
     map:          null,
@@ -50,11 +46,16 @@
     grids:        { ground: new PaintGrid(), canopy: new PaintGrid() },
     bases:        { ground: new BaseGrid(),  canopy: new BaseGrid()  },
     layers:       { ground: null, canopy: null },
-    baseLayers:   { ground: null, canopy: null },
     lastBase:     null,
+    erasing:      false,
     overlay:      null,
     canopyActive: false,
     active:       false,
+    //rolling record of the events that decide whether paint is armed and drawn.
+    //Reasoning backwards from a single end-state flag repeatedly gave the wrong
+    //answer here, because the flag says what is true now and not who last set
+    //it; this says who set it.
+    trace:        [],
     brushRadius:  18,
     categoryId:   1,
     version:      null,
@@ -112,9 +113,11 @@
    * compress well.
    *
    * It exposes `chunks` and nothing else, which is the whole interface the
-   * layer class needs. There is deliberately no `cells` map: the baseline is
-   * never edited, never diffed and never sent back, so remembering per-cell ids
-   * would be memory spent on a question nobody asks. */
+   * layer class needs. The baseline is immutable once decoded: paint never
+   * carves holes in it, it is simply drawn over in the shared canvas, so
+   * erasing a stroke reveals it again with nothing to restore. That is why
+   * there is no `cells` map and no per-cell id array - the baseline is never
+   * edited, diffed or sent back, so nothing has to remember what it held. */
   function BaseGrid() {
     this.chunks = new Map();
   }
@@ -160,33 +163,47 @@
     tmp.width = w; tmp.height = h;
     var tctx = tmp.getContext("2d");
     tctx.drawImage(img, 0, 0);
-    var src = tctx.getImageData(0, 0, w, h).data;
 
+    //Read the image back in horizontal strips rather than in one getImageData.
+    //RGBA is 4 bytes a pixel, so a whole-image read is 4x the window - 86 MB for
+    //a 5 km study area at 1 m, allocated in one go purely to be thrown away. A
+    //strip bounds that to w x STRIP x 4 regardless of how tall the window is.
+    //
+    //Chunk canvases, by contrast, are only created where a non-zero pixel
+    //actually lands, so scattered study areas cost their content and not their
+    //bounding box.
+    var STRIP = 256;
     var bufs = new Map();   //chunkKey -> {ch, data}
-    for (var j = 0; j < h; j++) {
-      var grow = rowTop - j;
-      var cy   = Math.floor(grow / CHUNK);
-      var py   = CHUNK - 1 - (grow - cy * CHUNK);
-      for (var i = 0; i < w; i++) {
-        var id = src[(j * w + i) * 4];        //grayscale: R channel is the class id
-        if (!id) continue;                    //0 = unclassified / open sky = transparent
-        var rgb = rgbFor(id);
-        if (!rgb) continue;
 
-        var gcol = col0 + i;
-        var cx   = Math.floor(gcol / CHUNK);
-        var key  = cx * 65536 + cy;
-        var buf  = bufs.get(key);
-        if (!buf) {
-          var ch = chunkAt(this.chunks, cx, cy);
-          buf = { ch: ch, data: ch.ctx.createImageData(CHUNK, CHUNK) };
-          bufs.set(key, buf);
+    for (var y0 = 0; y0 < h; y0 += STRIP) {
+      var sh  = Math.min(STRIP, h - y0);
+      var src = tctx.getImageData(0, y0, w, sh).data;
+
+      for (var jj = 0; jj < sh; jj++) {
+        var grow = rowTop - (y0 + jj);
+        var cy   = Math.floor(grow / CHUNK);
+        var py   = CHUNK - 1 - (grow - cy * CHUNK);
+        for (var i = 0; i < w; i++) {
+          var id = src[(jj * w + i) * 4];     //grayscale: R channel is the class id
+          if (!id) continue;                  //0 = unclassified / open sky = transparent
+          var rgb = rgbFor(id);
+          if (!rgb) continue;
+
+          var gcol = col0 + i;
+          var cx   = Math.floor(gcol / CHUNK);
+          var key  = cx * 65536 + cy;
+          var buf  = bufs.get(key);
+          if (!buf) {
+            var ch = chunkAt(this.chunks, cx, cy);
+            buf = { ch: ch, data: ch.ctx.createImageData(CHUNK, CHUNK) };
+            bufs.set(key, buf);
+          }
+          var o = (py * CHUNK + (gcol - cx * CHUNK)) * 4;
+          buf.data.data[o]     = rgb[0];
+          buf.data.data[o + 1] = rgb[1];
+          buf.data.data[o + 2] = rgb[2];
+          buf.data.data[o + 3] = 255;
         }
-        var o = (py * CHUNK + (gcol - cx * CHUNK)) * 4;
-        buf.data.data[o]     = rgb[0];
-        buf.data.data[o + 1] = rgb[1];
-        buf.data.data[o + 2] = rgb[2];
-        buf.data.data[o + 3] = 255;
       }
     }
     bufs.forEach(function (b) { b.ch.ctx.putImageData(b.data, 0, 0); });
@@ -214,6 +231,34 @@
         if (this.cells.get(key) !== catId) {
           this.cells.set(key, catId);
           if (pending) pending.set(key, catId);
+        }
+      }
+      col = segEnd + 1;
+    }
+  };
+
+  /* Erase a horizontal run of painted cells.
+   *
+   * The pending value is 0, not "absent": R has to be told the cell was cleared,
+   * and rasterToRuns() already treats 0 as unpainted, so 0 is the erase symbol
+   * on both sides. The cells entry is deleted rather than set to 0 so that
+   * repainting the same material afterwards still counts as a change. */
+  PaintGrid.prototype.clearRun = function (row, colStart, colEnd, pending) {
+    var cy  = Math.floor(row / CHUNK);
+    var py  = CHUNK - 1 - (row - cy * CHUNK);
+    var col = colStart;
+
+    while (col <= colEnd) {
+      var cx     = Math.floor(col / CHUNK);
+      var segEnd = Math.min(colEnd, (cx + 1) * CHUNK - 1);
+      var ch     = this.chunks.get(cx * 65536 + cy);
+      if (ch) ch.ctx.clearRect(col - cx * CHUNK, py, segEnd - col + 1, 1);
+
+      for (var c = col; c <= segEnd; c++) {
+        var key = row * COL_BITS + c;
+        if (this.cells.has(key)) {
+          this.cells.delete(key);
+          if (pending) pending.set(key, 0);
         }
       }
       col = segEnd + 1;
@@ -322,8 +367,22 @@
     if (state.LayerClass) return state.LayerClass;
 
     state.LayerClass = L.Layer.extend({
-      initialize: function (grid, paneName) {
-        this._grid = grid;
+      /* `grids` is drawn in order into ONE canvas: land cover baseline first,
+       * then the paint over it.
+       *
+       * One canvas, not two stacked panes, because a pane carries the layer
+       * opacity. Two translucent panes would leave a painted cell showing
+       * paint-over-baseline while its neighbour showed baseline alone, so the
+       * two would never look alike. Composited first and made translucent once,
+       * a painted grass cell is indistinguishable from a surveyed grass cell -
+       * which is the point: the map should read as one surface, not as edits
+       * highlighted against a backdrop.
+       *
+       * Keeping them as separate *grids* is what the eraser needs. Clearing a
+       * paint cell reveals the baseline underneath on the next redraw, with
+       * nothing to restore, because the baseline was never written to. */
+      initialize: function (grids, paneName) {
+        this._grids = [].concat(grids);
         L.setOptions(this, { pane: paneName });
       },
 
@@ -408,10 +467,13 @@
         //averages it instead of dropping most of it
         ctx.imageSmoothingEnabled = Math.hypot(t.a, t.b) < 1;
 
-        this._grid.chunks.forEach(function (ch) {
-          var o = t.originFor(ch.cx, ch.cy);
-          ctx.setTransform(t.a, t.b, t.c, t.d, o.e, o.f);
-          ctx.drawImage(ch.canvas, 0, 0);
+        //baseline first, paint second: later grids occlude earlier ones
+        this._grids.forEach(function (grid) {
+          grid.chunks.forEach(function (ch) {
+            var o = t.originFor(ch.cx, ch.cy);
+            ctx.setTransform(t.a, t.b, t.c, t.d, o.e, o.f);
+            ctx.drawImage(ch.canvas, 0, 0);
+          });
         });
         ctx.setTransform(1, 0, 0, 1, 0, 0);
       }
@@ -420,8 +482,6 @@
   }
 
   function redrawLayers() {
-    if (state.baseLayers.ground) state.baseLayers.ground.redraw();
-    if (state.baseLayers.canopy) state.baseLayers.canopy.redraw();
     if (state.layers.ground) state.layers.ground.redraw();
     if (state.layers.canopy) state.layers.canopy.redraw();
   }
@@ -460,7 +520,8 @@
   /* Stamp a disc in cell space. Cell centres are at (col+0.5, row+0.5), so the
    * result is exactly the set of grid cells whose centre falls inside the brush -
    * the same binary rule R's raster would have applied. */
-  function stampDisc(grid, fc, fr, rCells, catId, color, pending) {
+  function stampDisc(level, fc, fr, rCells, catId, color, pending) {
+    var grid = state.grids[level];
     var r2 = rCells * rCells;
     var r0 = Math.floor(fr - rCells), r1 = Math.floor(fr + rCells);
     for (var row = r0; row <= r1; row++) {
@@ -470,7 +531,12 @@
       var w  = Math.sqrt(w2);
       var cs = Math.ceil(fc - w - 0.5);
       var ce = Math.floor(fc + w - 0.5);
-      if (ce >= cs) grid.fillRun(row, cs, ce, catId, color, pending);
+      if (ce < cs) continue;
+
+      //only the paint grid is ever touched. The baseline underneath is left
+      //exactly as decoded - hidden by opaque paint, revealed again by the eraser.
+      if (state.erasing) grid.clearRun(row, cs, ce, pending);
+      else               grid.fillRun(row, cs, ce, catId, color, pending);
     }
   }
 
@@ -479,7 +545,8 @@
   function stampSegment(map, from, to) {
     var catId = state.categoryId;
     var color = state.colors[catId];
-    if (!color || !state.transform) return;
+    //the eraser needs no material, so a missing colour only blocks painting
+    if ((!color && !state.erasing) || !state.transform) return;
 
     var rCells = (state.brushRadius * metresPerPixel(map, to.x, to.y)) / state.res;
     if (!(rCells > 0)) return;
@@ -490,11 +557,15 @@
     var dist  = Math.sqrt(dc * dc + dr * dr);
     var steps = Math.max(1, Math.ceil(dist / Math.max(0.5, rCells * 0.5)));
 
-    targetLevels(catId).forEach(function (level) {
-      var grid = state.grids[level], pending = state.pending[level];
+    //erasing acts on the level being edited, not on the selected material's
+    //level: rubbing out a building should not also clear the canopy above it
+    //unless that is the level you are on
+    var levels = state.erasing ? [activeLevel()] : targetLevels(catId);
+    levels.forEach(function (level) {
+      var pending = state.pending[level];
       for (var i = 1; i <= steps; i++) {
         var t = i / steps;
-        stampDisc(grid, a.c + dc * t, a.r + dr * t, rCells, catId, color, pending);
+        stampDisc(level, a.c + dc * t, a.r + dr * t, rCells, catId, color, pending);
       }
       if (state.layers[level]) state.layers[level].requestRedraw();
     });
@@ -600,10 +671,15 @@
     if (!state.active) { state.overlay.style.cursor = "default"; return; }
     var r    = state.brushRadius;
     var size = r * 2 + 4;
+    //the eraser shows an empty dashed ring: nothing is being added, and the
+    //brush must not look like it is about to lay down whatever material happens
+    //to still be selected underneath
     var svg  = "<svg xmlns='http://www.w3.org/2000/svg' width='" + size + "' height='" + size + "'>"
              + "<circle cx='" + size / 2 + "' cy='" + size / 2 + "' r='" + r + "' "
-             + "stroke='black' stroke-width='1.5' fill='" + (state.colors[state.categoryId] || "#888") + "' "
-             + "fill-opacity='0.35'/></svg>";
+             + "stroke='black' stroke-width='1.5' "
+             + (state.erasing ? "stroke-dasharray='4 3' fill='none'"
+                              : "fill='" + (state.colors[state.categoryId] || "#888") + "' fill-opacity='0.35'")
+             + "/></svg>";
     state.overlay.style.cursor =
       "url(\"data:image/svg+xml," + encodeURIComponent(svg) + "\") " + size / 2 + " " + size / 2 + ", crosshair";
   }
@@ -716,22 +792,19 @@
   function applyLevelStyles() {
     var map = state.map;
     if (!map) return;
-    var groundOpacity = state.canopyActive ? state.opacity.groundDimmed : state.opacity.ground;
-    var groundShown   = state.active;
-    var canopyShown   = state.active && state.canopyActive;
-
-    //the baseline follows its level's paint pane exactly - same opacity, same
-    //show/hide - so land cover and paint read as one surface rather than two
-    [[PANES.ground, BASE_PANES.ground, groundOpacity, groundShown],
-     [PANES.canopy, BASE_PANES.canopy, state.opacity.canopy, canopyShown]
-    ].forEach(function (spec) {
-      [spec[0], spec[1]].forEach(function (name) {
-        var p = map.getPane(name);
-        if (!p) return;
-        p.style.opacity = spec[2];
-        p.style.display = spec[3] ? "" : "none";
-      });
-    });
+    /* One pane per level, carrying baseline and paint together, so a single
+     * opacity applies to the finished surface and painted cells are
+     * indistinguishable from surveyed ones. The only dimming is the ground
+     * level while canopy is being edited. */
+    var g = map.getPane(PANES.ground), c = map.getPane(PANES.canopy);
+    if (g) {
+      g.style.opacity = state.canopyActive ? state.opacity.groundDimmed : state.opacity.ground;
+      g.style.display = state.active ? "" : "none";
+    }
+    if (c) {
+      c.style.opacity = state.opacity.canopy;
+      c.style.display = (state.active && state.canopyActive) ? "" : "none";
+    }
   }
 
   /* Drop everything bound to the previous map instance. The old map is usually
@@ -743,11 +816,9 @@
     }
     state.overlay = null;
     ["ground", "canopy"].forEach(function (level) {
-      [state.layers, state.baseLayers].forEach(function (set) {
-        var layer = set[level];
-        if (layer && layer._map) { try { layer.remove(); } catch (err) { /* map already torn down */ } }
-        set[level] = null;
-      });
+      var layer = state.layers[level];
+      if (layer && layer._map) { try { layer.remove(); } catch (err) { /* map already torn down */ } }
+      state.layers[level] = null;
     });
     if (state.map) { try { state.map.off("zoomstart movestart", flush); } catch (err) { /* ditto */ } }
     state.map = null;
@@ -759,20 +830,13 @@
   function attach(map) {
     detach();
     state.map = map;
-    //baseline panes sit just under their paint counterparts, and above the
-    //network layers (layer1 410, layer2 420) so the land cover does not bury them
-    ensurePane(map, BASE_PANES.ground, 413);
     ensurePane(map, PANES.ground, 415);
-    ensurePane(map, BASE_PANES.canopy, 423);
     ensurePane(map, PANES.canopy, 425);
 
+    //one layer per level, drawing [baseline, paint] into a single canvas
     var Layer = paintLayerClass();
-    state.baseLayers.ground = new Layer(state.bases.ground, BASE_PANES.ground);
-    state.baseLayers.canopy = new Layer(state.bases.canopy, BASE_PANES.canopy);
-    state.layers.ground = new Layer(state.grids.ground, PANES.ground);
-    state.layers.canopy = new Layer(state.grids.canopy, PANES.canopy);
-    state.baseLayers.ground.addTo(map);
-    state.baseLayers.canopy.addTo(map);
+    state.layers.ground = new Layer([state.bases.ground, state.grids.ground], PANES.ground);
+    state.layers.canopy = new Layer([state.bases.canopy, state.grids.canopy], PANES.canopy);
     state.layers.ground.addTo(map);
     state.layers.canopy.addTo(map);
 
@@ -784,6 +848,8 @@
     applyLevelStyles();
     applyActive();
     redrawLayers();
+    trace("attach (active=" + state.active + ")");
+    reportDebug("attach");
   }
 
   function applyActive() {
@@ -815,6 +881,89 @@
    * on the exact order of Shiny's output and custom-message flushes. */
   setInterval(syncMap, 250);
 
+  /* Read-only view of the internals, for diagnosing from the browser console.
+   *
+   * Everything in this file is closed over by the IIFE, which is right for
+   * production and useless when the map is blank and the question is *which*
+   * invariant broke - whether the widget was found, whether the panes exist,
+   * whether the coordinate fit ever arrived. Guessing at those from the R side
+   * is not possible, so this hands them over on request. It exposes copies and
+   * counts, never the grids themselves, so nothing here can be used to mutate
+   * what is drawn.
+   *
+   * Its other job is telling you the file is current: if window.__paintDebug is
+   * undefined, the browser is running a cached paintbrush.js. */
+  window.__paintDebug = function () {
+    var map = liveMap();
+    var paneNames = ["paintPaneGround", "paintPaneCanopy"];
+    var panes = {};
+    paneNames.forEach(function (n) {
+      var p = map && map.getPane ? map.getPane(n) : null;
+      panes[n] = p ? { opacity: p.style.opacity, display: p.style.display,
+                       zIndex: p.style.zIndex, connected: !!p.isConnected }
+                   : "MISSING";
+    });
+    return {
+      mapFound:     !!map,
+      mapId:        MAP_ID,
+      attached:     map === state.map && !!state.map,
+      overlay:      !!state.overlay && !!state.overlay.isConnected,
+      active:       state.active,
+      canopyActive: state.canopyActive,
+      erasing:      state.erasing,
+      res:          state.res,
+      hasTransform: !!state.transform,
+      colors:       Object.keys(state.colors).length,
+      version:      state.version,
+      panes:        panes,
+      layers: {
+        ground: !!state.layers.ground && !!state.layers.ground._canvas,
+        canopy: !!state.layers.canopy && !!state.layers.canopy._canvas
+      },
+      chunks: {
+        baseGround:  state.bases.ground.chunks.size,
+        baseCanopy:  state.bases.canopy.chunks.size,
+        paintGround: state.grids.ground.chunks.size,
+        paintCanopy: state.grids.canopy.chunks.size
+      },
+      lastBase: state.lastBase ? { w: state.lastBase.w, h: state.lastBase.h,
+                                   col0: state.lastBase.col0, rowTop: state.lastBase.rowTop,
+                                   ground: !!state.lastBase.ground,
+                                   canopy: !!state.lastBase.canopy } : null,
+      trace: state.trace.slice()
+    };
+  };
+
+  /* Send that snapshot to R, so it lands in the R console.
+   *
+   * The browser console is not always reachable - the app may be running in an
+   * embedded viewer - and a blank map is precisely the moment the state is worth
+   * seeing. R prints it in the one place that is always in front of you.
+   *
+   * Debounced, because the interesting moment is *after* things settle: attach,
+   * the level switch and the baseline's asynchronous decode all fire within a
+   * few hundred ms of each other, and only the last of them describes the state
+   * you actually end up in. Wrapped in try/catch on principle: a diagnostic that
+   * can break the thing it is diagnosing is worse than none. */
+  /* Append to the rolling event record. Capped, because it lives for the life
+   * of the page and is only ever read by a human. */
+  function trace(what) {
+    state.trace.push(what);
+    if (state.trace.length > 25) state.trace.shift();
+  }
+
+  var debugTimer = null;
+  function reportDebug(why) {
+    if (debugTimer) clearTimeout(debugTimer);
+    debugTimer = setTimeout(function () {
+      debugTimer = null;
+      try {
+        Shiny.setInputValue("newVersions-paintDebug",
+          { why: why, state: window.__paintDebug() }, { priority: "event" });
+      } catch (e) { /* diagnostics must never take the app down */ }
+    }, 900);
+  }
+
   $(document).on("shiny:value", function (e) {
     if (e.name === MAP_ID) setTimeout(syncMap, 0);
   });
@@ -830,7 +979,23 @@
 
   // ── Message handlers ────────────────────────────────────────────────────────
 
-  Shiny.addCustomMessageHandler("paint-grid-init", function (msg) {
+  /* Register a handler and record that the message arrived.
+   *
+   * Every inbound message is traced, not just the ones currently under
+   * suspicion. Diagnosing this by reasoning about which messages *should* have
+   * arrived went wrong repeatedly; the useful question is which ones did, and
+   * that is only answerable by writing it down at the door.
+   *
+   * Bracket notation on purpose - it must survive a blanket rename of the
+   * direct Shiny.addCustomMessageHandler calls below. */
+  function on(name, fn) {
+    Shiny["addCustomMessageHandler"](name, function (msg) {
+      trace("msg " + name);
+      return fn(msg);
+    });
+  }
+
+  on("paint-grid-init", function (msg) {
     state.res       = msg.res;
     state.transform = msg.transform;
     state.colors    = msg.colors || {};
@@ -855,7 +1020,7 @@
     redrawLayers();
   }
 
-  Shiny.addCustomMessageHandler("paint-grid-load", function (msg) {
+  on("paint-grid-load", function (msg) {
     loadPayload(msg);
   });
 
@@ -872,23 +1037,50 @@
       var uri = msg && msg[level];
       if (!uri) {
         state.bases[level].reset();
-        if (state.baseLayers[level]) state.baseLayers[level].redraw();
+        if (state.layers[level]) state.layers[level].redraw();
         return;
       }
       var img = new Image();
       img.onload = function () {
         state.bases[level].loadImage(img, msg.col0, msg.rowTop);
-        if (state.baseLayers[level]) state.baseLayers[level].redraw();
+        if (state.layers[level]) state.layers[level].redraw();
+        reportDebug("baseline-decoded");
       };
+      //a PNG that fails to decode would otherwise be indistinguishable from one
+      //that was never sent
+      img.onerror = function () { reportDebug("baseline-decode-FAILED"); };
       img.src = uri;
     });
   }
 
-  Shiny.addCustomMessageHandler("paint-base-load", function (msg) {
+  on("paint-base-load", function (msg) {
     loadBase(msg);
   });
 
-  Shiny.addCustomMessageHandler("paint-cells-ack", function (msg) {
+  /* Eraser mode. The material stays selected underneath, so turning the eraser
+   * off returns to whatever was being painted before. */
+  on("set-paint-erase", function (msg) {
+    flush();
+    state.erasing = !!msg.erasing;
+    updateCursor();
+  });
+
+  /* Drop every stroke on this version, revealing the land cover again.
+   *
+   * Clearing the paint grids is the whole job: the baseline was never altered,
+   * so it needs no restoring and is not even touched here. R clears its own
+   * rasters in the observer that sent this, so the two ends agree without the
+   * browser having to enumerate what it is discarding. */
+  on("paint-reset", function () {
+    state.pending = { ground: new Map(), canopy: new Map() };
+    dropInflight();
+    ["ground", "canopy"].forEach(function (level) {
+      state.grids[level].reset();
+      if (state.layers[level]) state.layers[level].redraw();
+    });
+  });
+
+  on("paint-cells-ack", function (msg) {
     var entry = state.inflight.get(msg.seq);
     if (entry) {
       clearTimeout(entry.timer);
@@ -896,25 +1088,29 @@
     }
   });
 
-  Shiny.addCustomMessageHandler("set-paint-level", function (msg) {
+  on("set-paint-level", function (msg) {
     flush();
     state.canopyActive = !!msg.canopy;
     applyLevelStyles();
   });
 
-  Shiny.addCustomMessageHandler("set-paint-active", function (active) {
+  on("set-paint-active", function (active) {
+    //the raw value as received, before coercion: a message arriving as [true]
+    //or "false" would coerce differently than it reads
+    trace("set-paint-active(" + JSON.stringify(active) + ")");
     if (!active) flush();   //leaving context 4 - get the last strokes to R first
     state.active = !!active;
     applyActive();
+    reportDebug(state.active ? "paint-armed" : "paint-disarmed");
   });
 
-  Shiny.addCustomMessageHandler("set-paint-color", function (msg) {
+  on("set-paint-color", function (msg) {
     flush();
     state.categoryId = msg.id;
     updateCursor();
   });
 
-  Shiny.addCustomMessageHandler("set-brush-radius", function (radius) {
+  on("set-brush-radius", function (radius) {
     state.brushRadius = radius;
     updateCursor();
   });

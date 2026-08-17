@@ -236,6 +236,27 @@ LC_OSM_LAYERS <- c("gis_osm_landuse_a_free_1", "gis_osm_natural_a_free_1",
 #' Tile subdirectory for the current resolution.
 lc_tile_dir <- function(res = LC_RES) paste0("tiles_", res, "m")
 
+#' Is this tile file complete and readable?
+#'
+#' `file.exists()` is not the same question, and the difference has teeth. Kill a
+#' run mid-write - a session ending, a crash - and the tiles in flight are left
+#' on disk with content but a truncated TIFF directory. They are not empty, so
+#' size checks pass; they exist, so a restart skips them forever; and
+#' terra::vrt() treats an unreadable member as NA rather than an error, so they
+#' merge into the national raster as silent holes. Eleven tiles reached a
+#' finished 82.8 G-cell raster that way, as 4 x 4.6 km squares of nothing.
+#'
+#' Opening the file is what actually settles it: a truncated directory fails to
+#' parse, and a tile that parses but has the wrong cell count was written against
+#' a different grid.
+lc_tile_ok <- function(f, cells = NULL){
+  if(!file.exists(f) || file.size(f) == 0) return(FALSE)
+  r <- try(suppressWarnings(terra::rast(f)), silent = TRUE)
+  if(inherits(r, "try-error")) return(FALSE)
+  if(!is.null(cells) && terra::ncell(r) != cells) return(FALSE)
+  TRUE
+}
+
 #' Tile grid over `ext`, as a data.frame of extents plus an id used for filenames.
 lc_tile_grid <- function(ext = LC_EXT, tile_m = LC_TILE_M){
   xs <- seq(ext[["xmin"]], ext[["xmax"]] - 1, by = tile_m[1])
@@ -424,7 +445,10 @@ lc_build_tile <- function(tile, out_dir = LC_OUT_DIR, overwrite = FALSE,
   #5 m tile into a 1 m raster
   f_ground <- file.path(out_dir, lc_tile_dir(), "ground", paste0("ground_", tile$tile_id, ".tif"))
   f_canopy <- file.path(out_dir, lc_tile_dir(), "canopy", paste0("canopy_", tile$tile_id, ".tif"))
-  if(!overwrite && file.exists(f_ground) && file.exists(f_canopy)){
+  #readable, not merely present: see lc_tile_ok(). A tile left half-written by an
+  #interrupted run must be rebuilt, not skipped for the rest of time.
+  cells <- (LC_TILE_M[1] / LC_RES) * (LC_TILE_M[2] / LC_RES)
+  if(!overwrite && lc_tile_ok(f_ground, cells) && lc_tile_ok(f_canopy, cells)){
     return(invisible(c(ground = f_ground, canopy = f_canopy)))
   }
   dir.create(dirname(f_ground), recursive = TRUE, showWarnings = FALSE)
@@ -623,7 +647,16 @@ build_ground_canopy_CH <- function(out_dir = LC_OUT_DIR, tiles = NULL,
     #in would silently corrupt the national raster
     files <- file.path(out_dir, lc_tile_dir(), what,
                        paste0(what, "_", tiles$tile_id, ".tif"))
-    stopifnot(all(file.exists(files)))
+    #every member is opened before the VRT is built, because terra::vrt() does
+    #not check: an unreadable tile becomes NA in the mosaic and the merge reports
+    #success. Better to refuse to merge and name the tiles than to hand over a
+    #raster with holes in it.
+    cells <- (LC_TILE_M[1] / LC_RES) * (LC_TILE_M[2] / LC_RES)
+    ok    <- vapply(files, lc_tile_ok, logical(1), cells = cells, USE.NAMES = FALSE)
+    if(!all(ok)){
+      stop(sprintf("%d unreadable %s tile(s), refusing to merge: %s",
+                   sum(!ok), what, paste(tiles$tile_id[!ok], collapse = ", ")))
+    }
     v     <- terra::vrt(files, file.path(out_dir, paste0(what, "_CH_1m.vrt")), overwrite = TRUE)
     f     <- file.path(out_dir, paste0(what, "_CH_1m.tif"))
     terra::writeRaster(v, f, datatype = "INT1U",

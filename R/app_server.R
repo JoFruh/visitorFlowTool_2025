@@ -831,6 +831,9 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
       newVersionsReturn <- newVersions_server("newVersions", networkList = r$networkList, SM_pres = r$SM_pres,  SMcolors =  r$SMcolors, shp_PA = r$shp_PA,
                                               finalPolygons = r$finalPolygons, confirm = r$confirm, versionsUI = r$versionsUI, isFirstRun = r$newVersionsFirstRun,
                                               DULN = r$DULN,
+                                              #the step-1 perimeter, for cropping the land cover under the
+                                              #paint. step5_server and lastStep_server already take it this way
+                                              shape = r$shape,
                                               i18n = shiny::reactive(i18n), currentLang = r$currentLang)
 
       r$newVersionsFirstRun <- FALSE

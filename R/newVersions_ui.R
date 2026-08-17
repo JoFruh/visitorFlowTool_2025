@@ -166,7 +166,22 @@ background: url('infoIcon.png');  background-size: cover; background-position: c
                                    .paintLevelCheckbox:checked ~ .paintLevelTrack .paintLevelKnob { top: 4px; }
                                    .knobLabelCanopy { display: none; }
                                    .paintLevelCheckbox:checked ~ .paintLevelTrack .knobLabelCanopy { display: inline; }
-                                   .paintLevelCheckbox:checked ~ .paintLevelTrack .knobLabelGround { display: none; }"
+                                   .paintLevelCheckbox:checked ~ .paintLevelTrack .knobLabelGround { display: none; }
+                                   /* Eraser and Reset. Circles, so they read as tools rather than as
+                                      two more materials in the row of rectangular colour buttons.
+                                      47px each + the 10px gap = 104px, matching the level switch
+                                      beside them, so the group stays vertically aligned. */
+                                   .paintToolBtn {
+                                            width: 47px; height: 47px; padding: 0;
+                                            border-radius: 50%; font-size: 10px; font-weight: bold;
+                                            display: flex; align-items: center; justify-content: center;
+                                            white-space: normal; line-height: 1.05;
+                                            }
+                                   /* the eraser is a toggle, so it needs a visibly held-down state */
+                                   .paintToolActive {
+                                            background-color: #069869 !important; color: white;
+                                            border-color: #05714e !important;
+                                            }"
                                  )
 
                                 ),
@@ -264,6 +279,23 @@ background: url('infoIcon.png');  background-size: cover; background-position: c
                                                            tags$span(class = "knobLabelCanopy", i18n$t("Krone")),
                                                            tags$span(class = "knobLabelGround",  i18n$t("Boden"))
                                                          )
+                                                       )
+                                                     ),
+                                                     #ERASER + RESET. Both act on the paint only; the land cover
+                                                     #baseline underneath is never edited, so these reveal it rather
+                                                     #than erase it. Round, to read as tools rather than as two more
+                                                     #materials in the row of rectangular colour buttons.
+                                                     shiny::div(
+                                                       style = "display:flex; flex-direction:column; gap:10px;",
+                                                       shiny::actionButton(
+                                                         inputId = shiny::NS(id, "paintEraser"), label = i18n$t("Eraser"),
+                                                         class = "paintToolBtn colorBtnNotSelected",
+                                                         style = "background-color: #ffffff;"
+                                                       ),
+                                                       shiny::actionButton(
+                                                         inputId = shiny::NS(id, "paintReset"), label = i18n$t("Reset"),
+                                                         class = "paintToolBtn colorBtnNotSelected",
+                                                         style = "background-color: #ffffff;"
                                                        )
                                                      )
                                                    )
