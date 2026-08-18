@@ -297,6 +297,25 @@ background: url('infoIcon.png');  background-size: cover; background-position: c
                                                          class = "paintToolBtn colorBtnNotSelected",
                                                          style = "background-color: #ffffff;"
                                                        )
+                                                     ),
+                                                     #HEAT. Reads the design rather than editing it, so it sits in its
+                                                     #own column apart from the brush tools. Two buttons keep this
+                                                     #column the same 104px as the eraser column and the level switch.
+                                                     #Refresh is separate because the heat model costs seconds over a
+                                                     #large area: recomputing on every stroke would stall the shared
+                                                     #R process for everyone, so the user decides when to pay it.
+                                                     shiny::div(
+                                                       style = "display:flex; flex-direction:column; gap:10px;",
+                                                       shiny::actionButton(
+                                                         inputId = shiny::NS(id, "heatSwitch"), label = i18n$t("Heat"),
+                                                         class = "paintToolBtn colorBtnNotSelected",
+                                                         style = "background-color: #ffffff;"
+                                                       ),
+                                                       shiny::actionButton(
+                                                         inputId = shiny::NS(id, "heatRefresh"), label = i18n$t("Refresh"),
+                                                         class = "paintToolBtn colorBtnNotSelected",
+                                                         style = "background-color: #ffffff;"
+                                                       )
                                                      )
                                                    )
                                                  )

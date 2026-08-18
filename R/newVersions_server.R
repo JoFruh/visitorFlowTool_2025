@@ -637,7 +637,11 @@ if(is.null(r$updateNetworkPlot)){
               #panes keeping the canopy layer above the ground layer. One pane per
               #level: the land cover baseline and the paint share a canvas inside
               #it, so that paint occludes the baseline instead of blending with it
-              leaflet::addMapPane("paintPaneGround", zIndex = 415)%>% leaflet::addMapPane("paintPaneCanopy", zIndex = 425)
+              leaflet::addMapPane("paintPaneGround", zIndex = 415)%>% leaflet::addMapPane("paintPaneCanopy", zIndex = 425)%>%
+              #the heat surface sits above the paint (it is opaque, and it is what
+              #you are reading while it is on) but below layer3, so the path
+              #network stays visible over it
+              leaflet::addMapPane("heatPane", zIndex = 430)
 
             session$sendCustomMessage(type="set-paint-active", message=TRUE)
 
@@ -974,6 +978,97 @@ shiny::observeEvent(input$paintDebug, {
   }
 }, ignoreInit = TRUE)
 
+# HEAT LAYER
+#
+# Draws or clears the heat surface through leafletProxy rather than by
+# re-rendering: a re-render would rebuild the map and take the paint canvas with
+# it, so toggling heat would cost the user their view and force the browser to
+# replay the whole baseline.
+drawHeat <- function(){
+  heat <- shiny::isolate(r$heatRaster)
+  if(is.null(heat)) return(invisible(NULL))
+  pal <- heatPalette(heat)
+  leaflet::leafletProxy("versionMap") %>%
+    leaflet::clearGroup("heat") %>%
+    leaflet::removeControl("heatLegend") %>%
+    #a plain list, not gridOptions(): that helper silently drops `pane` and
+    #returns FALSE, and tileOptions() carries pane but bolts on zIndex and
+    #detectRetina, which mean nothing to an image overlay. The options list is
+    #handed straight to L.imageOverlay, where `pane` is all that is needed.
+    leaflet::addRasterImage(raster::raster(heat), colors = pal, group = "heat",
+                            opacity = HEAT_OPACITY, project = TRUE,
+                            options = list(pane = "heatPane")) %>%
+    leaflet::addLegend(layerId = "heatLegend", position = "bottomright",
+                       pal = pal, values = terra::values(heat),
+                       title = i18n()$t("Hitze"), opacity = 1)
+  invisible(NULL)
+}
+
+clearHeat <- function(){
+  leaflet::leafletProxy("versionMap") %>%
+    leaflet::clearGroup("heat") %>%
+    leaflet::removeControl("heatLegend")
+  invisible(NULL)
+}
+
+#' Recompute from the current version's composite. Returns TRUE on success.
+#'
+#' Wrapped, and deliberately not fatal: the heat model is a read-out of the
+#' design, so a failure here must cost the read-out and nothing else - never the
+#' map or the paint the user has already done.
+computeHeat <- function(){
+  pos <- shiny::isolate(r$position)
+  aoi <- shape
+  if(is.null(aoi) || length(sf::st_geometry(aoi)) == 0){
+    aoi <- shiny::isolate(r$parkingPolygons)
+  }
+  ok <- tryCatch({
+    t0 <- Sys.time()
+    h  <- heatRaster(aoi,
+                     groundEdits = shiny::isolate(r$networkList[[pos]]$paintedRaster),
+                     canopyEdits = shiny::isolate(r$networkList[[pos]]$canopyRaster))
+    if(is.null(h)){
+      message("heat: no land cover for this area - nothing to compute from")
+      FALSE
+    }else{
+      r$heatRaster <- h
+      message(sprintf("heat: computed %d x %d at %g m in %.1f s",
+                      terra::nrow(h), terra::ncol(h), HEAT_RES,
+                      as.numeric(difftime(Sys.time(), t0, units = "secs"))))
+      TRUE
+    }
+  }, error = function(e){
+    message("heat: computation failed - ", conditionMessage(e))
+    FALSE
+  })
+  ok
+}
+
+# The switch. Computes on first activation, then reuses the cached raster, so
+# toggling it off and back on is instant; only Refresh pays again.
+shiny::observeEvent(input$heatSwitch, {
+  on <- !isTRUE(shiny::isolate(r$heatOn))
+  if(on){
+    if(is.null(shiny::isolate(r$heatRaster)) && !computeHeat()){
+      return(NULL)   #nothing to show - leave the switch off rather than lying
+    }
+    r$heatOn <- TRUE
+    shinyjs::addClass("heatSwitch", "paintToolActive")
+    drawHeat()
+  }else{
+    r$heatOn <- FALSE
+    shinyjs::removeClass("heatSwitch", "paintToolActive")
+    clearHeat()
+  }
+}, ignoreInit = TRUE)
+
+# Refresh: pick up whatever has been painted since. Recomputes even when the
+# layer is off, so turning it on afterwards shows the current design rather than
+# a stale one.
+shiny::observeEvent(input$heatRefresh, {
+  if(computeHeat() && isTRUE(shiny::isolate(r$heatOn))) drawHeat()
+}, ignoreInit = TRUE)
+
 # ERASER: a toggle, not a material.
 #
 # It deliberately does not touch r$paintEraser's remembered colour, so switching
@@ -1002,6 +1097,10 @@ shiny::observeEvent(input$paintReset, {
   if(is.null(pos) || pos < 1 || pos > length(shiny::isolate(r$networkList))) return(NULL)
   r$networkList[[pos]]$paintedRaster <- NULL
   r$networkList[[pos]]$canopyRaster  <- NULL
+  #the cached heat describes a design that no longer exists; drop it so the next
+  #switch-on recomputes rather than showing the erased scenario back to the user
+  r$heatRaster <- NULL
+  if(isTRUE(shiny::isolate(r$heatOn))) clearHeat()
   session$sendCustomMessage("paint-reset", list(version = pos))
   message("paint: reset version ", pos, " to the land cover baseline")
 }, ignoreInit = TRUE)

@@ -451,22 +451,31 @@ rasterToRuns <- function(rast, res = PAINT_RES){
 #' every session, on a single-process server.
 #'
 #' `level` picks which of the two the edits belong to.
+#' Lay a version's edits over a baseline layer.
+#'
+#' Split out because the heat model needs the same overlay for both levels and
+#' would otherwise re-crop the national rasters to get at it.
+#'
+#' Edits are on the same LV95 grid as the baseline by construction, so this
+#' aligns without resampling. Extending to the union first keeps a stroke that
+#' runs just outside the cropped baseline from being silently dropped, and 0 is
+#' dropped rather than written because it means "erased" on the wire as well as
+#' "never painted" - writing it would punch holes in the baseline.
+paintOverlayEdits <- function(base, edits){
+  if(is.null(edits)) return(base)
+  if(is.null(base))  return(terra::ifel(edits == 0, NA, edits))
+
+  e     <- terra::union(terra::ext(base), terra::ext(edits))
+  base  <- terra::extend(base, e)
+  edits <- terra::extend(edits, e)
+  terra::cover(terra::ifel(edits == 0, NA, edits), base)
+}
+
 paintCompositeRaster <- function(edits, aoi, level = c("ground", "canopy"), ...){
   level <- match.arg(level)
   seed  <- paintLandcoverSeed(aoi, ...)
   if(is.null(seed)) return(edits)
-  base <- seed[[level]]
-  if(is.null(edits)) return(base)
-
-  #edits are on the same LV95 grid by construction, so this aligns without
-  #resampling; extend to the union first so a stroke just outside the AOI is not
-  #silently dropped
-  e <- terra::union(terra::ext(base), terra::ext(edits))
-  base  <- terra::extend(base, e)
-  edits <- terra::extend(edits, e)
-  #0 is "erased" on the wire as well as "unpainted", so it must not overwrite
-  edits <- terra::ifel(edits == 0, NA, edits)
-  terra::cover(edits, base)
+  paintOverlayEdits(seed[[level]], edits)
 }
 
 #' Merge row-run encoded cells from the browser into a version's SpatRaster.
