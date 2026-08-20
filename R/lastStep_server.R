@@ -32,7 +32,7 @@ lastStep_server <- function(id, networkList , versionsUI ,
     #internal function to generate version selection boxes
     updateVersions <- function(name, inputId_select, id_ui_name, position){
 
-      cat(file = stderr(), "TEST9")
+      vftDbgCat("TEST9")
 
 
       shiny::insertUI(
@@ -41,17 +41,17 @@ lastStep_server <- function(id, networkList , versionsUI ,
         ui = shiny::tags$div(id = paste0("step5", id_ui_name),
                              shiny::div(style = "height: 5px"),
 
-                             cat(file = stderr(), "TEST9a"),
+                             vftDbgCat("TEST9a"),
 
                              if(name == "Original" ){
                                if(is.null(r$networkList[[position]]$pathUsage) ){
-                                 cat(file = stderr(), "TEST9b")
+                                 vftDbgCat("TEST9b")
                                  shiny::actionButton(inputId = shiny::NS(id, inputId_select), label =  name, width = "120px",  style = "height: 120px; position: relative; text-align: center; ",
                                                      class = "selected noSim" )
 
 
                                }else{
-                                 cat(file = stderr(), "TEST9c")
+                                 vftDbgCat("TEST9c")
 
                                  shiny::actionButton(inputId = shiny::NS(id, inputId_select), label =  name, width = "120px",  style = "height: 120px; position: relative; text-align: center; ",
                                                      class = "selected withSim" )
@@ -60,7 +60,7 @@ lastStep_server <- function(id, networkList , versionsUI ,
                                }
                              }else{
                                if(is.null(r$networkList[[position]]$pathUsage)){
-                                 cat(file = stderr(), "TEST9d")
+                                 vftDbgCat("TEST9d")
 
                                  shiny::actionButton(inputId = shiny::NS(id, inputId_select), label = name, width = "120px",  style = "height: 120px; position: relative; text-align: center; ",
                                                      class = "notSelected noSim" )
@@ -72,7 +72,7 @@ lastStep_server <- function(id, networkList , versionsUI ,
                                  # width = "120px",  style = "height: 120px; position: relative; text-align: center; ",
                                  # class = "notSelected")
                                }else{
-                                 cat(file = stderr(), "TEST9e")
+                                 vftDbgCat("TEST9e")
 
                                  shiny::actionButton(inputId = shiny::NS(id, inputId_select), label = name, width = "120px",  style = "height: 120px; position: relative; text-align: center; ",
                                                      class = "notSelected withSim" )
@@ -83,7 +83,7 @@ lastStep_server <- function(id, networkList , versionsUI ,
 
       )
 
-      cat(file = stderr(), "TEST10")
+      vftDbgCat("TEST10")
 
       #keep track of ids and inputIds
       # inserted_id_ui <<- c(inserted_id_ui, id_ui_name)
@@ -98,13 +98,13 @@ lastStep_server <- function(id, networkList , versionsUI ,
       r$obsEventSelList[[length(r$obsEventSelList)+1]] <- list(
         shiny::observeEvent(input[[inputId_select]], {
 
-          print("SELECTED")
-          print(versionsUI)
+          vftDbg("SELECTED")
+          vftDbg(versionsUI)
           #select button (outline in green?)
           shinyjs::removeClass(inputId_select, "notSelected")
           shinyjs::addClass(inputId_select, "selected")
 
-          print(paste0("lastSelectedImage: ", r$lastSelectedImage))
+          vftDbg(paste0("lastSelectedImage: ", r$lastSelectedImage))
           if(!is.null(r$lastSelectedImage)){
             shinyjs::addClass(r$lastSelectedImage, "notSelected")
           }
@@ -133,7 +133,7 @@ lastStep_server <- function(id, networkList , versionsUI ,
             r$selectedNetwork_position <- x
 
           }else{
-            print("ERROR: less networks than version buttons")
+            vftDbg("ERROR: less networks than version buttons")
 
           }
 
@@ -218,9 +218,9 @@ lastStep_server <- function(id, networkList , versionsUI ,
         #automatically plot original
         r$lastSelectedImage <- versionsUI[[1]]$inputId_select
 
-        print("determine last selected image")
-        print(versionsUI[[1]]$inputId_select)
-        print(r$lastSelectedImage)
+        vftDbg("determine last selected image")
+        vftDbg(versionsUI[[1]]$inputId_select)
+        vftDbg(r$lastSelectedImage)
       }
 
 
@@ -241,7 +241,7 @@ lastStep_server <- function(id, networkList , versionsUI ,
         shiny::isolate(r$result <- r$networkList[[r$selectedNetwork_position]]$pathUsage)
 
         #reactiveVal to manually trigger plotting
-        print("PLOTRESULTS()")
+        vftDbg("PLOTRESULTS()")
         # first print blank usageMap (with white color)
         #this is to set plot parameters. Above which a sensitivity matrix can be first plotted if needed
         # pathUsageColor <- c("white", "white")
@@ -406,7 +406,7 @@ lastStep_server <- function(id, networkList , versionsUI ,
 
       shinyjs::disable(id = "banner")
 
-      print("MAPPED IMAGE CLICKED")
+      vftDbg("MAPPED IMAGE CLICKED")
       #determine where to go back in history
       r$confirm <- input$banner
 

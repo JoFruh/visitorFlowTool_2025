@@ -34,8 +34,8 @@ polygonCreator <- function(leafletMapID, input, startingPolygons = sf::st_sfc(cr
 
 
   envBase$obsMarkerClick <- shiny::observeEvent(input[[mapMarkerClick]], {
-    print("MARKER CLICK")
-    print(input[[mapMarkerClick]])
+    vftDbg("MARKER CLICK")
+    vftDbg(input[[mapMarkerClick]])
     variables$markerWasClicked <- TRUE
 
     if(!is.null(input[[mapMarkerClick]]$group) ){#& envBase$step1Refreshing != TRUE
@@ -89,7 +89,7 @@ polygonCreator <- function(leafletMapID, input, startingPolygons = sf::st_sfc(cr
           variables$polyFinished <- TRUE
 
           variables$mapPoints <- sf::st_sfc(crs = 4326)
-          print(polygonEnv$polygonsList)
+          vftDbg(polygonEnv$polygonsList)
           proxy <- leaflet::leafletProxy(leafletMapID)%>%
             leaflet::clearGroup("eraseable")%>%
             leaflet::addGeoJSON(geojson = geojsonsf::sf_geojson(polygonEnv$polygonsList),
@@ -119,15 +119,15 @@ polygonCreator <- function(leafletMapID, input, startingPolygons = sf::st_sfc(cr
   envBase$obsMapClick <- shiny::observeEvent(input[[mapClick]], {
     #precised condition (default always evaluates as TRUE)
     # if(  inputConditionName == "DEFAULT" | input[[inputConditionName]] %in% inputConditionValue){
-    print("CLICK")
-    print(input[[mapClick]])
-    print(variables$markerWasClicked)
+    vftDbg("CLICK")
+    vftDbg(input[[mapClick]])
+    vftDbg(variables$markerWasClicked)
     if(!variables$markerWasClicked){
       if( !is.null(input[[mapClick]]$lng) ){
         #clear shapes
         variables$mapPoints <- rbind(variables$mapPoints,sf::st_as_sf( sf::st_sfc( sf::st_point(x = c(input[[mapClick]]$lng, input[[mapClick]]$lat)), crs = 4326) ) )
         #draw points
-        print(variables$mapPoints)
+        vftDbg(variables$mapPoints)
 
         proxy = leaflet::leafletProxy(leafletMapID )
 

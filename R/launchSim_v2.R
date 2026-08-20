@@ -216,7 +216,7 @@ cannotRecreate <- dayPop$goalV == -1
   # MAIN LOOP ####
   debugRetracing <- rep(0, max(dayPop$id)+1)
   #run simulation as long as agents are active, or max duration is not reached
-  print(MAX_TIMESTEPS)
+  vftDbg(MAX_TIMESTEPS)
 
 
 
@@ -1215,9 +1215,9 @@ cannotRecreate <- dayPop$goalV == -1
 
 
     if(timestep%%100 == 0){
-      print(paste0("TIME: ", time ))
-      print(paste0("TIMESTEPS: ", timestep))
-      print("--------------------------------")
+      vftDbg(paste0("TIME: ", time ))
+      vftDbg(paste0("TIMESTEPS: ", timestep))
+      vftDbg("--------------------------------")
     }
   }
 
@@ -1319,8 +1319,8 @@ cannotRecreate <- dayPop$goalV == -1
   #
   # }
 
-  print(paste0(nrow(dayPop), " AGENTS!"))
-  print(paste0(sum(dayPop$active == TRUE), " AGENTS STILL ACTIVE!"))
+  vftDbg(paste0(nrow(dayPop), " AGENTS!"))
+  vftDbg(paste0(sum(dayPop$active == TRUE), " AGENTS STILL ACTIVE!"))
 
   #GENERATE LINE STRINGS FOR ANALYSIS
   ## convert edge history into line strings for each agent's path

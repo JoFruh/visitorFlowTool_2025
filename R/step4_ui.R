@@ -1,6 +1,6 @@
 #### Step 1 UI - determine area ####
 step4_ui <- function(id, i18n){
-print("UI5")
+vftDbg("UI5")
       shiny::fluidPage(
         #activate translation for this ui
         shiny.i18n::usei18n(i18n),

@@ -352,8 +352,8 @@ sf_to_tidygraph3 = function(x, shape, directed = FALSE, parkingPolygons = NULL, 
   #Diagnostic
   cmp <- igraph::components(graph)
 
-  print(cmp$no)
-  print(sort(cmp$csize, decreasing = TRUE)[1:10])
+  vftDbg(cmp$no)
+  vftDbg(sort(cmp$csize, decreasing = TRUE)[1:10])
 
 
   return(list(graph = list(graph),

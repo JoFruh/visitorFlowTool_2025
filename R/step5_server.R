@@ -20,7 +20,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
     r$currentLang <- currentLang
 
     cat(file = stderr(),"CURRENTLANG : " )
-    cat(file = stderr(), r$currentLang )
+    vftDbgCat(r$currentLang )
 
     #keep track of checkbox
     r$agentCheckboxIsDisabled <- TRUE
@@ -162,13 +162,13 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
           name <- paste0(name, ".tif")
         }
 
-        print("BUILDING NAME")
+        vftDbg("BUILDING NAME")
 
         return(name)
       },
       content = function(file){
 
-        print("COPYING FILE")
+        vftDbg("COPYING FILE")
        file.copy(r$tiffFile, file)
 
       }
@@ -332,7 +332,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
     #internal function to generate version selection boxes
     updateVersions <- function(name, inputId_select, id_ui_name, position){
 
-      cat(file = stderr(), "TEST9")
+      vftDbgCat("TEST9")
 
       shiny::insertUI(
         selector = '#placeholder_step5',
@@ -340,17 +340,17 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
         ui = shiny::tags$div(id = paste0("step5", id_ui_name),
                       shiny::div(style = "height: 5px"),
 
-                      cat(file = stderr(), "TEST9a"),
+                      vftDbgCat("TEST9a"),
 
                       if(name == "Original" ){
                         if(is.null(r$networkList[[position]]$pathUsage) ){
-                          cat(file = stderr(), "TEST9b")
+                          vftDbgCat("TEST9b")
                           shiny::actionButton(inputId = shiny::NS(id, inputId_select), label =  name, width = "120px",  style = "height: 120px; position: relative; text-align: center; ",
                                        class = "selected noSim" )
 
 
                         }else{
-                          cat(file = stderr(), "TEST9c")
+                          vftDbgCat("TEST9c")
 
                           shiny::actionButton(inputId = shiny::NS(id, inputId_select), label =  name, width = "120px",  style = "height: 120px; position: relative; text-align: center; ",
                                        class = "selected withSim" )
@@ -359,7 +359,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
                         }
                       }else{
                         if(is.null(r$networkList[[position]]$pathUsage)){
-                          cat(file = stderr(), "TEST9d")
+                          vftDbgCat("TEST9d")
 
                           shiny::actionButton(inputId = shiny::NS(id, inputId_select), label = name, width = "120px",  style = "height: 120px; position: relative; text-align: center; ",
                                        class = "notSelected noSim" )
@@ -371,7 +371,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
                           # width = "120px",  style = "height: 120px; position: relative; text-align: center; ",
                           # class = "notSelected")
                         }else{
-                          cat(file = stderr(), "TEST9e")
+                          vftDbgCat("TEST9e")
 
                           shiny::actionButton(inputId = shiny::NS(id, inputId_select), label = name, width = "120px",  style = "height: 120px; position: relative; text-align: center; ",
                                        class = "notSelected withSim" )
@@ -385,7 +385,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
       #record Original as selected
       r$lastSelectedImage <- 1
 
-      cat(file = stderr(), "TEST10")
+      vftDbgCat("TEST10")
 
       #keep track of ids and inputIds
       # inserted_id_ui <<- c(inserted_id_ui, id_ui_name)
@@ -400,13 +400,13 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
       r$obsEventSelList[[length(r$obsEventSelList)+1]] <- list(
           shiny::observeEvent(input[[inputId_select]], {
 
-        print("SELECTED")
-        print(r$versionsUI)
+        vftDbg("SELECTED")
+        vftDbg(r$versionsUI)
         #select button (outline in green?)
         shinyjs::removeClass(inputId_select, "notSelected")
         shinyjs::addClass(inputId_select, "selected")
 
-        print(paste0("lastSelectedImage: ", r$lastSelectedImage))
+        vftDbg(paste0("lastSelectedImage: ", r$lastSelectedImage))
 
         if(!is.null(r$lastSelectedImage)){
           shinyjs::addClass(r$lastSelectedImage, "notSelected")
@@ -436,7 +436,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
           selectedNetwork_position <<- x
 
         }else{
-          print("ERROR: less networks than version buttons")
+          vftDbg("ERROR: less networks than version buttons")
 
         }
 
@@ -452,7 +452,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
         )
 
     }
-    cat(file = stderr(), "TEST11")
+    vftDbgCat("TEST11")
 
 
 
@@ -471,9 +471,9 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
 
 
 
-      cat(file = stderr(), "TEST12")
+      vftDbgCat("TEST12")
       # output$pathUsageMap <- leaflet::renderLeaflet({
-      print("ACTIVATING RENDERPLOT")
+      vftDbg("ACTIVATING RENDERPLOT")
 
       bboxUsage <- NULL
       map <- NULL
@@ -490,7 +490,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
           shiny::isolate(r$passageTable <- NULL)
 
           #reactiveVal to manually trigger plotting
-          print("PLOTRESULTS()")
+          vftDbg("PLOTRESULTS()")
           # first print blank usageMap (with white color)
           #this is to set plot parameters. Above which a sensitivity matrix can be first plotted if needed
           # pathUsageColor <- c("white", "white")
@@ -769,7 +769,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
 
               graphics::rasterImage(noSimPic,0,0,10,10)
 
-              print("EMPTY RENDERPLOT")
+              vftDbg("EMPTY RENDERPLOT")
             }, height = 600, width = 884)
 
           r$mapPresent <- FALSE
@@ -797,13 +797,13 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
 
       plotPathUsage()
 
-      cat(file = stderr(), "TEST15")
+      vftDbgCat("TEST15")
 
-      cat(file = stderr(), paste0("isFirstRun_stp6 : ", isFirstRun_stp6))
+      vftDbgCat(paste0("isFirstRun_stp6 : ", isFirstRun_stp6))
 
       #CREATE ORIGINAL VERSIONS (FOR FIRST RUN ONLY) ####
       if(isFirstRun_stp6 | is.null(r$versionsUI) ){
-        cat(file = stderr(), "TEST15b")
+        vftDbgCat("TEST15b")
 
 
 
@@ -894,12 +894,12 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
 
       #Language Change ####
       langChangeObs <- observeEvent(input$languageSelect_5, {
-        print("CHANGE LANGUAGE")
+        vftDbg("CHANGE LANGUAGE")
         if(input$languageSelect_5 == "de"){
           # i18n$set_translation_language('de')
           shiny.i18n::update_lang("de")
           i18n()$set_translation_language("de")
-          print("DE")
+          vftDbg("DE")
           output$bannerUI_5 <- shiny::renderUI({
             imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/step5_wsl.png"), list() )
             #replace /" with ', to avoid problems
@@ -939,7 +939,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
 
           r$currentLang <- "fr"
 
-          print("FR")
+          vftDbg("FR")
         }else if(input$languageSelect_5 == "en"){
           # i18n$set_translation_language('en')
           shiny.i18n::update_lang("en")
@@ -963,7 +963,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
 
           r$currentLang <- "en"
 
-          print("EN")
+          vftDbg("EN")
         }else if(input$languageSelect_5 == "it"){
           # i18n$set_translation_language('it')
           shiny.i18n::update_lang("it")
@@ -974,7 +974,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
           })
 
 
-          print("IT")
+          vftDbg("IT")
         }
 
         r$refreshMap <- TRUE
@@ -983,7 +983,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
 
       #observe banner click (choosing to step back in history)
       obsBanner <- observeEvent(input$banner,  {
-        print("MAPPED IMAGE CLICKED")
+        vftDbg("MAPPED IMAGE CLICKED")
         #determine where to go back in history
         r$confirm <- input$banner
 
@@ -992,7 +992,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
         obsBanner$destroy()
         #remove all versions
         for(obs in r$obsEventSelList){
-          print(paste0("obs", obs) )
+          vftDbg(paste0("obs", obs) )
           obs[[1]]$destroy()
         }
         #treat next step 6 as first run
@@ -1137,9 +1137,9 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
         #disable launch sim button
         shinyjs::disable("launchSim")
 
-        cat(file = stderr(), "TEST16")
+        vftDbgCat("TEST16")
 
-        print("LAUNCH SIMULATION")
+        vftDbg("LAUNCH SIMULATION")
 
         #use selected network to launch simulation
         network <- r$selectedNetwork_r()[[1]]
@@ -1155,14 +1155,14 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
         nbAgents <- nbResidents/CONST_residentDivision
 
 
-        print("GENERATE POPULATION")
+        vftDbg("GENERATE POPULATION")
 
 
         #get dataframe of all agents, their characteristics and their starting positions
         pop <- generatePopulation(network, nAgents = nbAgents, parkingIntensity = 0.1)
 
 
-        print("LAUNCH MULTISIM")
+        vftDbg("LAUNCH MULTISIM")
 
         #launch simulations
         results <- launchMultiSim(pop, network, days = "1wk", finalPolygons = finalPolygons, progress = progress)
@@ -1178,7 +1178,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
         r$passageTable <- NULL
 
         # gc()
-        print("RESULTS DONE")
+        vftDbg("RESULTS DONE")
 
 
 
@@ -1189,7 +1189,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
         #update button to reflect presence of pathUsage
         inputid <- r$versionsUI[[selectedNetwork_position]]$inputId_select
 
-        print(paste0("inputId: ", inputid))
+        vftDbg(paste0("inputId: ", inputid))
 
         shinyjs::removeClass(inputid, "noSim")
         shinyjs::addClass(inputid, "withSim")
@@ -1202,7 +1202,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
 
         # PLOT SELECTED SIMULATIONS
 
-        print("Trying to plot:")
+        vftDbg("Trying to plot:")
 
         #PLOT OUTPUT####
 
@@ -1307,7 +1307,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
 
       #observe Agent checkbox ####
       obsAgent <- shiny::observeEvent(input$agentCheckbox, {
-        print("OBS AGENT")
+        vftDbg("OBS AGENT")
         if(r$agentCheckboxIsDisabled == FALSE){
 
           if(input$onlyAOIcheckbox == 1){
@@ -1422,7 +1422,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
 
       #observe SM ####
       obsSM <- shiny::observeEvent(input$SMcheckbox, {
-        print("OBS SM")
+        vftDbg("OBS SM")
 
         if(input$SMcheckbox == 1){
           proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet"
@@ -1440,7 +1440,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
       }, ignoreInit = TRUE)
 
       obsParking <- shiny::observeEvent(input$ParkingCheckbox, {
-        print("OBS PARKING")
+        vftDbg("OBS PARKING")
 
         if(length(r$networkList[[selectedNetwork_position]]$parking) > 0){
 
@@ -1504,16 +1504,16 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
         #get map bounds from leaflet
         mapBounds <- input$mapAreaLeaflet_bounds
 
-        print(paste0("mapBounds: ", mapBounds))
+        vftDbg(paste0("mapBounds: ", mapBounds))
 
-        cat(file = stderr(), "START TIFF\n")
+        vftDbgCat("START TIFF\n")
 
         #Generate image (A3 format)
 
         r$tiffName <- gsub("[ ]|:|[.]|-", "", paste0("TIFF_",Sys.time()))
         r$tiffFile <- paste0(tempdir(), "/",r$tiffName)
 
-        cat(file = stderr(), paste0("file location: ",r$tiffFile) )
+        vftDbgCat(paste0("file location: ",r$tiffFile) )
 
 
         tiff(filename = r$tiffFile,  compression = "lzw", height = 29.7, width = 42, units = "cm", res = 300)
@@ -1536,7 +1536,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
                      rbind(matrix(rep(legendNb+3, legendNb), nrow = legendNb),
                             matrix(rep(legendNb+3, 2), nrow = 2) ) )
 
-        cat(file = stderr(), "SMCheckbox\n")
+        vftDbgCat("SMCheckbox\n")
 
 
         if(input$SMcheckbox == FALSE){
@@ -1552,7 +1552,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
         vertexTable <- dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(nodes) )
         # startingPoints <- sf::st_geometry(sf::st_coordinates(sf::st_as_sf( vertexTable[vertexTable$nodeID %in% r$result$dayPop$startV , ]) ) )
 
-        cat(file = stderr(), "AOI\n")
+        vftDbgCat("AOI\n")
 
         if(input$onlyAOIcheckbox == 1){
 
@@ -1585,8 +1585,8 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
           }
 
         }
-        cat(file = stderr(), "SM\n")
-        cat(file = stderr(), paste0("input$SM: ", input$SMcheckbox) )
+        vftDbgCat("SM\n")
+        vftDbgCat(paste0("input$SM: ", input$SMcheckbox) )
         # if(input$SMcheckbox == FALSE){
           pal <- leaflet::colorNumeric(c("darkgrey",colorRampPalette(c("lightblue", "steelblue", "#182db5", "#37046e"))(max(passageTable$passage)-1) ), domain = c(0,max(passageTable$passage)) )
         # }else{
@@ -1594,44 +1594,44 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
         #
         #   pal <- leaflet::colorNumeric(c("grey",colorRampPalette(c( "darkgrey", "black"))(max(passageTable$passage)-1) ), domain = c(0,max(passageTable$passage)) )
         # }
-        cat(file = stderr(), "basemap\n")
+        vftDbgCat("basemap\n")
 
 
         basemap <- maptiles::get_tiles(x = terra::ext(c(mapBounds[[4]], mapBounds[[2]], mapBounds[[3]], mapBounds[[1]])),
                                        provider = "OpenStreetMap", cachedir = vft_tileCacheDir)
 
-        cat(file = stderr(), "plot basemap 1\n")
+        vftDbgCat("plot basemap 1\n")
 
-        cat(file = stderr(), paste0("basemap: ", basemap) )
+        vftDbgCat(paste0("basemap: ", basemap) )
 
         # terra::plot(terra::rast(matrix(1, nrow = 10, ncol = 10), ext = terra::ext(basemap)), col = "white")
         terra::plot(basemap,  alpha = 0.5, ext = terra::ext(c(mapBounds[[4]], mapBounds[[2]], mapBounds[[3]], mapBounds[[1]]) ) )
 
-        cat(file = stderr(), "plot basemap 2\n")
+        vftDbgCat("plot basemap 2\n")
 
         terra::plot(basemap,1, col = "white",  alpha = 0.5, add = TRUE, legend = FALSE)
 
-        cat(file = stderr(), "aoi\n")
+        vftDbgCat("aoi\n")
 
         if(input$aoi == TRUE ){
           plot(sf::st_geometry(finalPolygons), col = "#29ed1f30", border = "#0b630650", lwd = 5, add = TRUE)
         }
 
-        cat(file = stderr(), "parking\n")
+        vftDbgCat("parking\n")
 
 
         if(input$ParkingCheckbox == TRUE & length(r$networkList[[selectedNetwork_position]]$parking) > 0){
           plot(sf::st_geometry(r$networkList[[selectedNetwork_position]]$parking ),
                col = "#3289a880", border = "#3289a8", lwd = 3, add = TRUE)
         }
-        cat(file = stderr(), "residential\n")
+        vftDbgCat("residential\n")
 
         if(input$ResidentialCheckbox == TRUE & length(r$networkList[[selectedNetwork_position]]$residential) > 0){
           plot(sf::st_geometry(r$networkList[[selectedNetwork_position]]$residential),
                col = "#8a722b80", border = "#8a722b", lwd = 3, add = TRUE)
         }
 
-        cat(file = stderr(), "sm\n")
+        vftDbgCat("sm\n")
 
         if(input$SMcheckbox == TRUE){
           terra::plot(SM_pres,alpha = 0.4, add = TRUE, col = SMcolors, legend = FALSE)
@@ -1643,7 +1643,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
                     ylim = c(mapBounds[[3]], mapBounds[[1]]) , add = TRUE, legend = FALSE)
 
 
-        cat(file = stderr(), "starting\n")
+        vftDbgCat("starting\n")
 
         if(input$startingCheckbox){
           vertexTable <- dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(nodes) )
@@ -1701,7 +1701,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
         # }
         #ADD LEGENDS ####
         # map legend ####
-        cat(file = stderr(), "LEGENDS\n")
+        vftDbgCat("LEGENDS\n")
 
         par(mar = c(0, 0, 2, 0))
         #paths
@@ -2114,7 +2114,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
 
         dev.off()
 
-cat(file = stderr(), "FINISHED TIFF\n")
+vftDbgCat("FINISHED TIFF\n")
 
         #create final plot
 
@@ -2176,9 +2176,9 @@ cat(file = stderr(), "FINISHED TIFF\n")
 
 
         #destroy all observers in list
-        print(paste0("obsEventSelList: ", r$versionsUI))
+        vftDbg(paste0("obsEventSelList: ", r$versionsUI))
         for(obs in r$obsEventSelList){
-          print(paste0("obs", obs) )
+          vftDbg(paste0("obs", obs) )
           obs[[1]]$destroy()
         }
         #REMOVE ALL VERSIONS ####
@@ -2199,7 +2199,7 @@ cat(file = stderr(), "FINISHED TIFF\n")
 
 
 
-      cat(file = stderr(), "TEST17")
+      vftDbgCat("TEST17")
 
     #GENERATE VERSION IMAGES ####
     if(length(r$versionsUI) > 0){
@@ -2225,13 +2225,13 @@ cat(file = stderr(), "FINISHED TIFF\n")
       #automatically plot original
       r$lastSelectedImage <- r$versionsUI[[1]]$inputId_select
 
-      print("determine last selected image")
-      print(r$versionsUI[[1]]$inputId_select)
-      print(r$lastSelectedImage)
+      vftDbg("determine last selected image")
+      vftDbg(r$versionsUI[[1]]$inputId_select)
+      vftDbg(r$lastSelectedImage)
     }
 
-    print("RETURNING STEP 6")
-    print(r$lastSelectedImage)
+    vftDbg("RETURNING STEP 6")
+    vftDbg(r$lastSelectedImage)
 #no confirmation at first
     r$confirm <- 0
     return(list(pathUsage = shiny::reactive(r$result$pathUsage), networkList = shiny::reactive(r$networkList), confirm = shiny::reactive({r$confirm}), newVersions = shiny::reactive(input$newVersionsButton), trigger = shiny::reactive(r$triggerStp6), versionsUI = shiny::reactive(r$versionsUI),

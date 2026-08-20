@@ -34,7 +34,7 @@ step3_server <- function(id, network, shape, confirm, i18n, currentLang,
 
     r$needHelp <- needHelp
 
-    cat(file = stderr(), "TRUE_STEP_4_STARTED")
+    vftDbgCat("TRUE_STEP_4_STARTED")
 
     r$currentLang <- currentLang
 
@@ -127,7 +127,7 @@ step3_server <- function(id, network, shape, confirm, i18n, currentLang,
     #### FUNCTIONS ####
 
     output$AOIMap <- shiny::renderPlot({
-      cat(file = stderr(), "PLOT-1")
+      vftDbgCat("PLOT-1")
 
       plotUpdate()
 
@@ -136,8 +136,8 @@ step3_server <- function(id, network, shape, confirm, i18n, currentLang,
 
         vectShape <- terra::vect(shape_wgs)
         vectExt <- as.vector(terra::ext(terra::buffer(vectShape, 100)))
-        cat(file = stderr(), paste0("basemap: ", basemap_cropped, "\n") )
-        cat(file = stderr(), paste0("vectExt: ", vectExt_init, "\n") )
+        vftDbgCat(paste0("basemap: ", basemap_cropped, "\n") )
+        vftDbgCat(paste0("vectExt: ", vectExt_init, "\n") )
 
         terra::plotRGB(basemap_cropped, reset = FALSE)
         # cat(file = stderr(), "PLOT1")
@@ -223,12 +223,12 @@ step3_server <- function(id, network, shape, confirm, i18n, currentLang,
 
     #Language Change ####
     langChangeObs <- observeEvent(input$languageSelect_3, {
-      print("CHANGE LANGUAGE")
+      vftDbg("CHANGE LANGUAGE")
       if(input$languageSelect_3 == "de"){
         # i18n$set_translation_language('de')
         shiny.i18n::update_lang("de")
         i18n()$set_translation_language("de")
-        print("DE")
+        vftDbg("DE")
         output$bannerUI_3 <- shiny::renderUI({
           imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/step3_wsl.png"), list() )
           #replace /" with ', to avoid problems
@@ -249,7 +249,7 @@ step3_server <- function(id, network, shape, confirm, i18n, currentLang,
         })
 
 
-        print("FR")
+        vftDbg("FR")
       }else if(input$languageSelect_3 == "en"){
         # i18n$set_translation_language('en')
         shiny.i18n::update_lang("en")
@@ -260,7 +260,7 @@ step3_server <- function(id, network, shape, confirm, i18n, currentLang,
         })
 
 
-        print("EN")
+        vftDbg("EN")
       }else if(input$languageSelect_3 == "it"){
         # i18n$set_translation_language('it')
         shiny.i18n::update_lang("it")
@@ -271,14 +271,14 @@ step3_server <- function(id, network, shape, confirm, i18n, currentLang,
         })
 
 
-        print("IT")
+        vftDbg("IT")
       }
 
     }, ignoreInit = TRUE)
 
     #observe banner click (choosing to step back in history)
     obsBanner <- observeEvent(input$banner,  {
-      print("MAPPED IMAGE CLICKED")
+      vftDbg("MAPPED IMAGE CLICKED")
       #determine where to go back in history
       r$confirm <- input$banner
 

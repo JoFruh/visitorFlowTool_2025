@@ -235,8 +235,8 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
       }, ignoreInit = TRUE)
 
       r$obsMarkerClick <- shiny::observeEvent(input[[mapMarkerClick]], {
-        print("MARKER CLICK")
-        print(input[[mapMarkerClick]])
+        vftDbg("MARKER CLICK")
+        vftDbg(input[[mapMarkerClick]])
         r$markerWasClicked <- TRUE
 
         if(!is.null(input[[mapMarkerClick]]$group) ){#& r$step1Refreshing != TRUE
@@ -293,7 +293,7 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
 
                 # poly$DULN <- mean(values$Nature_walk, na.rm = TRUE) #[values$all > -20] no longer need to avoid values <= -20
 
-                if(is.na(poly$DULN)){cat(file = stderr(), "WARNING step4: poly$DULN is NA after extraction\n")}
+                if(is.na(poly$DULN)){vftDbgCat("WARNING step4: poly$DULN is NA after extraction\n")}
 
                  #add area to polygon
                 poly$area <- as.numeric(sf::st_area(poly$polygons))
@@ -308,7 +308,7 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
               r$polyFinished <- TRUE
 
               r$mapPoints <- sf::st_sfc(crs = 4326)
-              print(r$polygonsList)
+              vftDbg(r$polygonsList)
               proxy <- leaflet::leafletProxy(leafletMapID)|>
                 leaflet::clearGroup("eraseable")|>
                 leaflet::addGeoJSON(geojson = geojsonsf::sf_geojson(r$polygonsList),
@@ -338,9 +338,9 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
       r$obsMapClick <- shiny::observeEvent(input[[mapClick]], {
         #precised condition (default always evaluates as TRUE)
         # if(  inputConditionName == "DEFAULT" | input[[inputConditionName]] %in% inputConditionValue){
-        print("CLICK")
-        print(input[[mapClick]])
-        print(r$markerWasClicked)
+        vftDbg("CLICK")
+        vftDbg(input[[mapClick]])
+        vftDbg(r$markerWasClicked)
 
         #if we're not in Polygon Cut mode
         if(input$cutButton == FALSE){
@@ -349,7 +349,7 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
             #clear shapes
             r$mapPoints <- rbind(r$mapPoints,sf::st_as_sf( sf::st_sfc( sf::st_point(x = c(input[[mapClick]]$lng, input[[mapClick]]$lat)), crs = 4326) ) )
             #draw points
-            print(r$mapPoints)
+            vftDbg(r$mapPoints)
 
             proxy = leaflet::leafletProxy(leafletMapID )
 
@@ -593,8 +593,8 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
       if(numberOfPolygons == "multi"){
 
         r$obsErase <- shiny::observeEvent(input[[mapGeojsonClick]], {
-          print("SHAPE CLICK")
-          print(input[[mapGeojsonClick]])
+          vftDbg("SHAPE CLICK")
+          vftDbg(input[[mapGeojsonClick]])
 
           r$shapeWasClicked <- TRUE
 
@@ -627,7 +627,7 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
       }else{
 
         r$obsErase <- shiny::observeEvent(input[[paste0(leafletMapID, "_click")]], {
-          print("GENERAL CLICK")
+          vftDbg("GENERAL CLICK")
 
           #create variable if missing
           if(is.null(r$polyFinished) ){r$polyFinished <- FALSE}
@@ -747,12 +747,12 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
 
       #Language Change ####
       langChangeObs <- observeEvent(input$languageSelect_4, {
-        print("CHANGE LANGUAGE")
+        vftDbg("CHANGE LANGUAGE")
         if(input$languageSelect_4 == "de"){
           # i18n$set_translation_language('de')
           shiny.i18n::update_lang("de")
           i18n()$set_translation_language("de")
-          print("DE")
+          vftDbg("DE")
           output$bannerUI_4 <- shiny::renderUI({
             imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/step4_wsl.png"), list() )
             #replace /" with ', to avoid problems
@@ -773,7 +773,7 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
           })
 
 
-          print("FR")
+          vftDbg("FR")
         }else if(input$languageSelect_4 == "en"){
           # i18n$set_translation_language('en')
           shiny.i18n::update_lang("en")
@@ -784,7 +784,7 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
           })
 
 
-          print("EN")
+          vftDbg("EN")
         }else if(input$languageSelect_4 == "it"){
           # i18n$set_translation_language('it')
           shiny.i18n::update_lang("it")
@@ -795,7 +795,7 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
           })
 
 
-          print("IT")
+          vftDbg("IT")
         }
 
       }, ignoreInit = TRUE)
@@ -805,7 +805,7 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
 
         shinyjs::disable(id = "banner")
 
-        print("MAPPED IMAGE CLICKED")
+        vftDbg("MAPPED IMAGE CLICKED")
         #determine where to go back in history
         r$confirm <- input$banner
 
@@ -848,8 +848,8 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
                                             queue = ipc::shinyQueue(),
                                             millis = 1000)
         future::future({
-          print("CONFIRM5")
-          cat(file = stderr(), "TEST1\n")
+          vftDbg("CONFIRM5")
+          vftDbgCat("TEST1\n")
           # cat(file = stderr(), paste0("polygonEnv is made of : ", ls(polygonEnv)))
 
 
@@ -861,15 +861,15 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
           # node_points <- as_tibble( network_Tbl_allCH|>activate("nodes") )
           vertices_vect <- terra::vect(vertices)
 
-          cat(file = stderr(), "TEST2")
+          vftDbgCat("TEST2")
           #sample raster with nodes
-          cat(file = stderr(), paste0("finalPolygons are: ", str(finalPolygons)))
-          cat(file = stderr(), paste0("x is: ", str(terra::vect(finalPolygons))))
-          cat(file = stderr(), paste0("vertices_vect is: ", class(vertices_vect) ) )
-          cat(file = stderr(), "TEST2b" )
+          vftDbgCat(paste0("finalPolygons are: ", str(finalPolygons)))
+          vftDbgCat(paste0("x is: ", str(terra::vect(finalPolygons))))
+          vftDbgCat(paste0("vertices_vect is: ", class(vertices_vect) ) )
+          vftDbgCat("TEST2b" )
 
           vertices_AOI_data <- terra::extract(terra::vect(finalPolygons["AOI"]), vertices_vect)
-          cat(file = stderr(), paste0("vertices_AOI_data is: ", class(vertices_AOI_data) ) )
+          vftDbgCat(paste0("vertices_AOI_data is: ", class(vertices_AOI_data) ) )
 
           #add node_DULN data to original nodes
           newvertices <- vertices
@@ -878,7 +878,7 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
 
 
 
-          cat(file = stderr(), "TEST3")
+          vftDbgCat("TEST3")
           #TODO:
           #somewhere here: for every polygon-extracted nodes, check if they form a single component, otherwise keep largest component
           #cycle through every AOI letter
@@ -903,7 +903,7 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
             newvertices$AOI[unique(unlist(igraph::neighborhood(network, 1, nodes = largestCompID)))] <- letter
           }
 
-          cat(file = stderr(), "TEST4")
+          vftDbgCat("TEST4")
 
           #add edge AOICol column for Debugging agent movement
           newedges <- sf::st_as_sf(dplyr::as_tibble(tidygraph::activate(network, edges)))
@@ -917,11 +917,11 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
           # #correct edge Table geometry name
           # newEdgesTbl <- as_tibble(newedges)
           # newEdgesTbl <- rename(newEdgesTbl, geometry = `_ogr_geometry_`)
-          cat(file = stderr(), "TEST5")
+          vftDbgCat("TEST5")
 
           # finalPolygons2 <<- finalPolygons
 
-          cat(file = stderr(), "TEST6")
+          vftDbgCat("TEST6")
 
 
 
@@ -1146,7 +1146,7 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
     # OBSERVER TO LAUNCH AFTER PROMISE FINALISES####
     observeEvent(r$promiseFinished, {
 
-      print("LAUNCHING POST-PROMISE")
+      vftDbg("LAUNCHING POST-PROMISE")
       plotMap()
 
 
@@ -1259,7 +1259,7 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
               r$polygonsList <- r$startingPolygons
 
               r$promiseFinished <- 1
-              print("promise finished")
+              vftDbg("promise finished")
 
             })
           }, ignoreInit = FALSE, ignoreNULL = FALSE, once = TRUE)
@@ -1273,7 +1273,7 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
 
           r$polygonsList <- r$startingPolygons
           plotMap()
-          print("promise finished")
+          vftDbg("promise finished")
 
         }
 
@@ -1299,14 +1299,14 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
         r$polygonsList <- r$startingPolygons
 
         plotMap()
-        print("promise finished")
+        vftDbg("promise finished")
         # polygonsList <<-  st_sfc(crs = 4326)
       }
 
     }else{
       r$startingPolygons <- r$finalPolygons
       plotMap()
-      print("promise finished")
+      vftDbg("promise finished")
 
     }
 

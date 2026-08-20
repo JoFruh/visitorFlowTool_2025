@@ -2,7 +2,7 @@
 
 step1_ui <- function(id, i18n){
 languageTable <- read.csv2(vftData("tables/translation_de.csv"))
-print("UI1")
+vftDbg("UI1")
             shiny::fluidPage(
               #activate translation for this ui
               shiny.i18n::usei18n(i18n),

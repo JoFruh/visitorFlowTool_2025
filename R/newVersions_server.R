@@ -182,8 +182,8 @@ newVersions_server <- function(id, networkList, confirm, i18n, currentLang, isFi
 #
 #     r$trigger <- NULL
 
-    print("NETWORK LIST:")
-print(r$networkList)
+    vftDbg("NETWORK LIST:")
+vftDbg(r$networkList)
 
 
     # selectedNetwork_position <- NULL
@@ -215,7 +215,7 @@ if(is.null(r$updateNetworkPlot)){
     if(isFirstRun){
 
 
-      print("NEW VERSIONS FIRST RUN")
+      vftDbg("NEW VERSIONS FIRST RUN")
 
       r$versionBtn_nb <- 1
 
@@ -247,10 +247,10 @@ if(is.null(r$updateNetworkPlot)){
 
       shinyjs::disable("newVersionsConfirmButton")
       shinyjs::disable("addVersionButton")
-      print("BTN$INPUTID: ")
+      vftDbg("BTN$INPUTID: ")
 
       for(btn in r$versionsUI){
-        print(btn$inputId_select)
+        vftDbg(btn$inputId_select)
         shinyjs::disable(btn$inputId_select)
         if(!is.null(btn$inputId_removal)){
           shinyjs::disable(btn$inputId_removal)
@@ -370,8 +370,8 @@ if(is.null(r$updateNetworkPlot)){
 
               # edgesShape <- edgeTbl  %>% sf::st_as_sf()
 
-              print("NETWORK EDGES:")
-              print(edgeTbl)
+              vftDbg("NETWORK EDGES:")
+              vftDbg(edgeTbl)
 
               nodeTbl <- shiny::isolate(r$networkList[[r$position]]$network %>% tidygraph::activate(nodes) %>% dplyr::as_tibble())
               #PLOT INTERACTIVE NETWORK MAP (if not original)
@@ -462,8 +462,8 @@ if(is.null(r$updateNetworkPlot)){
 
               # edgesShape <- edgeTbl  %>% sf::st_as_sf()
 
-              print("NETWORK EDGES:")
-              print(edgeTbl)
+              vftDbg("NETWORK EDGES:")
+              vftDbg(edgeTbl)
 
               # nodeTbl <- shiny::isolate(r$networkList[[r$position]]$network %>% tidygraph::activate(nodes) %>% dplyr::as_tibble())
               #PLOT INTERACTIVE NETWORK MAP (if not original)
@@ -742,17 +742,17 @@ if(is.null(r$updateNetworkPlot)){
 
         #add or remove dummy group (this is to trigger an observer that determines when the map finished rendering)
         #in isolation to avoid linking input$versionMap_groups
-        print("GROUP LENGTH: ")
-        print(shiny::isolate(length(input$versionMap_groups)) )
+        vftDbg("GROUP LENGTH: ")
+        vftDbg(shiny::isolate(length(input$versionMap_groups)) )
         if( shiny::isolate(!"dummy" %in% input$versionMap_groups ) ){
-          print("ADDING GROUP")
+          vftDbg("ADDING GROUP")
           #add a group (with invisible marker)
           leaflet::leafletProxy("versionMap" )%>%
             leaflet::addCircles(lng = 7.69, lat = 47.37,
                                 opacity = 0, fill = FALSE,
                                 group = "dummy")
         }else{
-          print("REMOVING GROUP")
+          vftDbg("REMOVING GROUP")
           #remove the group
           leaflet::leafletProxy("versionMap" )%>%
             leaflet::clearGroup("dummy")
@@ -766,8 +766,8 @@ if(is.null(r$updateNetworkPlot)){
         }
 
 
-        print("GROUPS: ")
-        shiny::isolate(print(input$versionMap_groups))
+        vftDbg("GROUPS: ")
+        shiny::isolate(vftDbg(input$versionMap_groups))
 
     # }else{
       # #prepare data of current version
@@ -1207,7 +1207,7 @@ h4(shiny::HTML(as.character( i18n()$t("<br>Die Änderung von <b>Parkplätzen und
 
 #Language Change ####
 langChangeObs <- observeEvent(input$languageSelect_7, {
-  print("CHANGE LANGUAGE")
+  vftDbg("CHANGE LANGUAGE")
   if(input$languageSelect_7 == "de"){
     # i18n$set_translation_language('de')
     shiny.i18n::update_lang("de")
@@ -1224,7 +1224,7 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
 
     r$currentLang <- "de"
 
-    print("DE")
+    vftDbg("DE")
   }else if(input$languageSelect_7 == "fr"){
     # i18n$set_translation_language('fr')
     shiny.i18n::update_lang("fr")
@@ -1258,8 +1258,8 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
 ##Observe end of render ####
       #observe event when map finishes rendering
       obsFinishRender <- shiny::observeEvent(input$versionMap_groups,{
-        print("GROUPS CHANGED")
-        print(input$versionMap_groups)
+        vftDbg("GROUPS CHANGED")
+        vftDbg(input$versionMap_groups)
         shinyjs::enable("newVersionsConfirmButton")
         shinyjs::enable("addVersionButton")
         shinyjs::enable("contextChoice")
@@ -1280,9 +1280,9 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
                                        center_lat = input[["versionMap_center"]]$lat,
                                        zoom = input[["versionMap_zoom"]])
 
-        print("CONTEXT CHANGED")
-        print(input$contextChoice)
-        print("---")
+        vftDbg("CONTEXT CHANGED")
+        vftDbg(input$contextChoice)
+        vftDbg("---")
         r$oldContext <- r$context
 
         r$context <- input$contextChoice
@@ -1421,8 +1421,8 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
               shinyjs::removeClass(inputId_select, "notSelected")
               shinyjs::addClass(inputId_select, "selected")
 
-              print("lastSelectedButton: ")
-              print(r$lastSelectedButton)
+              vftDbg("lastSelectedButton: ")
+              vftDbg(r$lastSelectedButton)
               if(!is.null(r$lastSelectedButton)){
                 shinyjs::addClass(r$lastSelectedButton, "notSelected")
               }
@@ -1452,12 +1452,12 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
 
                 r$position <- x
 
-                print("POSITION AND NETWORK")
-                print(r$position)
-                print(r$networkList[[r$position]])
+                vftDbg("POSITION AND NETWORK")
+                vftDbg(r$position)
+                vftDbg(r$networkList[[r$position]])
 
               }else{
-                print("ERROR: less networks than version buttons")
+                vftDbg("ERROR: less networks than version buttons")
 
 
               }
@@ -1531,7 +1531,7 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
     removeObservers <- function(appndObs){
 
       for(obs in appndObs){
-        print(obs)
+        vftDbg(obs)
         obs[[1]]$destroy()
       }
 
@@ -1555,7 +1555,7 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
         # inputId_select <- paste0("versionBtn", versionBtn_nb)
 
         for(i in 1:length(r$versionsUI) ){
-          print("appended removal details::")
+          vftDbg("appended removal details::")
 
           appendVersion(name = r$versionsUI[[i]]$name,
                          inputId_select = r$versionsUI[[i]]$inputId_select,
@@ -1613,27 +1613,27 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
         # # shinyjs::disable("placeholder")
         # updateNetworkPlot(updateNetworkPlot()+1)
       }else{
-            print("ERROR: Original does not exist")
+            vftDbg("ERROR: Original does not exist")
       }
 
     #INITIALIZATION ####
 
-    print("INITIALIZATION")
+    vftDbg("INITIALIZATION")
 
     shinyjs::disable("versionBtn0")
 
 
     if(!isFirstRun){
 
-      print("UPDATE NETWORK 4")
+      vftDbg("UPDATE NETWORK 4")
       r$updateNetworkPlot(r$updateNetworkPlot()+1)
 
       shinyjs::disable("newVersionsConfirmButton")
       shinyjs::disable("addVersionButton")
-      print("BTN$INPUTID: ")
+      vftDbg("BTN$INPUTID: ")
       for(btn in r$versionsUI){
 
-        print(btn$inputId_select)
+        vftDbg(btn$inputId_select)
         shinyjs::disable(btn$inputId_select)
         if(!is.null(btn$inputId_removal)){
           shinyjs::disable(btn$inputId_removal)
@@ -1645,12 +1645,12 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
     }
 
 
-print("output")
+vftDbg("output")
 
 
 
 
-print("add versions")
+vftDbg("add versions")
 
       #ADDING VERSIONS ####
 
@@ -1738,7 +1738,7 @@ print("add versions")
             # ntwrkLst_r(networkLst)
 
 
-            print(paste0("LENGTH OF NETWORKLIST: ", length(r$networkList)) )
+            vftDbg(paste0("LENGTH OF NETWORKLIST: ", length(r$networkList)) )
           }
         }, ignoreInit = TRUE)
 
@@ -1754,24 +1754,24 @@ print("add versions")
                                          center_lat = input[["versionMap_center"]]$lat,
                                          zoom = input[["versionMap_zoom"]])
 
-          print(input[["versionMap_marker_click"]])
+          vftDbg(input[["versionMap_marker_click"]])
           #only allow interaction if not Original
           if(r$position != 1){
 
             if(r$context == 1){
               #### CONTEXT 1: INFRASTRUCTURE ####
 
-              print("MARKER WAS CLICKED")
+              vftDbg("MARKER WAS CLICKED")
               r$markerWasClicked <- TRUE
               #not linking
               if(r$isLinking == FALSE){
 
-                print("LINKING NOT ACTIVE")
+                vftDbg("LINKING NOT ACTIVE")
 
                 #initialise linking (between nodes)
                 r$isLinking <- TRUE
 
-                print(paste0("isLinking: ", r$isLinking))
+                vftDbg(paste0("isLinking: ", r$isLinking))
 
                 #record links
                 if(is.null(r$firstLinkNode)){
@@ -1800,7 +1800,7 @@ print("add versions")
                   #                           options = markerOptions(pane = "layer3"))
                 }else{
 
-                  print("ERROR: firstLinkNode meant to be empty")
+                  vftDbg("ERROR: firstLinkNode meant to be empty")
                   r$firstLinkNode <- NULL
                 }
 
@@ -1810,16 +1810,16 @@ print("add versions")
 
                 #check if X marker was clicked (in which case remove node)
                 # DELETE NODE ####
-                print("MAP CLICK:")
-                print(input[["versionMap_marker_click"]]$id)
+                vftDbg("MAP CLICK:")
+                vftDbg(input[["versionMap_marker_click"]]$id)
                 if(input[["versionMap_marker_click"]]$id == "XXX"){
 
                   network <- r$networkList[[r$position]]$network
-                  print("TO REMOVE NODE")
+                  vftDbg("TO REMOVE NODE")
 
                   originalID <- r$firstLinkNode$id
                   #split string on "." (requires [.] rather than .)
-                  print(paste0("originalID 3: ", originalID) )
+                  vftDbg(paste0("originalID 3: ", originalID) )
                   # splt <- strsplit(originalID, "[.]")
                   # ptID_1 <- splt[[1]][[1]]
                   # ptID_1 <- substr(ptID_1, 2, nchar(ptID_1) )
@@ -1829,20 +1829,20 @@ print("add versions")
                   #detect edges to remove from plot
                   remainingEdges <- network %>% tidygraph::activate(edges) %>% dplyr::as_tibble()
                   remainingEdges <- remainingEdges %>% dplyr::filter(.data$to_2 == ptID_1 | .data$from_2 == ptID_1)
-                  print("ptID_1")
-                  print(ptID_1)
-                  print("REMAINING EDGES: ")
-                  print(remainingEdges)
+                  vftDbg("ptID_1")
+                  vftDbg(ptID_1)
+                  vftDbg("REMAINING EDGES: ")
+                  vftDbg(remainingEdges)
                   edgesToRemove <- remainingEdges$edgeID_2
 
-                  print("remaining Edge IDs:")
-                  print(remainingEdges$edgeID)
+                  vftDbg("remaining Edge IDs:")
+                  vftDbg(remainingEdges$edgeID)
                   # edgesToRemove <- sapply(edgesToRemove, function(x) paste0("X", x))
-                  print(edgesToRemove)
+                  vftDbg(edgesToRemove)
 
                   #remove node from network (removes edges linked to node automatically)
-                  print("NETWORK BEFORE:")
-                  print(network)
+                  vftDbg("NETWORK BEFORE:")
+                  vftDbg(network)
 
                   network <- network %>% tidygraph::activate(nodes) %>% dplyr::filter(.data$nodeID_2 !=  as.double(ptID_1) )
 
@@ -1857,8 +1857,8 @@ print("add versions")
                   #remove pathUsage results, as new results must be simulated
                   r$networkList[[r$position]]$pathUsage <- NULL
 
-                  print("NETWORK AFTER:")
-                  print(network)
+                  vftDbg("NETWORK AFTER:")
+                  vftDbg(network)
 
 
 
@@ -1881,7 +1881,7 @@ print("add versions")
                 }else{
                   #another node was clicked, thus finalise link
                   #FINALISE LINKING ####
-                  print("LINKING IS ACTIVE")
+                  vftDbg("LINKING IS ACTIVE")
                   r$secondLinkNode <- input[["versionMap_marker_click"]]
 
 
@@ -1912,7 +1912,7 @@ print("add versions")
                     lonlat = TRUE
                   ))
 
-                  print(paste0("distance: ", shapeLeng))
+                  vftDbg(paste0("distance: ", shapeLeng))
 
                   #create geometric edge
                   geo <- sf::st_sfc(
@@ -1931,7 +1931,7 @@ print("add versions")
                   #convert id to integer id (remove X and number after ".")
                   originalID <- r$firstLinkNode$id
                   #split string on "." (requires [.] rather than .)
-                  print(paste0("originalID 2: ", originalID) )
+                  vftDbg(paste0("originalID 2: ", originalID) )
                   # splt <- strsplit(originalID, "[.]")
                   # ptID_1 <- splt[[1]][[1]]
                   # ptID_1 <- substr(ptID_1, 2, nchar(ptID_1) )
@@ -2011,7 +2011,7 @@ print("add versions")
                   # r$networkList[[r$position]] <- list(network = networkNodes, pathUsage = NULL)
 
                   #draw new edge
-                  print(paste0("newID: ", newID))
+                  vftDbg(paste0("newID: ", newID))
                   leaflet::leafletProxy("versionMap")%>%
                     leaflet::addPolylines(lng = c(r$firstLinkNode$lng,
                                                   r$secondLinkNode$lng),
@@ -2134,13 +2134,13 @@ print("add versions")
 
             }else if(input$contextChoice == 2){
 
-              print("CONTEXT IS NOW SIGNAGE")
+              vftDbg("CONTEXT IS NOW SIGNAGE")
             #### CONTEXT 2: SIGNAGE/ATTRACTIVITY ####
 
             }else if(input$contextChoice == 3){
 
             #### CONTEXT 3: HOUSING/PARKING ####
-              print("CONTEXT IS NOW HOUSING/PARKING")
+              vftDbg("CONTEXT IS NOW HOUSING/PARKING")
 
               r$markerWasClicked <- TRUE
               if(!is.null(input[["versionMap_marker_click"]]$group) ){#& r$step1Refreshing != TRUE
@@ -2171,7 +2171,7 @@ print("add versions")
               }
             }
           }else{
-            print("ORIGINAL CANNOT BE ALTERED")
+            vftDbg("ORIGINAL CANNOT BE ALTERED")
             }
 
         }, ignoreInit = TRUE)
@@ -2182,8 +2182,8 @@ print("add versions")
           r$mapView <- list(center_lng = input[["versionMap_center"]]$lng,
                                          center_lat = input[["versionMap_center"]]$lat,
                                          zoom = input[["versionMap_zoom"]])
-print("EDGE CLICK")
-          print(input[["versionMap_shape_click"]])
+vftDbg("EDGE CLICK")
+          vftDbg(input[["versionMap_shape_click"]])
           # EDGE CLICK IN INFRASTRUCTURE CONTEXT  ####
           if(input$contextChoice == 1){
 
@@ -2222,7 +2222,7 @@ print("EDGE CLICK")
                   }else{
 
 
-                    print("EDGE CLICKED IN INFRASTRUCTURE/SIGNAGE CONTEXT")
+                    vftDbg("EDGE CLICKED IN INFRASTRUCTURE/SIGNAGE CONTEXT")
 
                     # ACTIVATE MODAL
                     #where you can choose either to delete path or path quality
@@ -2273,9 +2273,9 @@ print("EDGE CLICK")
 
 
                     #determine current version
-                    print(paste0("walkBikeStatus:", walkBikeStatus))
-                    print(paste0("hardNaturStatus:", hardNaturStatus))
-                    print(paste0("roadWidthStatus:", roadWidthStatus))
+                    vftDbg(paste0("walkBikeStatus:", walkBikeStatus))
+                    vftDbg(paste0("hardNaturStatus:", hardNaturStatus))
+                    vftDbg(paste0("roadWidthStatus:", roadWidthStatus))
 
                     shiny::showModal(
                       shiny::modalDialog(
@@ -2449,7 +2449,7 @@ print("EDGE CLICK")
 ## OBSERVE DELETE EDGE ####
 obsEvent_deleteEdge <- shiny::observeEvent(input$deleteEdge, {
 
-  print("DELETE PATH")
+  vftDbg("DELETE PATH")
   ## REMOVE EDGE FROM SELECTED NETWORK
 
   network <- r$networkList[[r$position]]$network
@@ -2741,7 +2741,7 @@ obsEvent_chooseParking <- shiny::observeEvent(input$chooseParking, {
   }else{
     poly$id <- "1"
   }
-  print(paste0("NEWPOLY ID: ", poly$id, " ", class(poly$id)))
+  vftDbg(paste0("NEWPOLY ID: ", poly$id, " ", class(poly$id)))
   # poly <- concaveman(mapPoints, 1) Doesn't work well
   poly <- dplyr::rename(poly, polygons = "poly")
 
@@ -2807,7 +2807,7 @@ obsEvent_chooseParking <- shiny::observeEvent(input$chooseParking, {
 
       #determine id
       newPoly$id <- as.character(max(as.numeric(r$parkingPolygons$id))+1)
-      print(paste0("NEWPOLY ID: ", newPoly$id, " ", class(newPoly$id)))
+      vftDbg(paste0("NEWPOLY ID: ", newPoly$id, " ", class(newPoly$id)))
 
       #get removed polygon's id
       intersectingPolysID <- r$parkingPolygons[intersectingPolys,]$id
@@ -2832,7 +2832,7 @@ obsEvent_chooseParking <- shiny::observeEvent(input$chooseParking, {
     r$polyFinished <- TRUE
 
     r$mapPoints <- sf::st_sfc(crs = 4326)
-    print(r$parkingPolygons)
+    vftDbg(r$parkingPolygons)
 
     # proxy <- leaflet::leafletProxy("versionMap", data = r$parkingPolygons)%>%
     #   leaflet::clearGroup("eraseable")
@@ -2909,7 +2909,7 @@ obsEvent_chooseResidential <- shiny::observeEvent(input$chooseResidential, {
   }else{
     poly$id <- "1"
   }
-  print(paste0("NEWPOLY ID: ", poly$id, " ", class(poly$id)))
+  vftDbg(paste0("NEWPOLY ID: ", poly$id, " ", class(poly$id)))
   # poly <- concaveman(mapPoints, 1) Doesn't work well
   poly <- dplyr::rename(poly, polygons = "poly")
 
@@ -2974,7 +2974,7 @@ if(!is.null(r$residentialPolygons)){
 
       #determine id
       newPoly$id <- as.character(max(as.numeric(r$residentialPolygons$id))+1)
-      print(paste0("NEWPOLY ID: ", newPoly$id, " ", class(newPoly$id)))
+      vftDbg(paste0("NEWPOLY ID: ", newPoly$id, " ", class(newPoly$id)))
 
       #get removed polygon's id
       intersectingPolysID <- r$residentialPolygons[intersectingPolys,]$id
@@ -3000,7 +3000,7 @@ if(!is.null(r$residentialPolygons)){
   r$polyFinished <- TRUE
 
   r$mapPoints <- sf::st_sfc(crs = 4326)
-  print(r$residentialPolygons)
+  vftDbg(r$residentialPolygons)
 
   # proxy <- leaflet::leafletProxy("versionMap", data = r$parkingPolygons)%>%
   #   leaflet::clearGroup("eraseable")
@@ -3093,11 +3093,11 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
         # EMPTY MAP WAS CLICKED ####
         obsMapClick <- shiny::observeEvent(input[["versionMap_click"]], {
 
-          print("CLICK!!!!!")
+          vftDbg("CLICK!!!!!")
 
-          print(r$markerWasClicked)
-          print(r$shapeWasClicked)
-          print(r$isLinking)
+          vftDbg(r$markerWasClicked)
+          vftDbg(r$shapeWasClicked)
+          vftDbg(r$isLinking)
           #if this is not Original
           if(r$position != 1){
 
@@ -3113,7 +3113,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
 
                   #get max ID
                   maxID <- max( igraph::V(r$networkList[[r$position]]$network)$nodeID_2 )
-                  print(maxID)
+                  vftDbg(maxID)
 
                   newID = maxID +1
 
@@ -3138,7 +3138,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
                   #convert id to integer id (remove X and number after ".")
                   originalID <- r$firstLinkNode$id
                   #split string on "." (requires [.] rather than .)
-                  print(paste0("originalID 2: ", originalID) )
+                  vftDbg(paste0("originalID 2: ", originalID) )
                   # splt <- strsplit(originalID, "[.]")
                   # ptID_1 <- splt[[1]][[1]]
                   # ptID_1 <- substr(ptID_1, 2, nchar(ptID_1) )
@@ -3219,10 +3219,10 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
 
 
 
-                  print("SECOND LINK NODE:")
-                  print(r$secondLinkNode)
-                  print(r$secondLinkNode$lng)
-                  print(r$secondLinkNode$lat)
+                  vftDbg("SECOND LINK NODE:")
+                  vftDbg(r$secondLinkNode)
+                  vftDbg(r$secondLinkNode$lng)
+                  vftDbg(r$secondLinkNode$lat)
 
                   #finalise linking
 
@@ -3266,7 +3266,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
                   #convert id to integer id (remove X and number after ".")
                   originalID <- r$firstLinkNode$id
                   #split string on "." (requires [.] rather than .)
-                  print(paste0("originalID 2: ", originalID) )
+                  vftDbg(paste0("originalID 2: ", originalID) )
                   # splt <- strsplit(originalID, "[.]")
                   # ptID_1 <- splt[[1]][[1]]
                   # ptID_1 <- substr(ptID_1, 2, nchar(ptID_1) )
@@ -3371,7 +3371,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
                     )
 
                   #make node2 normal again
-                  print(paste0("newID: ", newID))
+                  vftDbg(paste0("newID: ", newID))
                   leaflet::leafletProxy("versionMap" )%>%
                     leaflet::removeMarker(layerId = as.character(r$secondLinkNode$id))%>%
                     leaflet::addCircleMarkers(lng = r$secondLinkNode$lng,
@@ -3501,13 +3501,13 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
 
                   ##ADD NEW NODE ####
 
-                  print("EMPTY SPACE CLICKED")
+                  vftDbg("EMPTY SPACE CLICKED")
 
                   networkNodes <- r$networkList[[r$position]]$network %>% tidygraph::activate(nodes) %>% dplyr::as_tibble()
 
                   #get max ID
                   maxID <- max(networkNodes$nodeID_2 )
-                  print(maxID)
+                  vftDbg(maxID)
 
                   newID = maxID +1
 
@@ -3519,7 +3519,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
                                                                input[["versionMap_click"]]$lat)), finalPolygons)
 
 
-                  print(networkNodes)
+                  vftDbg(networkNodes)
                   #add new node to node table
                   networkNodes <- networkNodes %>% dplyr::bind_rows(data.frame(nodeID = networkNodes$nodeID[nrow(networkNodes)] + 1,
                                                                                DULN = DULNlevel, AOI = finalPolygons$AOI[as.numeric(AOInb_pt)],
@@ -3528,7 +3528,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
                                                                                                 input[["versionMap_click"]]$lat))
                                                                                  , crs = 4326),
                                                                                nodeID_2 = newID))
-                  print(networkNodes)
+                  vftDbg(networkNodes)
 
                   #recreate network graph and insert in reactives
                   tbl <- tidygraph::tbl_graph(edges = r$networkList[[r$position]]$network %>% tidygraph::activate(edges) %>% dplyr::as_tibble(), nodes = networkNodes, directed = FALSE)
@@ -3536,7 +3536,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
                   r$networkList[[r$position]] <- list(network = tbl, pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential ,newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster, canopyRaster = r$networkList[[r$position]]$canopyRaster )
                   # r$networkList[[r$position]]$network <- network
 
-                  print(r$networkList[[r$position]]$network)
+                  vftDbg(r$networkList[[r$position]]$network)
                   #insert node in dataframe
                   # networkNodes <- networkNodes %>% add_row(nodeID = newID, DULN = DULNlevel, AOI = AOInb,
                   # geometry = st_sfc(
@@ -3558,7 +3558,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
                                                             opacity = 0.5,
                                                             group = "nodes",
                                                             layerId = as.character(newID))#,options = pathOptions(pane = "layer2")
-                  print("created node: ")
+                  vftDbg("created node: ")
 
 
                 }
@@ -3580,7 +3580,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
                     #add points
                     r$mapPoints <- rbind(r$mapPoints,sf::st_as_sf( sf::st_sfc( sf::st_point(x = c(input[["versionMap_click"]]$lng, input[["versionMap_click"]]$lat)), crs = 4326) ) )
                     #draw points
-                    print(r$mapPoints)
+                    vftDbg(r$mapPoints)
 
                     proxy = leaflet::leafletProxy("versionMap" )
 
@@ -3866,7 +3866,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
         if(length(r$appendedObservers) > 0 ){
           removeObservers(r$appendedObservers)
         }
-        cat(file = stderr(), "TESTC")
+        vftDbgCat("TESTC")
 
         #remove all non-linked segments in r$networkList
         for(networkNb in 1:length(r$networkList)){

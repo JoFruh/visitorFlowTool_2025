@@ -3,7 +3,7 @@
 step1_server <- function(id, i18n){
   shiny::moduleServer(id, function(input, output, session){
 
-    cat(file = stderr(), "START STEP 1 SERVER\n")
+    vftDbgCat("START STEP 1 SERVER\n")
 
 
 
@@ -299,7 +299,7 @@ step1_server <- function(id, i18n){
                 shiny::h3(shiny::HTML(paste0(i18n()$t("Die Polygone müssen <b>mindestens 3 Punkte</b> haben."), i18n()$t("<br>Bitte fügen Sie vor der Fertigstellung der Form einen <b>zusätzlichen Punkt</b> hinzu.") )) )
               )
             )
-            cat(file = stderr(), "ERROR: not enough points.\n")
+            vftDbgCat("ERROR: not enough points.\n")
           }
 
         }
@@ -318,7 +318,7 @@ step1_server <- function(id, i18n){
           #add point
           r$mapPoints <- rbind(r$mapPoints,sf::st_as_sf( sf::st_sfc( sf::st_point(x = c(input[[mapClick]]$lng, input[[mapClick]]$lat)), crs = 4326) ) )
           #draw points
-          print(r$mapPoints)
+          vftDbg(r$mapPoints)
 
           proxy = leaflet::leafletProxy(leafletMapID )
 
@@ -523,13 +523,13 @@ step1_server <- function(id, i18n){
 
     #Language Change ####
     langChangeObs <- observeEvent(input$languageSelect_1, {
-      print("CHANGE LANGUAGE")
+      vftDbg("CHANGE LANGUAGE")
       if(input$languageSelect_1 == "de"){
         # i18n$set_translation_language('de')
         shiny.i18n::update_lang("de")
         i18n()$set_translation_language("de")
         r$currentLang <- "de"
-        print("DE")
+        vftDbg("DE")
         output$bannerUI <- shiny::renderUI({
           imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/step1_wsl.png"), list() )
           #replace /" with ', to avoid problems
@@ -567,7 +567,7 @@ step1_server <- function(id, i18n){
             paste0("<font color=\'#dd1717\' size='3'><b>",i18n()$t("Warnung: In diesem Maßstab können die Berechnungen sehr lange dauern."), "<br>", i18n()$t("Bitte zoomen Sie weiter hinein, bevor Sie einen Bereich auswählen."),  "</b></font>")
           })
         }
-        print("FR")
+        vftDbg("FR")
       }else if(input$languageSelect_1 == "en"){
         # i18n$set_translation_language('en')
         shiny.i18n::update_lang("en")
@@ -589,7 +589,7 @@ step1_server <- function(id, i18n){
             paste0("<font color=\'#dd1717\' size='3'><b>",i18n()$t("Warnung: In diesem Maßstab können die Berechnungen sehr lange dauern."), "<br>", i18n()$t("Bitte zoomen Sie weiter hinein, bevor Sie einen Bereich auswählen."),  "</b></font>")
           })
         }
-        print("EN")
+        vftDbg("EN")
       }else if(input$languageSelect_1 == "it"){
         # i18n$set_translation_language('it')
         shiny.i18n::update_lang("it")
@@ -608,7 +608,7 @@ step1_server <- function(id, i18n){
             paste0("<font color=\'#dd1717\' size='3'><b>",i18n()$t("Warnung: In diesem Maßstab können die Berechnungen sehr lange dauern."), "<br>", i18n()$t("Bitte zoomen Sie weiter hinein, bevor Sie einen Bereich auswählen."),  "</b></font>")
           })
         }
-        print("IT")
+        vftDbg("IT")
       }
 
     }, ignoreInit = TRUE)
@@ -819,7 +819,7 @@ step1_server <- function(id, i18n){
       shiny::showModal(shiny::modalDialog(
         shiny::p("PROMISE FINISHED")
       ))
-      cat(file = stderr(), "PROMISE FINISHED")
+      vftDbgCat("PROMISE FINISHED")
       #
       # r$promiseFinished <- TRUE
       # r$ABMprogress$close()
@@ -887,7 +887,7 @@ step1_server <- function(id, i18n){
 
         # data_promise(NULL)
 
-        cat(file = stderr(), "CONFIRM BUTTON1")
+        vftDbgCat("CONFIRM BUTTON1")
 
         openSaveHelpModal("gotSavedHelp1")
 
@@ -1019,7 +1019,7 @@ step1_server <- function(id, i18n){
           utils::zip(file, files = c("attractivity.tif", "INFO_attractivity.txt"))
 
         } else {
-          print("ERROR: could not crop attractivity layer")
+          vftDbg("ERROR: could not crop attractivity layer")
         }
       }
 
@@ -1099,7 +1099,7 @@ step1_server <- function(id, i18n){
     obsEvent_submit <- shiny::observeEvent(input$submit, {
 
       shiny::req(input$data)
-      print(input$data)
+      vftDbg(input$data)
 
       shiny::removeModal()
 
@@ -1129,7 +1129,7 @@ step1_server <- function(id, i18n){
     #confirm button 2
     if(is.null(r1$obsConfirmBtn2)){
       r1$obsConfirmBtn2 <- shiny::observeEvent(input$confirmButton2, {
-        print("CONFIRM BUTTON")
+        vftDbg("CONFIRM BUTTON")
 
 
         openSaveHelpModal("gotSavedHelp2")
@@ -1240,8 +1240,8 @@ step1_server <- function(id, i18n){
         if(!is.null(r$polygonsList) ){
           r1$finalShape <- r$polygonsList
         }else if(r1$shapeType == "shapefile"){
-          print("SHAPEFILE")
-          print(r1$shape)
+          vftDbg("SHAPEFILE")
+          vftDbg(r1$shape)
           # r1$shape <- broom::tidy(r1$shape)
           r1$finalShape <- r1$shape
 

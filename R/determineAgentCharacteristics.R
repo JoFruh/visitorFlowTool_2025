@@ -260,6 +260,6 @@ for(agentNo in 1:length(AOIInfo$nodes)){
 
 
 
-  print("DONE!")
+  vftDbg("DONE!")
   return(dayPop)
 }

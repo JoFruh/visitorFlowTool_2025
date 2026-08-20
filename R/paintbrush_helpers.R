@@ -180,6 +180,7 @@ paintLandcoverDir <- function(){
 paintLandcoverSeed <- function(aoi, buffer_m = 250, max_cells = 40e6,
                                dir = paintLandcoverDir(), res = PAINT_RES,
                                mask = TRUE){
+  vftTime("paint:landcoverSeed", {
   if(is.null(aoi)) return(NULL)
   if(inherits(aoi, c("sf", "data.frame")) && nrow(aoi) == 0) return(NULL)
   f_ground <- file.path(dir, sprintf("ground_CH_%gm.tif", res))
@@ -227,6 +228,7 @@ paintLandcoverSeed <- function(aoi, buffer_m = 250, max_cells = 40e6,
     out <- lapply(out, function(r) terra::mask(r, mv))
   }
   out
+  })
 }
 
 #' The land cover baseline for an area, as PNGs the browser can decode directly.
@@ -263,6 +265,7 @@ paintLandcoverSeed <- function(aoi, buffer_m = 250, max_cells = 40e6,
 .PAINT_BASE_CACHE_MAX <- 8
 
 paintLandcoverBaselinePNG <- function(aoi, ..., cache = TRUE){
+  vftTime("paint:baselinePNG", {
   key <- NULL
   if(cache && !is.null(aoi)){
     #the whole outline, not just its bounding box: the result is masked to the
@@ -334,6 +337,7 @@ paintLandcoverBaselinePNG <- function(aoi, ..., cache = TRUE){
     assign(key, list(value = out, t = as.numeric(Sys.time())), envir = .paintBaseCache)
   }
   out
+  })
 }
 
 #' Why is there no land cover baseline?
@@ -406,6 +410,7 @@ paintLandcoverDiagnose <- function(aoi, dir = paintLandcoverDir(), res = PAINT_R
 #' contiguous by construction, so this compresses a disc of a few thousand cells
 #' into a couple of hundred numbers.
 rasterToRuns <- function(rast, res = PAINT_RES){
+  vftTime("paint:rasterToRuns", {
   if(is.null(rast)) return(list())
 
   m <- terra::as.matrix(rast, wide = TRUE)
@@ -434,6 +439,7 @@ rasterToRuns <- function(rast, res = PAINT_RES){
   unname(lapply(split(seq_along(vals), vals), function(i){
     list(id = vals[i][1], runs = as.vector(rbind(gRow[i], gCol[i], lens[i])))
   }))
+  })
 }
 
 #' The effective land cover for a version: baseline with the user's edits on top.
@@ -490,6 +496,7 @@ paintCompositeRaster <- function(edits, aoi, level = c("ground", "canopy"), ...)
 #' no merge of overlapping rasters - the browser already owns the display, so R
 #' only has to persist what was painted.
 applyPaintRuns <- function(existing, runsByCat, res = PAINT_RES){
+  vftTime("paint:applyRuns", {
   if(is.null(runsByCat) || length(runsByCat) == 0) return(existing)
 
   rRow <- rCol <- rLen <- rId <- numeric(0)
@@ -532,4 +539,5 @@ applyPaintRuns <- function(existing, runsByCat, res = PAINT_RES){
   v[cells] <- ids
   terra::values(out) <- v
   out
+  })
 }

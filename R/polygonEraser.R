@@ -25,8 +25,8 @@ polygonEraser <- function(leafletMapID, input, startingPolygons = sf::st_sfc(crs
   if(numberOfPolygons == "multi"){
 
     envBase$obsErase <- shiny::observeEvent(input[[mapGeojsonClick]], {
-      print("SHAPE CLICK")
-      print(input[[mapGeojsonClick]])
+      vftDbg("SHAPE CLICK")
+      vftDbg(input[[mapGeojsonClick]])
 
       # erase shape if clicked AND if mapoints aren't being put down
       if(input[[mapGeojsonClick]]$group == "eraseable" & is.null(nrow(variables$mapPoints) ) ){
@@ -59,7 +59,7 @@ polygonEraser <- function(leafletMapID, input, startingPolygons = sf::st_sfc(crs
   }else{
 
     envBase$obsErase <- shiny::observeEvent(input[[paste0(leafletMapID, "_click")]], {
-      print("GENERAL CLICK")
+      vftDbg("GENERAL CLICK")
 
       #create variable if missing
       if(is.null(variables$polyFinished) ){variables$polyFinished <- FALSE}

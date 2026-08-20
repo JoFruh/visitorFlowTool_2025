@@ -109,6 +109,14 @@
 # See R/perf_helpers.R. Disable with VFT_PERF=0; log location via VFT_PERF_DIR.
 visitorFlowTool:::vftPerfInit()
 
+# Optional call-stack sampling, for runs where the stall log comes back mostly
+# "unattributed" - i.e. the thread was frozen by code nobody has labelled yet.
+# The heartbeat cannot see inside a freeze (it only runs when the thread yields);
+# Rprof samples from within it. Off unless VFT_RPROF=1, since it costs a few
+# percent and grows ~20 MB/hour. Read back with visitorFlowTool:::vftRprofStop()
+# then visitorFlowTool:::vftRprofReport().
+visitorFlowTool:::vftRprofStart()
+
 #PREPARE WORKERS ####
 # Async backend selection.
 #
@@ -128,15 +136,27 @@ visitorFlowTool:::vftPerfInit()
 # ipc::AsyncProgress/shinyQueue keep working unchanged either way. Worker count is
 # env-configurable via VFT_WORKERS.
 
-# Objects captured by future({...}) are serialised to the worker *on the main thread*,
-# so a big capture blocks every session before the job even starts. future's default
-# ceiling is 500 MB, which on a large AOI turns that cost into an outright error
-# mid-run. Raise it so the ABM completes, and treat any job that approaches it as a
-# bug to fix by passing paths instead of objects (see Phase 3).
+# +Inf, and the value is doing real work here - this is not "turn the limit off".
+#
+# future only enforces a globals ceiling when one is finite: getGlobalsAndPackages()
+# guards its sizing pass with `if (is.finite(maxSize))`, and that pass measures each
+# captured object with parallelly::serializedSize(), which measures by *serialising
+# it*. So a finite ceiling makes the app serialise every captured global once purely
+# to weigh it, and then mirai serialises it all over again to actually send it -
+# twice the work, all of it on the thread every user is waiting on.
+#
+# That is not theoretical: in the 2026-08-20 baseline serializedSize was 11.6s of
+# self time, 8.4% of everything sampled, making it the largest single piece of real
+# work in the profile. Setting +Inf skips the pass entirely.
+#
+# What is given up is an error when a future captures something enormous. That was
+# never worth 11.6s of frozen UI, and it is not how the problem gets caught anyway:
+# the profiler shows an oversized capture directly, and Phase 3 removes the cause by
+# passing paths into workers instead of objects.
 #
 # Set unconditionally rather than only on the parallel path, so dev and production
-# apply the same limit and a globals problem cannot hide in the sequential fallback.
-options(future.globals.maxSize = 2 * 1024^3)
+# behave the same and a globals problem cannot hide in the sequential fallback.
+options(future.globals.maxSize = +Inf)
 
 vftInstalled <- "visitorFlowTool" %in% rownames(utils::installed.packages())
 

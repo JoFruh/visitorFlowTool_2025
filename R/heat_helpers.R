@@ -100,6 +100,7 @@ heat_window <- function(r, radius_m){
 heatRaster <- function(aoi, groundEdits = NULL, canopyEdits = NULL,
                        res = HEAT_RES, radii = HEAT_RADII,
                        weights = HEAT_WEIGHTS, ...){
+  vftTime("heat:heatRaster", {
   seed <- paintLandcoverSeed(aoi, ...)
   if(is.null(seed)) return(NULL)
 
@@ -123,6 +124,7 @@ heatRaster <- function(aoi, groundEdits = NULL, canopyEdits = NULL,
   }
   names(out) <- "heat"
   out
+  })
 }
 
 #' Leaflet palette for a heat raster, centred on zero.

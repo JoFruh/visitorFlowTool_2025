@@ -122,7 +122,7 @@ step2_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE
       for(sp in 1:length(speciesList)){
 
         # if(!speciesList[sp] %in% c("Castor fiber", "Corvus monedula") ){
-          print(speciesList[sp])
+          vftDbg(speciesList[sp])
           latinN <- speciesList[[sp]]
 
 
@@ -469,7 +469,7 @@ step2_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE
 
     shiny::observeEvent(NULL, {
 
-        cat(file = stderr(), paste0("PROMISE ABOUT TO START" ) )
+        vftDbgCat(paste0("PROMISE ABOUT TO START" ) )
 
         df_spInfo <- r$df_spInfo
 
@@ -528,13 +528,13 @@ step2_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE
 
       }, seed = TRUE) %...>% (function(allResults){
 
-        cat(file = stderr(), paste0("PROMISE COMPLETED" ) )
+        vftDbgCat(paste0("PROMISE COMPLETED" ) )
 
               # cat(file = stderr(), paste0("ALLRESULTS = ", allResults ) )
               r$df_spInfo <- allResults[[1]]
               r$sdmLayer <- terra::unwrap(allResults[[2]])
 
-              cat(file = stderr(), paste0("names(r$sdmLayer) = ", names(r$sdmLayer) ) )
+              vftDbgCat(paste0("names(r$sdmLayer) = ", names(r$sdmLayer) ) )
 
           #sort based on cover
           #order sdm_presence and order sdm, then concatenate them. (sdm_pres first, then sdm)
@@ -570,7 +570,7 @@ step2_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE
 
         r3$spChoices_html <- buildHTMLList(r3$spChoices, speciesData, language = r$currentLang)
 
-print("SPCHOICES EVENT")
+vftDbg("SPCHOICES EVENT")
         #LINKING GROUP AND SPECIES SELECTION ####
         #include sp in groupLinks
         #create groupChoices list which determines group checkboxes
@@ -587,9 +587,9 @@ print("SPCHOICES EVENT")
         r3$groupLinks_threat <- list()
         r3$groupLinks_priority <- list()
         r3$groupLinks_type <- list()
-print("SPCHOICES")
+vftDbg("SPCHOICES")
 
-cat(file = stderr(), paste0("r3$spChoices = ", r3$spChoices ) )
+vftDbgCat(paste0("r3$spChoices = ", r3$spChoices ) )
 
         if(length(r3$spChoices) > 0){
 
@@ -671,12 +671,12 @@ cat(file = stderr(), paste0("r3$spChoices = ", r3$spChoices ) )
           }
         }else{
           #if spChoices is empty
-          print("ERROR: No Potential Species Detected")
+          vftDbg("ERROR: No Potential Species Detected")
         }
 
       }, ignoreInit = FALSE)
 
-      cat(file = stderr(), paste0("Species Selection Render" ) )
+      vftDbgCat(paste0("Species Selection Render" ) )
 
       #RENDER LEGEND ####
       output$legend_ui <- shiny::renderUI({
@@ -732,7 +732,7 @@ cat(file = stderr(), paste0("r3$spChoices = ", r3$spChoices ) )
     #   weightList
     #
     # })
-      cat(file = stderr(), paste0("Group Selection Render" ) )
+      vftDbgCat(paste0("Group Selection Render" ) )
 
     #GROUP SELECTION RENDERS ####
       output$groupCheckbox_sens <- shiny::renderUI({
@@ -760,7 +760,7 @@ cat(file = stderr(), paste0("r3$spChoices = ", r3$spChoices ) )
       )
     })
 
-    cat(file = stderr(), paste0("Group Selection Mechanics" ) )
+    vftDbgCat(paste0("Group Selection Mechanics" ) )
 
     #GROUP SELECTION MECHANICS####
     #for classification
@@ -825,14 +825,14 @@ cat(file = stderr(), paste0("r3$spChoices = ", r3$spChoices ) )
 
     #Language Change ####
     langChangeObs <- observeEvent(input$languageSelect_2, {
-      print("CHANGE LANGUAGE")
-      print(input$languageSelect_2)
+      vftDbg("CHANGE LANGUAGE")
+      vftDbg(input$languageSelect_2)
       if(input$languageSelect_2 == "de"){
         # i18n$set_translation_language('de')
         shiny.i18n::update_lang("de")
         i18n()$set_translation_language("de")
         r$currentLang <- "de"
-        print("DE")
+        vftDbg("DE")
         output$bannerUI_2 <- shiny::renderUI({
           imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/step2_wsl.png"), list() )
           #replace /" with ', to avoid problems
@@ -1027,7 +1027,7 @@ cat(file = stderr(), paste0("r3$spChoices = ", r3$spChoices ) )
 
 
 
-        print("FR")
+        vftDbg("FR")
       }else if(input$languageSelect_2 == "en"){
         shiny.i18n::update_lang("en")
         i18n()$set_translation_language("en")
@@ -1083,7 +1083,7 @@ cat(file = stderr(), paste0("r3$spChoices = ", r3$spChoices ) )
 
 
 
-        print("EN")
+        vftDbg("EN")
       }else if(input$languageSelect_2 == "it"){
         # i18n$set_translation_language('it')
         shiny.i18n::update_lang("it")
@@ -1094,7 +1094,7 @@ cat(file = stderr(), paste0("r3$spChoices = ", r3$spChoices ) )
         })
 
 
-        print("IT")
+        vftDbg("IT")
       }
 
 
@@ -1105,7 +1105,7 @@ cat(file = stderr(), paste0("r3$spChoices = ", r3$spChoices ) )
 
     #observe banner click (choosing to step back in history)
     obsBanner <- observeEvent(input$banner,  {
-      print("MAPPED IMAGE CLICKED")
+      vftDbg("MAPPED IMAGE CLICKED")
       #determine where to go back in history
       r3$confirm <- input$banner
       # print(input$banner)
@@ -1134,11 +1134,11 @@ cat(file = stderr(), paste0("r3$spChoices = ", r3$spChoices ) )
     }, ignoreInit = TRUE)
 
 
-    cat(file = stderr(), paste0("ObserveEvents" ) )
+    vftDbgCat(paste0("ObserveEvents" ) )
 
 
     obsTrgReset <- shiny::observeEvent(r3$trigger_reset, {
-      print("TRIGGER RESET")
+      vftDbg("TRIGGER RESET")
       r3$ignoreGroupCheckboxEffect <- FALSE
       r3$ignoreAllCheckboxEffect <- FALSE
       r3$ignoreCheckboxEffect <- FALSE
@@ -1171,17 +1171,17 @@ cat(file = stderr(), paste0("r3$spChoices = ", r3$spChoices ) )
 
     # OBSERVER GROUP CHECKBOX####
     obsGrpTr <- shiny::observeEvent(checkBoxGroupTriggers(), {
-print("GROUP TRIGGERS")
-      cat(file = stderr(), paste0("r$checkboxSave = ", r$checkboxSave ) )
+vftDbg("GROUP TRIGGERS")
+      vftDbgCat(paste0("r$checkboxSave = ", r$checkboxSave ) )
 
       #ignore this if there is stored checkbox info
       if(is.null(r$checkboxSave ) ){
-        cat(file = stderr(), paste0("r3$ignoreGroupCheckboxEffect = ", r3$ignoreGroupCheckboxEffect ) )
+        vftDbgCat(paste0("r3$ignoreGroupCheckboxEffect = ", r3$ignoreGroupCheckboxEffect ) )
 
-        print("CHECKBOXGROUPTRIGGER EVENT")
-        print(paste0("ignoreGroupCheckbox: ", r3$ignoreGroupCheckboxEffect) )
+        vftDbg("CHECKBOXGROUPTRIGGER EVENT")
+        vftDbg(paste0("ignoreGroupCheckbox: ", r3$ignoreGroupCheckboxEffect) )
         if(r3$ignoreGroupCheckboxEffect == FALSE){
-          cat(file = stderr(), paste0("r3$ignoreGroupCheckboxEffect = ", r3$ignoreGroupCheckboxEffect ) )
+          vftDbgCat(paste0("r3$ignoreGroupCheckboxEffect = ", r3$ignoreGroupCheckboxEffect ) )
 
           #remove All checkbox if it is checked
           if(input$groupCheckbox_all == TRUE){
@@ -1198,13 +1198,13 @@ print("GROUP TRIGGERS")
 
 
             #first remove all Checkbox
-            print("remove ALL group")
+            vftDbg("remove ALL group")
             shiny::updateCheckboxInput(inputId ="groupCheckbox_all", value = FALSE)
 
             #manually apply the group checkbox Link of selected group checkbox
             #because group checkbox effect was ignored
             shinyjs::delay(100, {
-              print("MANUALLY UPDATE SPECIES")
+              vftDbg("MANUALLY UPDATE SPECIES")
               shiny::updateCheckboxGroupInput(inputId = "speciesCheckbox",
                                               selected = unique(c(unlist(r3$groupLinks_class[input$groupCheckbox_class]),
                                                                   unlist(r3$groupLinks_type[input$groupCheckbox_type]),
@@ -1214,28 +1214,28 @@ print("GROUP TRIGGERS")
             )
 
           }
-          cat(file = stderr(), paste0("ignoreNextUpdate", ignoreNextUpdate ) )
+          vftDbgCat(paste0("ignoreNextUpdate", ignoreNextUpdate ) )
 
           if(ignoreNextUpdate == TRUE){
-            print("IGNORE UPDATE")
+            vftDbg("IGNORE UPDATE")
             #still save changes to groupCheckbox
             groupCheckboxHistory <<- c(input$groupCheckbox_class, input$groupCheckbox_type, input$groupCheckbox_sens )
             ignoreNextUpdate <<- FALSE
 
             #trigger observer to reset ignore-variables (with delay to execute after groupCheckbox trigger)
-            print("DELAY 1")
+            vftDbg("DELAY 1")
             shinyjs::delay(100, {r3$trigger_reset <- r3$trigger_reset + 1})
 
 
           }else{
 
 
-            print("DOING NEXT UPDATE")
+            vftDbg("DOING NEXT UPDATE")
 
-            print("species UPDATE triggered")
+            vftDbg("species UPDATE triggered")
             #do not ignore next update
             currentSelectedSp <- input$speciesCheckbox
-            print(paste0("currentSelectedSpecies: ", currentSelectedSp))
+            vftDbg(paste0("currentSelectedSpecies: ", currentSelectedSp))
 
             #determine which group checkbox changed
             if(!is.null(groupCheckboxHistory)){
@@ -1260,15 +1260,15 @@ print("GROUP TRIGGERS")
                                         unlist(r3$groupLinks_sens[input$groupCheckbox_sens])
             ))
 
-            print(paste0("Selected Species:", selectedSpecies))
+            vftDbg(paste0("Selected Species:", selectedSpecies))
 
-            print(paste0("groupLink:"))
-            print(r3$groupLinks)
+            vftDbg(paste0("groupLink:"))
+            vftDbg(r3$groupLinks)
 
             #remove species related to removed group checkbox
 
             if(!is.null(removedCheck)){
-              print("PARTX")
+              vftDbg("PARTX")
               if(removedCheck %in% names(r3$groupLinks_class)){
                 currentSelectedSp <- currentSelectedSp[!(currentSelectedSp %in% unlist(r3$groupLinks_class[removedCheck]))]
               }else if(removedCheck %in% names(r3$groupLinks_type)){
@@ -1289,7 +1289,7 @@ print("GROUP TRIGGERS")
             if(is.null(input$groupCheckbox_class)&
                is.null(input$groupCheckbox_type)&
                is.null(input$groupCheckbox_sens)){
-              print("IFNULL")
+              vftDbg("IFNULL")
               output$speciesCheckbox <- shiny::renderUI({
                 shiny::tagList(
 
@@ -1318,7 +1318,7 @@ print("GROUP TRIGGERS")
 
           }
           #trigger observer to reset ignore-variables (with delay to execute after groupCheckbox trigger)
-          print("DELAY2")
+          vftDbg("DELAY2")
           shinyjs::delay(100, {r3$trigger_reset <- r3$trigger_reset + 1})
 
         }
@@ -1335,11 +1335,11 @@ print("GROUP TRIGGERS")
 
     #OBSERVE ALL CHECKBOX SELECTION ####
     obsGroupCheck <- shiny::observeEvent(input$groupCheckbox_all, {
-print("CHECKBOX ALL")
-      print(paste0("ignoreAllCheckbox: ", r3$ignoreAllCheckboxEffect) )
+vftDbg("CHECKBOX ALL")
+      vftDbg(paste0("ignoreAllCheckbox: ", r3$ignoreAllCheckboxEffect) )
       if(r3$ignoreAllCheckboxEffect == FALSE){
         if(input$groupCheckbox_all == TRUE){
-          print("SELECT ALL")
+          vftDbg("SELECT ALL")
 
           #ignore effects to be able to change checkboxes without triggering observer effects
           r3$ignoreGroupCheckboxEffect <- TRUE
@@ -1355,18 +1355,18 @@ print("CHECKBOX ALL")
           shiny::updateCheckboxGroupInput(inputId ="groupCheckbox_sens", selected = character(0))
 
           #manually select all species
-          print("select all species")
+          vftDbg("select all species")
 
           #TODO: Check for empty list of species due to filter
 
           shiny::updateCheckboxGroupInput(inputId ="speciesCheckbox", selected = r3$spChoices_html)
 
           #trigger observer to reset ignore-variables (with delay to execute after groupCheckbox trigger)
-          print("DELAY3")
+          vftDbg("DELAY3")
           shinyjs::delay(100, {r3$trigger_reset <- r3$trigger_reset + 1})
 
         }else{
-          print("UNSELECT ALL")
+          vftDbg("UNSELECT ALL")
 
           spCheckHistory <<- NULL
           #reset all global variables linking group and species checkboxes
@@ -1377,11 +1377,11 @@ print("CHECKBOX ALL")
           r3$ignoreGroupCheckboxEffect <- TRUE
 
           #remove species checkboxes
-          print("unselect all species")
+          vftDbg("unselect all species")
           # updateCheckboxGroupInput(inputId ="speciesCheckbox", selected = character(0))
 
           #remove group checkboxes
-          print("unselect group checkboxes")
+          vftDbg("unselect group checkboxes")
           shiny::updateCheckboxGroupInput(inputId ="groupCheckbox_class", selected = character(0))
           shiny::updateCheckboxGroupInput(inputId ="groupCheckbox_type", selected = character(0))
           shiny::updateCheckboxGroupInput(inputId ="groupCheckbox_sens", selected = character(0))
@@ -1389,7 +1389,7 @@ print("CHECKBOX ALL")
           shiny::updateCheckboxGroupInput(inputId ="speciesCheckbox", selected = character(0))
 
           #trigger observer to reset ignore-variables (with delay to execute after groupCheckbox trigger)
-          print("DELAY4")
+          vftDbg("DELAY4")
           shinyjs::delay(100, {r3$trigger_reset <- r3$trigger_reset + 1})
 
 
@@ -1401,10 +1401,10 @@ print("CHECKBOX ALL")
     #observe whether checkbox or weights were altered (1 at end avoids error due to NULL triggers)
     obsSpCheck <- shiny::observeEvent(c(input$speciesCheckbox, triggerUpdate()), {
       if(r3$ignoreCheckboxEffect == FALSE){
-      print("SPCHECKBOX")
+      vftDbg("SPCHECKBOX")
       #LOAD EXISTING CHECKBOX DATA (IF EXISTING AND NO SPECIES SELECTED YET)
       if(!is.null(r$checkboxSave) & is.null(input$speciesCheckbox) ){
-        print("LOADING EXISTING FILTER, CHECKBOXES AND WEIGHTS")
+        vftDbg("LOADING EXISTING FILTER, CHECKBOXES AND WEIGHTS")
         r3$ignoreGroupCheckboxEffect <- TRUE
         r3$ignoreAllCheckboxEffect <- TRUE
         # r3$ignoreCheckboxEffect <- TRUE
@@ -1440,16 +1440,16 @@ print("CHECKBOX ALL")
         #   SMUpdate(SMUpdate() + 1)
         # }
         #reset ignores with delay
-        print("DELAY5")
+        vftDbg("DELAY5")
         shinyjs::delay(300, {r3$trigger_reset <- r3$trigger_reset + 1})
 
       }
 
-        cat(file = stderr(), paste0("BLABLA" ) )
+        vftDbgCat(paste0("BLABLA" ) )
 
 
       if(!is.null(input$speciesCheckbox)){
-print("BLABLA")
+vftDbg("BLABLA")
         #when there is at least one checkbox
         if(!is.null(spCheckHistory)){
           spRemovedCheck <- spCheckHistory[!(spCheckHistory %in% input$speciesCheckbox)]
@@ -1474,7 +1474,7 @@ print("BLABLA")
               }
               #for type
               groups <- r3$groupLinks_type[input$groupCheckbox_type]
-              print("REMOVEDCHECK1")
+              vftDbg("REMOVEDCHECK1")
               #check that there's only one checkbox and its linked to a checked groupCheckbox
               if(spRemovedCheck %in% unlist(groups)){
                 #determine new selection by cycling through class elements
@@ -1489,7 +1489,7 @@ print("BLABLA")
               }
               #for sensitivity
               groups <- r3$groupLinks_sens[input$groupCheckbox_sens]
-              print("REMOVEDCHECK2")
+              vftDbg("REMOVEDCHECK2")
               #check that there's only one checkbox and its linked to a checked groupCheckbox
               if(spRemovedCheck %in% unlist(groups)){
 
@@ -1508,31 +1508,31 @@ print("BLABLA")
           }
         }
 
-        cat(file = stderr(), paste0("Create Sensitivity Matrix" ) )
+        vftDbgCat(paste0("Create Sensitivity Matrix" ) )
 
         ## CREATE SENSITIVITY MATRIX ####
-print("SENSITIVITYMATRIX")
+vftDbg("SENSITIVITYMATRIX")
         if( length(input$speciesCheckbox) > 0 ){
 
-          cat(file = stderr(), paste0("speciescheckbox > 0" ) )
+          vftDbgCat(paste0("speciescheckbox > 0" ) )
 
           #keep species from checkboxes
           keptSpNum <-input$speciesCheckbox # ex: c1, c2 etc..
           #remove "c"
           keptNb <- as.numeric( gsub("c", "", keptSpNum))
 
-          cat(file = stderr(), paste0("keptNb =", keptNb ) )
+          vftDbgCat(paste0("keptNb =", keptNb ) )
 
           #make list of kept species' names
           r$keptSpecies <- r3$spChoices[keptNb]
 
-          cat(file = stderr(), paste0("gsub() = ", gsub(" ", ".", r$keptSpecies) ) )
-          cat(file = stderr(), paste0("names(r$sdmLayer) = ", names(r$sdmLayer) ) )
+          vftDbgCat(paste0("gsub() = ", gsub(" ", ".", r$keptSpecies) ) )
+          vftDbgCat(paste0("names(r$sdmLayer) = ", names(r$sdmLayer) ) )
 
           #replace " " with "_" for layer names
           chosenLayers <- r$sdmLayer[[r$keptSpecies]]#gsub(" ", ".", )
 
-          cat(file = stderr(), paste0("chosenLayers = ", chosenLayers ) )
+          vftDbgCat(paste0("chosenLayers = ", chosenLayers ) )
 
           # chosenLayers_pres <- sdmLayers_pres[[gsub(" ", ".", keptSpecies)]]
           # chosenLayers_noPres <- sdmLayers_noPres[[gsub(" ", ".", keptSpecies)]]
@@ -1541,10 +1541,10 @@ print("SENSITIVITYMATRIX")
           #get each species' weights into a reactive (triggers SM creation and plot if changed)
           r3$speciesWeights <- paste0("weight_", keptNb)
 
-          cat(file = stderr(), paste0("STEP1" ) )
+          vftDbgCat(paste0("STEP1" ) )
 
 
-print("STEP1")
+vftDbg("STEP1")
           #weight each layer by applying weights
 
           #first get all inputs (weight_X)
@@ -1560,9 +1560,9 @@ print("STEP1")
           r3$weightInputs <- weightInputs
           r3$weightNames <- weightNames
 
-          cat(file = stderr(), paste0("WEIGHTINPUTS" ) )
+          vftDbgCat(paste0("WEIGHTINPUTS" ) )
 
-          print(paste0("weightInputs: ", r$weightInputs))
+          vftDbg(paste0("weightInputs: ", r$weightInputs))
           #then do vectorised calculations
           #multiply by weight ( weight of 5 considers it as 5 species rather than 1)
           chosenLayers <- chosenLayers * weightInputs
@@ -1570,7 +1570,7 @@ print("STEP1")
           # chosenLayers_noPres <- chosenLayers_noPres * weightInputs
 
 
-print("STEP2")
+vftDbg("STEP2")
           #combine rasters (addition and division by max => 0-1), generate sensitivity matrix (SM)
           #if multiple layers
           # if(terra::nlyr(chosenLayers)> 1 ){
@@ -1585,7 +1585,7 @@ print("STEP2")
           #   SM <<- chosenLayers
 
           # }
-print("CHOSEN")
+vftDbg("CHOSEN")
           if(terra::nlyr(chosenLayers)> 1 ){
 
             #determine total SM by ADDING layer values between them
@@ -1615,11 +1615,11 @@ print("CHOSEN")
 #           }
 
         }
-        cat(file = stderr(), paste0("UPDATE" ) )
-        cat(file = stderr(), paste0("UPDATE" ) )
-        cat(file = stderr(), paste0("UPDATE" ) )
-        cat(file = stderr(), paste0("UPDATE" ) )
-        cat(file = stderr(), paste0("UPDATE" ) )
+        vftDbgCat(paste0("UPDATE" ) )
+        vftDbgCat(paste0("UPDATE" ) )
+        vftDbgCat(paste0("UPDATE" ) )
+        vftDbgCat(paste0("UPDATE" ) )
+        vftDbgCat(paste0("UPDATE" ) )
 
         #update map
         SMUpdate(SMUpdate() + 1)
@@ -1631,15 +1631,15 @@ print("CHOSEN")
       spCheckHistory <<- input$speciesCheckbox
 
 
-      cat(file = stderr(), paste0("Species Weight" ) )
+      vftDbgCat(paste0("Species Weight" ) )
 
 
 
-      print("SPECIESWEIGHT")
+      vftDbg("SPECIESWEIGHT")
       if(length(r3$speciesWeights) > 0 ){
         #create a reactive list of active weight inputs
         reactiveWeights <- shiny::reactive({
-          print("WEIGHTS REACTIVE")
+          vftDbg("WEIGHTS REACTIVE")
           weightInputList <- list()
           for(i in 1:length(r3$speciesWeights)){
             weightInputList[[i]] <- input[[r3$speciesWeights[i] ]]
@@ -1648,9 +1648,9 @@ print("CHOSEN")
           weightInputList
 
           })
-        print("OBSER")
+        vftDbg("OBSER")
 
-        cat(file = stderr(), paste0("Species Weight2" ) )
+        vftDbgCat(paste0("Species Weight2" ) )
 
         #destroy past observer
         if(!is.null(obsWeights)){
@@ -1660,7 +1660,7 @@ print("CHOSEN")
         }
 
         obsWeights <<- shiny::observeEvent(reactiveWeights(), {
-          print("TRIGGER UPDATE WEIGHTS")
+          vftDbg("TRIGGER UPDATE WEIGHTS")
           if(is.null(triggerUpdate())){
             triggerUpdate(1)
           }else{
@@ -1670,7 +1670,7 @@ print("CHOSEN")
         }, ignoreInit = TRUE)
       }
 
-      cat(file = stderr(), paste0("Species Weight3" ) )
+      vftDbgCat(paste0("Species Weight3" ) )
 
 
         ## CREATE WEIGHT OBSERVER ####
@@ -1709,13 +1709,13 @@ print("CHOSEN")
     #make reactive list of spOrder, that changes when filter changes
     obsFilter <- shiny::observeEvent(input$filterList, {
 
-      cat(file = stderr(), paste0("r$groupSave_all = ", r$groupSave_all ) )
+      vftDbgCat(paste0("r$groupSave_all = ", r$groupSave_all ) )
 
       #LOAD SAVED CHECKS WITH DELAY ####
       #if stored checkboxes exist
       if(!is.null(r$checkboxSave)){
         shinyjs::delay(300, {
-          print("DELAY SAVED CHECKS")
+          vftDbg("DELAY SAVED CHECKS")
 
 
           if(r$groupSave_all == TRUE){
@@ -1729,7 +1729,7 @@ print("CHOSEN")
           shiny::updateCheckboxGroupInput(inputId = "speciesCheckbox", selected = r$checkboxSave)
 
           shinyjs::delay(300, {
-            print("Checkbox save zeroed")
+            vftDbg("Checkbox save zeroed")
             r$checkboxSave <- NULL
             #load weights into every weight field
             isolate({
@@ -1746,12 +1746,12 @@ print("CHOSEN")
         })
       }
 
-      cat(file = stderr(), paste0("Change filter") )
+      vftDbgCat(paste0("Change filter") )
 
 
       #global variable to avoid cyclical updates
       # ignoreNextUpdate <<- TRUE
-      print("CHANGE FILTER")
+      vftDbg("CHANGE FILTER")
       spCheckHistory <<- input$speciesCheckbox
 
       #update checkboxes
@@ -1782,7 +1782,7 @@ print("CHOSEN")
       # r3$speciesWeights <- NULL
       # r3$speciesWeightInputs <- NULL
       #filter spChoices based on inputList
-      cat(file = stderr(), paste0("input$filterList = ", input$filterList) )
+      vftDbgCat(paste0("input$filterList = ", input$filterList) )
 
 
       r3$spChoices <- switch(input$filterList,
@@ -1803,7 +1803,7 @@ print("CHOSEN")
       }, ignoreInit = TRUE, priority = 10)
 
     # BUTTON OBSERVERS ####
-    cat(file = stderr(), paste0("Button Observers" ) )
+    vftDbgCat(paste0("Button Observers" ) )
 
     obsReset <- shiny::observeEvent(input$resetWeights, {
       #go through all weights and reset to 1
@@ -1920,7 +1920,7 @@ print("CHOSEN")
 
 
     # RENDER MAP ####
-    cat(file = stderr(), paste0("RenderMap" ) )
+    vftDbgCat(paste0("RenderMap" ) )
 
     output$SDMmap <- shiny::renderPlot({
       #calculate extent of legend based on plot extent
@@ -1940,7 +1940,7 @@ print("CHOSEN")
       }else if(r$currentLang == "en"){
         terra::plot(basemapWhite, y = 1, type = "continuous", col = "#FFFFFF", ext = terra::ext(terra::vect(shp_WGS84)), range = c(0,12), legend = FALSE, box = FALSE, axes = FALSE,  mar = c(6.1, 0, 0, 0), plg = list(legend = "bottom", horiz = TRUE, title = "Sensitivity", title.adj = 0))
       }
-        print("SMUPDATE")
+        vftDbg("SMUPDATE")
       if(SMUpdate() > 0){
 
 #expose reactive to refreshing plot
@@ -2011,7 +2011,7 @@ shiny::isolate({
 
       r3$ignoreCheckboxEffect <- FALSE
 
-      print("CONFIRM STEP 3")
+      vftDbg("CONFIRM STEP 3")
       r3$confirm <- input$confirmButton2
       #cleanup
       obsPrWeights$destroy()
@@ -2050,7 +2050,7 @@ shiny::isolate({
       r$filterList <- input$filterList
       # r$sdmLayers <- sdmLayers
 
-      cat(file = stderr(), "DEBUG1")
+      vftDbgCat("DEBUG1")
 
       #Finalize SMColors (make all values below Cutoff Threshold a minValue)
       r$SM_pres[r$SM_pres <= r$minVal] <- r$minVal
@@ -2102,7 +2102,7 @@ shiny::isolate({
     #Manage SDM data (Make a sensitivity Matrix (SM))
 
 
-    cat(file = stderr(), "RETURNING...")
+    vftDbgCat("RETURNING...")
     return(list(SM_pres = shiny::reactive(r$SM_pres), SMcolors = shiny::reactive(r$SMcolors), toSelectSpAfter = shiny::reactive(toSelectSpAfter), confirm = shiny::reactive({r3$confirm}), needHelp = reactive({r$needHelp}),
                 groupSave_all = shiny::reactive(r$groupSave_all), groupSave_sens = shiny::reactive(r$groupSave_sens), groupSave_type = shiny::reactive(r$groupSave_type), groupSave_class = shiny::reactive(r$groupSave_class), checkboxSave = shiny::reactive(r$checkboxSave),
                 filterList = shiny::reactive(r$filterList), weightInputs = shiny::reactive(r$weightInputs), weightNames = shiny::reactive(r$weightNames), species = shiny::reactive(r$keptSpecies),

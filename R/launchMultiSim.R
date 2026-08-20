@@ -14,7 +14,7 @@ launchMultiSim <- function(pop, network, days, finalPolygons, iter = 1, progress
   progress$set(0, message = "Preparing the ABM...")
   areasOfInterest <- NULL
 
-  print("list of Pointers")
+  vftDbg("list of Pointers")
   #prepare adjacency lists for pathfinding in C++ (get pointers to C++ objects: avoids converting large tables back to R)
   listOfPointers <- generateAdjListAndDistTbl_cpp(edgeTable = dplyr::as_tibble(tidygraph::activate(network, "edges")),
                                                   vertexTable = dplyr::as_tibble(tidygraph::activate(network, "nodes")))
@@ -24,17 +24,17 @@ progress$inc(1/2)
   #determine population subset (currently whole pop)
   if(!exists("dayPop")){
 
-    print("Subset Population")
+    vftDbg("Subset Population")
     dayPop <- subsetPopulation(pop, currentDay, singleAgent = FALSE)
 
-    print("Determine Agent Characteristics")
+    vftDbg("Determine Agent Characteristics")
     dayPop <- determineAgentCharacteristics(dayPop, currentDay, network, finalPolygons = finalPolygons, listOfPointers = listOfPointers)
   }
   #launch a specific simulation
 
   progress$inc(1/2)
 
-  print("Launch Simulation")
+  vftDbg("Launch Simulation")
 
   simData <- launchSim(dayPop, network, iter, trackable = FALSE, areasOfInterest = areasOfInterest, listOfPointers = listOfPointers, debug = FALSE, progress = progress)
 
