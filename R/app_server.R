@@ -1,6 +1,11 @@
 #' server function for visitorFlowTool app
 app_server <- function(input, output, session){
 
+  #count this session against the shared process for the duration of its life, so
+  #every logged stall carries the concurrency it happened under. A 3s freeze with
+  #five users connected costs 15 user-seconds; that weighting is what ranks the
+  #per-step optimisation work. Registers its own onSessionEnded. See perf_helpers.R.
+  vftPerfSessionStart(session)
 
   #prepare multilingual functions
   i18n <- shiny.i18n::Translator$new(translation_csvs_path = "www/data/tables", separator_csv = ";" )
@@ -59,6 +64,11 @@ app_server <- function(input, output, session){
       return(paste0("visitorFlowSave_step",stepName, "_", dateTime, ".RData"))
     },
     content = function(file){
+      #known general-setup hot spot: this fires on every step transition and does
+      #a full terra materialisation plus a save() of the whole session state, all
+      #on the thread every other user is waiting on. Labelled so the stall log
+      #attributes it by name rather than to "unattributed".
+      vftTime("app:downloadSave", {
       #save all elements of envBase (a bit of a detour by saving as variables first)
       envBase_step <- r$step
       envBase_shape <- r$shape
@@ -148,6 +158,7 @@ app_server <- function(input, output, session){
                   envBase_finalPolygons,
                   envBase_species,
                   envBase_minCutThresh, file = file)) #envBase_SMdateTime,
+      })
     }
   )
   outputOptions(output, "downloadSave", suspendWhenHidden = FALSE)

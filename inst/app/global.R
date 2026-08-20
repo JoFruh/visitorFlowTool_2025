@@ -101,6 +101,14 @@
 #   home <- "/home/frueh/ShinyApps/visitorFlowTool"
 # }
 
+#PROFILING ####
+# Start the main-thread stall detector before anything else in this file, so the
+# startup work below (plan setup, daemon warming) is itself measured. This is a
+# single R process shared by every user: a block on the main thread is a freeze
+# for all of them, and this is the only thing that records when that happens.
+# See R/perf_helpers.R. Disable with VFT_PERF=0; log location via VFT_PERF_DIR.
+visitorFlowTool:::vftPerfInit()
+
 #PREPARE WORKERS ####
 # Async backend selection.
 #
@@ -119,10 +127,26 @@
 # lower per-task overhead). Existing future({...}) %...>% (...) blocks and
 # ipc::AsyncProgress/shinyQueue keep working unchanged either way. Worker count is
 # env-configurable via VFT_WORKERS.
+
+# Objects captured by future({...}) are serialised to the worker *on the main thread*,
+# so a big capture blocks every session before the job even starts. future's default
+# ceiling is 500 MB, which on a large AOI turns that cost into an outright error
+# mid-run. Raise it so the ABM completes, and treat any job that approaches it as a
+# bug to fix by passing paths instead of objects (see Phase 3).
+#
+# Set unconditionally rather than only on the parallel path, so dev and production
+# apply the same limit and a globals problem cannot hide in the sequential fallback.
+options(future.globals.maxSize = 2 * 1024^3)
+
 vftInstalled <- "visitorFlowTool" %in% rownames(utils::installed.packages())
 
 if (vftInstalled) {
-  workers <- as.integer(Sys.getenv("VFT_WORKERS", "3"))
+  # Default 2, not 3. The production host has 4 cores, and the main thread has to
+  # compete with the daemons for them: at 3 workers a running job starves the very
+  # thread that serves everyone else's UI, so the app feels *slower* during async
+  # work rather than faster. Main + 2 daemons + Shiny Server overhead fits 4 cores.
+  # Raise VFT_WORKERS only along with the core count.
+  workers <- as.integer(Sys.getenv("VFT_WORKERS", "2"))
   currentPlan <- future::plan(future.mirai::mirai_multisession, workers = workers)
 
   # Pre-warm the daemons so each has visitorFlowTool (incl. its compiled DLL) loaded.
