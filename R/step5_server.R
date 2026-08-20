@@ -55,7 +55,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
 
     #LOAD PROTECTED AREAS DATA ####
     bbox <- sf::st_bbox(shape)
-    shp_PA <-  sf::st_read( "www/data/maps/protectedAreas/PA_all.gpkg", wkt_filter = sf::st_as_text(sf::st_as_sfc(bbox)))
+    shp_PA <-  sf::st_read( vftData("maps/protectedAreas/PA_all.gpkg"), wkt_filter = sf::st_as_text(sf::st_as_sfc(bbox)))
 
     shp_PA <- sf::st_crop(shp_PA, shape)
 
@@ -97,7 +97,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
     # # PARKING DATA ####
     # #fetch parking data
     #           #retrieve parking areas and crop
-    #           r$parkingShapes <- sf::st_read("www/data/maps/parking/parkingShapes.shp",
+    #           r$parkingShapes <- sf::st_read(vftData("maps/parking/parkingShapes.shp"),
     #                                                 query = 'SELECT * FROM "parkingShapes"',
     #                                                 wkt_filter = wkt
     #           )

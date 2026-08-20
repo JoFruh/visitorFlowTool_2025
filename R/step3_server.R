@@ -101,7 +101,7 @@ step3_server <- function(id, network, shape, confirm, i18n, currentLang,
     shape <- sf::st_transform(shape, 3857)
     shape_wgs <- sf::st_transform(shape, 4326)
 
-    # r$DULN <- terra::rast("www/data/maps/attr/allAttrs_COG_final.tif" )
+    # r$DULN <- terra::rast(vftData("maps/attr/allAttrs_COG_final.tif") )
     # r$DULN <- terra::crop(r$DULN, shape_wgs)
 
     # r$DULN_all <- terra::aggregate(r$DULN$all, fact = 2)
@@ -372,7 +372,7 @@ step3_server <- function(id, network, shape, confirm, i18n, currentLang,
     #           #LOAD / FILTER NATURAL AREAS ####
     #           wkt <- sf::st_as_text(sf::st_geometry(shape_wgs))
     #           #retrieve natural areas and crop
-    #           natAreas <- sf::st_read("www/data/maps/naturalAreas/naturalAreas.shp",
+    #           natAreas <- sf::st_read(vftData("maps/naturalAreas/naturalAreas.shp"),
     #                                  query = 'SELECT * FROM "naturalAreas"',
     #                                  wkt_filter = wkt
     #           )

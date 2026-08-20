@@ -223,12 +223,12 @@ sf_to_tidygraph3 = function(x, shape, directed = FALSE, parkingPolygons = NULL, 
   ### ADD DULN DATA TO NODES
 
   #get raster
-  # DULN <- terra::rast("www/data/maps/DULN/DULN_raster_web.tif" )
+  # DULN <- terra::rast(vftData("maps/DULN/DULN_raster_web.tif") )
 
   #TODO: GET LATEST COG ATTR
-  # attrMaps <- terra::rast("www/data/maps/attr/allAttrs_COG.tif")
+  # attrMaps <- terra::rast(vftData("maps/attr/allAttrs_COG.tif"))
   if (!exists(".vft_DULN_full", envir = .GlobalEnv)) {
-    .GlobalEnv$.vft_DULN_full <- terra::rast("www/data/maps/attr/allAttrs_COG_final.tif")
+    .GlobalEnv$.vft_DULN_full <- terra::rast(vftData("maps/attr/allAttrs_COG_final.tif"))
   }
 
   #grow shape slightly
@@ -240,7 +240,7 @@ sf_to_tidygraph3 = function(x, shape, directed = FALSE, parkingPolygons = NULL, 
 
 
   if (!exists(".vft_DULN_all_full", envir = .GlobalEnv)) {
-    .GlobalEnv$.vft_DULN_all_full <- terra::rast("www/data/maps/DULN/DULN_nat_majMaxMeanAGGBlur.tif")
+    .GlobalEnv$.vft_DULN_all_full <- terra::rast(vftData("maps/DULN/DULN_nat_majMaxMeanAGGBlur.tif"))
   }
   DULN_all <- terra::crop(.GlobalEnv$.vft_DULN_all_full, sf::st_transform(shape, "epsg:4326"))
 
@@ -259,7 +259,7 @@ sf_to_tidygraph3 = function(x, shape, directed = FALSE, parkingPolygons = NULL, 
 # progress$inc(1/4, detail = "extracting relevant spatial data..")
   #RESIDENTIAL DATA ####
   if (!exists(".vft_residential_full", envir = .GlobalEnv)) {
-    .GlobalEnv$.vft_residential_full <- terra::rast("www/data/maps/residential/residentialData_raster_final.tif")
+    .GlobalEnv$.vft_residential_full <- terra::rast(vftData("maps/residential/residentialData_raster_final.tif"))
   }
 
   residential_local <- terra::crop(.GlobalEnv$.vft_residential_full, terra::project(terra::vect(shape), "epsg:4326"))

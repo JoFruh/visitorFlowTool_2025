@@ -1,7 +1,7 @@
 app_ui <- function(){
 
   #prepare multilingual functions
-  i18n <- shiny.i18n::Translator$new(translation_csvs_path = "www/data/tables", separator_csv = ";" )
+  i18n <- shiny.i18n::Translator$new(translation_csvs_path = vftData("tables"), separator_csv = ";" )
   i18n$set_translation_language('de')
 
   shiny::fluidPage(

@@ -92,7 +92,7 @@ step1_server <- function(id, i18n){
     ch_basemap2 <- NULL
     # Cache country border — same file for every user, load only once per R session
     if (!exists(".vft_countryshape", envir = .GlobalEnv)) {
-      .GlobalEnv$.vft_countryshape <- sf::st_read(dsn = "www/data/maps/countryBorders/swissBorder_final.gpkg", quiet = TRUE)
+      .GlobalEnv$.vft_countryshape <- sf::st_read(dsn = vftData("maps/countryBorders/swissBorder_final.gpkg"), quiet = TRUE)
       sf::st_crs(.GlobalEnv$.vft_countryshape) <- 4326
     }
     countryshape <- .GlobalEnv$.vft_countryshape
@@ -982,7 +982,7 @@ step1_server <- function(id, i18n){
 
         # --- Load raster & write text based on selection ---
         if (r$attrToDownload == "new") {
-          attr <- terra::rast("www/data/maps/DULN/DULN_nat_majMaxMeanAGGBlur.tif")
+          attr <- terra::rast(vftData("maps/DULN/DULN_nat_majMaxMeanAGGBlur.tif"))
           writeLines(c(
             "Information about new Attractivity map:",
             "The raster was developed by aggregating various features known or assumed to attract recreationists, following the method of Kienast et al. 2012",
@@ -991,7 +991,7 @@ step1_server <- function(id, i18n){
           ), txtFile)
 
         } else {
-          attr <- terra::rast("www/data/maps/DULN/DULN_old_epsg4326.tif")
+          attr <- terra::rast(vftData("maps/DULN/DULN_old_epsg4326.tif"))
           writeLines(c(
             "Information about old Attractivity map ('DULN')",
             "Developed by Kienast et al. 2012",
@@ -1031,7 +1031,7 @@ step1_server <- function(id, i18n){
       #
       #   if(r$attrToDownload == "new"){
       #     #load attractivity
-      #     attr <- terra::rast( "www/data/maps/DULN/DULN_nat_majMaxMeanAGGBlur.tif")
+      #     attr <- terra::rast( vftData("maps/DULN/DULN_nat_majMaxMeanAGGBlur.tif"))
       #
       #     #text info
       #     tempTXT_info <- tempfile(pattern = "INFO_", fileext = ".txt")
@@ -1041,7 +1041,7 @@ step1_server <- function(id, i18n){
       #                  "Table describing these is available at..." ), fileConn)
       #     close(fileConn)
       #   }else{
-      #     attr <- terra::rast( "www/data/maps/DULN/DULN_old_epsg4326.tif")
+      #     attr <- terra::rast( vftData("maps/DULN/DULN_old_epsg4326.tif"))
       #
       #     #text info
       #     tempTXT_info <- tempfile(pattern = "INFO_", fileext = ".txt")
@@ -1175,7 +1175,7 @@ step1_server <- function(id, i18n){
         progress$inc(1/3)
 
         #extract relevant foot paths
-        loadedPaths <- sf::st_read("www/data/maps/paths/paths_11_24_final_4.gdb",
+        loadedPaths <- sf::st_read(vftData("maps/paths/paths_11_24_final_4.gdb"),
                                    query = 'SELECT * FROM "paths_11_24_final_4"',
                                    wkt_filter = wkt,
                                    promote_to_multi = FALSE, type = 2
@@ -1276,7 +1276,7 @@ step1_server <- function(id, i18n){
         progress$inc(1/3)
 
         #extract relevant foot paths
-        loadedPaths <- sf::st_read("www/data/maps/paths/paths_11_24_final_4.gdb",
+        loadedPaths <- sf::st_read(vftData("maps/paths/paths_11_24_final_4.gdb"),
                                    query = 'SELECT * FROM "paths_11_24_final_4"',
                                    wkt_filter = wkt,
                                    promote_to_multi = FALSE, type = 2

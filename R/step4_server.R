@@ -47,7 +47,7 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
     #before extracting values, remove lakes (make them NA)
     wkt <- sf::st_as_text( sf::st_as_sfc(sf::st_transform(shape, "epsg:2056") ) )
 
-    lakes <- sf::st_read( "www/data/maps/lakes.gdb",
+    lakes <- sf::st_read( vftData("maps/lakes.gdb"),
                           query = 'SELECT * FROM "lakes"',
                           wkt_filter = wkt)
     lakes <- sf::st_transform(lakes[lakes$SHAPE_Area > 10000, ], "epsg:4326")
@@ -936,7 +936,7 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
             #filter out all parkings that are not in proximity to an AOI (further than 100m)
             wkt <- sf::st_as_text(sf::st_transform(sf::st_union( sf::st_buffer(sf::st_transform(finalPolygons, 2056), 100) ), "epsg:4326"  ))
             #retrieve parking areas and crop
-            parking <- sf::st_read("www/data/maps/parking/parkingShapes.shp",
+            parking <- sf::st_read(vftData("maps/parking/parkingShapes.shp"),
                                    query = 'SELECT * FROM "parkingShapes"',
                                    wkt_filter = wkt
             )

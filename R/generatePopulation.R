@@ -12,7 +12,7 @@ generatePopulation <- function(network, parkingIntensity = 1, nAgents = 2000){
   print("GENERATE POPULATION")
   #TODO: generate population based on habitation maps and statistics from the region studies (TLM3D buildings, regional statistics)
   #FOR NOW:¨load excel into a dataframe
-  # pop <- readxl::read_excel("www/data/tables/generalPopulation_example_10k.xlsx")
+  # pop <- readxl::read_excel(vftData("tables/generalPopulation_example_10k.xlsx"))
   pop <- data.frame(startV = rep(NA, times = nAgents))
   pop$id <- 1:nAgents
   #generate pop table (1000 agents by default)

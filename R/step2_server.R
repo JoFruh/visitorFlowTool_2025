@@ -230,7 +230,7 @@ step2_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE
 
     # Cache species table — same file for every user, load only once per R session
     if (!exists(".vft_speciesData", envir = .GlobalEnv)) {
-      .GlobalEnv$.vft_speciesData <- utils::read.csv2("www/data/tables/speciesInformation_SDMapsCH.csv")
+      .GlobalEnv$.vft_speciesData <- utils::read.csv2(vftData("tables/speciesInformation_SDMapsCH.csv"))
     }
     speciesData <- .GlobalEnv$.vft_speciesData
 
@@ -275,14 +275,14 @@ step2_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE
     #   sdmLayers_noPres <- terra::rast()
     #
     #   #SWITCH TO USE OLD SDMs (more) or current SDMs
-    #   # terra::add(sdmLayers) <- terra::rast("www/data/maps/species/SDM/proj_currentEM_Aira.caryophyllea_ensemble.tif")
+    #   # terra::add(sdmLayers) <- terra::rast(vftData("maps/species/SDM/proj_currentEM_Aira.caryophyllea_ensemble.tif"))
     #
     #   #OLDER WAY OF DOING IT (NOT COG)
-    #   # terra::add(sdmLayers) <- terra::rast("www/data/maps/species/SDM/lowRes/Aphanes.australis_sdmLR.tif")
+    #   # terra::add(sdmLayers) <- terra::rast(vftData("maps/species/SDM/lowRes/Aphanes.australis_sdmLR.tif"))
     #
     #   #load COG
     #
-    #   sdmLayer <- terra::rast("www/data/maps/species_new/SDM/allSDMs_binary_COG.tif")
+    #   sdmLayer <- terra::rast(vftData("maps/species_new/SDM/allSDMs_binary_COG.tif"))
     #
     #     #TEMPORARY (remove lissotriton vulgaris double)
     #     sdmLayer <- sdmLayer[[-116]]
@@ -315,7 +315,7 @@ step2_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE
     #
     #
     #   #load all sdm presences
-    #   sdmPres <- sfarrow::read_sf_dataset( arrow::open_dataset("www/data/maps/species_new/presence/sfarrow/"))
+    #   sdmPres <- sfarrow::read_sf_dataset( arrow::open_dataset(vftData("maps/species_new/presence/sfarrow/")))
     #   sdmPres <- sf::st_transform(sdmPres, "EPSG:4326")
     #   sdmPres <- sf::st_crop(sdmPres, shp_WGS84)
     #
@@ -484,9 +484,9 @@ step2_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE
 
         # ── Load COG and crop once ──────────────────────────────────────────────────
         #200species
-        # sdmLayer <- terra::rast("www/data/maps/species_new/SDM/allSDMs_binary_COG.tif")
+        # sdmLayer <- terra::rast(vftData("maps/species_new/SDM/allSDMs_binary_COG.tif"))
         #600+ species (SDMaps_CH)
-        sdmLayer <- terra::rast("www/data/maps/species_new/SDM/SDMapsCH_100m_binary_4326_COG.tif")
+        sdmLayer <- terra::rast(vftData("maps/species_new/SDM/SDMapsCH_100m_binary_4326_COG.tif"))
         # sdmLayer <- sdmLayer[[-116]]                               # remove duplicate
         sdmLayer <- terra::crop(sdmLayer, terra::vect(shp_WGS84), mask = TRUE)
 

@@ -1158,7 +1158,7 @@ obs_dimissModal <- shiny::observeEvent(input$dismissModal, {
 
 #observe info Button ####
 obs_info6 <- shiny::observeEvent(input$infoButton6, {
-  tbl <- read.csv2( "www/data/tables/attractivity_description.csv",
+  tbl <- read.csv2( vftData("tables/attractivity_description.csv"),
                     check.names = FALSE)
 
   shiny::showModal(

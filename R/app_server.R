@@ -8,7 +8,7 @@ app_server <- function(input, output, session){
   vftPerfSessionStart(session)
 
   #prepare multilingual functions
-  i18n <- shiny.i18n::Translator$new(translation_csvs_path = "www/data/tables", separator_csv = ";" )
+  i18n <- shiny.i18n::Translator$new(translation_csvs_path = vftData("tables"), separator_csv = ";" )
   i18n$set_translation_language('de')
 
   r <- shiny::reactiveValues()
@@ -282,8 +282,8 @@ app_server <- function(input, output, session){
 
         #get r$DULN — use global session cache (populated by sf_to_tidygraph or on first restore)
         if (!exists(".vft_DULN_full", envir = .GlobalEnv)) {
-          .GlobalEnv$.vft_DULN_full     <- terra::rast("www/data/maps/attr/allAttrs_COG_final.tif")
-          .GlobalEnv$.vft_DULN_all_full <- terra::rast("www/data/maps/DULN/DULN_nat_majMaxMeanAGGBlur.tif")
+          .GlobalEnv$.vft_DULN_full     <- terra::rast(vftData("maps/attr/allAttrs_COG_final.tif"))
+          .GlobalEnv$.vft_DULN_all_full <- terra::rast(vftData("maps/DULN/DULN_nat_majMaxMeanAGGBlur.tif"))
         }
         r$DULN <- terra::crop(.GlobalEnv$.vft_DULN_full, terra::project(terra::vect(r$shape), "EPSG:4326"))
         names(r$DULN) <- c("jog", "dogNat", "ebikeNat", "walkNat","dogProx","walkSoc","bikerSport")
@@ -1033,7 +1033,7 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
   #SHORTCUTS:
   if(step == 2){
 
-    shp <- sf::st_read("www/data/maps/wiggerPerimeter_shp/wiggerPerimeter_LV95.shp")
+    shp <- sf::st_read(vftData("maps/wiggerPerimeter_shp/wiggerPerimeter_LV95.shp"))
     shp <- sf::st_as_sf(shp, coords = c("long", "lat"), crs = sf::st_crs(4326))
     shp <- sf::st_combine(shp)
     shp <- sf::st_cast(shp, "POLYGON")
@@ -1058,7 +1058,7 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
     wkt <- sf::st_as_text( shape_larger )
 
     #extract relevant foot paths
-    loadedPaths <- sf::st_read("www/data/maps/paths/paths_DULN_final2.shp",
+    loadedPaths <- sf::st_read(vftData("maps/paths/paths_DULN_final2.shp"),
                                query = 'SELECT * FROM "paths_DULN_final2"',
                                wkt_filter = wkt
     )
@@ -1074,7 +1074,7 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
 
 
   }else if (step == 3){
-    shp <- sf::st_read("www/data/maps/wiggerPerimeter_shp/wiggerPerimeter_LV95.shp")
+    shp <- sf::st_read(vftData("maps/wiggerPerimeter_shp/wiggerPerimeter_LV95.shp"))
     shp <- sf::st_as_sf(shp, coords = c("long", "lat"), crs = sf::st_crs(4326))
     shp <- sf::st_combine(shp)
     shp <- sf::st_cast(shp, "POLYGON")
@@ -1099,7 +1099,7 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
     wkt <- sf::st_as_text( shape_larger )
 
     #extract relevant foot paths
-    loadedPaths <- sf::st_read("www/data/maps/paths/archive/paths_DULN_final2.shp",
+    loadedPaths <- sf::st_read(vftData("maps/paths/archive/paths_DULN_final2.shp"),
                                query = 'SELECT * FROM "paths_DULN_final2"',
                                wkt_filter = wkt
     )
@@ -1127,7 +1127,7 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
     #
     # areasOfInterest = NULL
     # #make default area shape
-    # shp <- sf::st_read("www/data/maps/wiggerPerimeter_shp/wiggerPerimeter_LV95.shp")
+    # shp <- sf::st_read(vftData("maps/wiggerPerimeter_shp/wiggerPerimeter_LV95.shp"))
     # shp <- sf::st_as_sf(shp, coords = c("long", "lat"), crs = sf::st_crs(4326))
     # shp <- sf::st_combine(shp)
     # shp <- sf::st_cast(shp, "POLYGON")
@@ -1152,7 +1152,7 @@ cat(file = stderr(), paste0("DULN ALL: ", r$DULN_all))
 
   }else if(step == 62){
     #make default area shape
-    shp <- sf::st_read("www/data/maps/wiggerPerimeter_shp/wiggerPerimeter_LV95.shp")
+    shp <- sf::st_read(vftData("maps/wiggerPerimeter_shp/wiggerPerimeter_LV95.shp"))
     shp <- sf::st_as_sf(shp, coords = c("long", "lat"), crs = sf::st_crs(4326))
     shp <- sf::st_combine(shp)
     shp <- sf::st_cast(shp, "POLYGON")

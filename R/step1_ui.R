@@ -1,7 +1,7 @@
 #### Step 1 UI - determine area ####
 
 step1_ui <- function(id, i18n){
-languageTable <- read.csv2("www/data/tables/translation_de.csv")
+languageTable <- read.csv2(vftData("tables/translation_de.csv"))
 print("UI1")
             shiny::fluidPage(
               #activate translation for this ui

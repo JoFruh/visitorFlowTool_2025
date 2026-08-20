@@ -750,7 +750,7 @@ if(FALSE){
   #coverage: the 0 share should land near the ~36 % of Switzerland that BFS
   #Arealstatistik calls agricultural, plus settlement open ground
   ch <- sf::st_transform(sf::st_set_crs(
-    sf::st_read("inst/app/www/data/maps/countryBorders/swissBorder_final.gpkg", quiet = TRUE),
+    sf::st_read(vftData("maps/countryBorders/swissBorder_final.gpkg"), quiet = TRUE),
     4326), 2056)
   f <- terra::freq(terra::mask(terra::rast(file.path(LC_OUT_DIR, "ground_CH_1m.tif")),
                                terra::vect(ch)))

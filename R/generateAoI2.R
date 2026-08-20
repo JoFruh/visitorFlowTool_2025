@@ -48,7 +48,7 @@ generateAoI2 <- function(network, minThresh, perimeter = NULL, #, lake_path = NU
   #before extracting values, remove lakes (make them NA)
   wkt <- sf::st_as_text( sf::st_as_sfc(sf::st_transform(perimeter, "epsg:2056") ) )
 
-  lakes <- sf::st_read( "www/data/maps/lakes.gdb", #lake_path
+  lakes <- sf::st_read( vftData("maps/lakes.gdb"), #lake_path
                         query = 'SELECT * FROM "lakes"',
                         wkt_filter = wkt)
   lakes <- sf::st_transform(lakes[lakes$SHAPE_Area > 10000, ], "epsg:4326")
