@@ -4,6 +4,12 @@
 step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, confirm, i18n, currentLang, isFirstRun_stp6, finalPolygons = NULL, versionsUI = list(), triggerStp6 = 0,
                          basemap = NULL, needHelp = FALSE, species = NULL, minCutThresh = NULL){
 
+  #count this instantiation. A module server should be created once per
+  #session; this app re-calls it from an observeEvent on a trigger, so any
+  #count above 1 means a duplicate set of observers and outputs is now live
+  #alongside the previous one. See vftModuleInstance() in perf_helpers.R.
+  vftModuleInstance("step5")
+
 
   shiny::moduleServer(id, function(input, output, session) {
 
@@ -54,10 +60,19 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
 
 
     #LOAD PROTECTED AREAS DATA ####
-    bbox <- sf::st_bbox(shape)
-    shp_PA <-  sf::st_read( vftData("maps/protectedAreas/PA_all.gpkg"), wkt_filter = sf::st_as_text(sf::st_as_sfc(bbox)))
-
-    shp_PA <- sf::st_crop(shp_PA, shape)
+    #Display-only layer, handed straight to leaflet::addPolygons() below and in
+    #newVersions. It used to be read and then st_crop()ed here, in EPSG:4326,
+    #which was the single largest main-thread blocker in the app: ~5.7s per
+    #session, 11.4s across the two sessions that reached step 5 in the
+    #2026-08-20 profile. The layer is only 3 features but they carry 889,260
+    #vertices, and in a lon/lat CRS sf routes the clip through s2's spherical
+    #geometry. (The read itself was never the problem - 0.10s, the gpkg has an
+    #r-tree index.)
+    #
+    #vftProtectedAreas() clips a process-wide, pre-simplified copy held in
+    #EPSG:2056 and hands back lon/lat for leaflet: ~0.10s here instead of ~5.7s,
+    #and 58% less GeoJSON for htmlwidgets to serialise. See data_paths.R.
+    shp_PA <- vftTime("step5:protectedAreas", vftProtectedAreas(shape))
 
     # Activate outputUI checkbox at start
     # if(currentLang == "de"){
@@ -550,10 +565,11 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
           #if there is no map, make one. If there is, update it
           if(!is.null(r$mapPresent)){
           if(r$mapPresent == FALSE | r$refreshMap == TRUE){
-          map <- leaflet::leaflet(data = passageTable, options = leaflet::leafletOptions(doubleClickZoom = FALSE, preferCanvas = TRUE), height = 500 ) |>
+          map <- vftTime("step5:buildBaseMap",
+            leaflet::leaflet(data = passageTable, options = leaflet::leafletOptions(doubleClickZoom = FALSE, preferCanvas = TRUE), height = 500 ) |>
             leaflet::addMapPane("layer_SM", zIndex = 415)|>
             leaflet::addMapPane("layer1", zIndex = 410)|> leaflet::addMapPane("layer2", zIndex = 420)|> leaflet::addMapPane("layer3", zIndex = 450) |>
-            leaflet::addProviderTiles("OpenStreetMap.CH", options = leaflet::providerTileOptions(opacity = 0.5, zIndex = 400))
+            leaflet::addProviderTiles("OpenStreetMap.CH", options = leaflet::providerTileOptions(opacity = 0.5, zIndex = 400)))
 
             map <- map |>
               leaflegend::addLegendImage(position = "topright",title = i18n()$t("Formen:"),
@@ -668,9 +684,13 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
               leaflet::leafletOutput(NS(id, "mapAreaLeaflet"), height = 600, width = 884)
             })
 
-            output$mapAreaLeaflet <- leaflet::renderLeaflet({
+            #the block is just `map` - the map was built eagerly above - so all the
+            #cost here is htmlwidgets turning it into JSON, which happens outside
+            #the block. vftTimeRender spans that; vftTime inside would read ~0.
+            output$mapAreaLeaflet <- vftTimeRender("step5:mapAreaLeaflet",
+                                                   leaflet::renderLeaflet({
               map
-            })
+            }))
           }
           }else{
             #if r$mapPresent is null
@@ -690,9 +710,11 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
             output$mapArea_UI <- renderUI({
                 leaflet::leafletOutput(NS(id, "mapAreaLeaflet"), height = 600, width = 884)
             })
-            output$mapAreaLeaflet <- leaflet::renderLeaflet({
+            #see the note at the sibling site above
+            output$mapAreaLeaflet <- vftTimeRender("step5:mapAreaLeaflet",
+                                                   leaflet::renderLeaflet({
               map
-            })
+            }))
 
           }
 
@@ -737,11 +759,11 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
 
 
         if(r$currentLang == "de"){
-          noSimPic <- png::readPNG( "www/noSimYet_de.png")
+          noSimPic <- vftTime("step5:readNoSimPNG", png::readPNG( "www/noSimYet_de.png"))
         }else if(r$currentLang == "fr"){
-          noSimPic <- png::readPNG( "www/noSimYet_fr.png")
+          noSimPic <- vftTime("step5:readNoSimPNG", png::readPNG( "www/noSimYet_fr.png"))
         }else if(r$currentLang == "en"){
-          noSimPic <- png::readPNG( "www/noSimYet_en.png")
+          noSimPic <- vftTime("step5:readNoSimPNG", png::readPNG( "www/noSimYet_en.png"))
         }
 
         # output$mapScript <- shiny::renderUI({
@@ -761,7 +783,10 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
           shiny::plotOutput(NS(id, "mapArea"), height = 600, width = 884)
 
         })
-          output$mapArea <- shiny::renderPlot({
+          #the "noSim" placeholder the user sees on entering step 5 - reported as
+          #appearing only after a stall, so time the whole render including the
+          #PNG being encoded for the browser
+          output$mapArea <- vftTimeRender("step5:noSimPlot", shiny::renderPlot({
 
               plot(1, type = "n", xlab = "",
                    ylab = "", xlim = c(0, 10),
@@ -770,7 +795,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
               graphics::rasterImage(noSimPic,0,0,10,10)
 
               vftDbg("EMPTY RENDERPLOT")
-            }, height = 600, width = 884)
+            }, height = 600, width = 884))
 
           r$mapPresent <- FALSE
       }
@@ -1144,10 +1169,13 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
         #use selected network to launch simulation
         network <- r$selectedNetwork_r()[[1]]
 
-        progress <- ipc::AsyncProgress$new(value = 0, message = "Running Agent-Based Model")
+        #vftProgress, not ipc::AsyncProgress: this was the worst site in the app -
+        #385 MB of session state serialised into the ABM worker, against 3.6 MB
+        #for the `network` the job actually needs. See R/async_helpers.R.
+        progress <- vftProgress(value = 0, message = "Running Agent-Based Model")
 
         #LAUNCH PROMISE####
-        future::future({
+        vftFuture({
         #determine sum of residents in area of focus
         nbResidents <- sum(igraph::V(network)$Residents, na.rm = TRUE)
         #determine number of agents

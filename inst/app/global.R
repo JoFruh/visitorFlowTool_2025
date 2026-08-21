@@ -170,12 +170,24 @@ if (vftInstalled) {
   currentPlan <- future::plan(future.mirai::mirai_multisession, workers = workers)
 
   # Pre-warm the daemons so each has visitorFlowTool (incl. its compiled DLL) loaded.
+  #
+  # The values MUST be collected. future treats a worker as busy until the future
+  # occupying it is resolved *and* collected, so warming futures left dangling leave
+  # nbrOfFreeWorkers() at 0 for the life of the process. The daemons still run work
+  # in parallel, but the first future() calls afterwards pay to reclaim the slots:
+  # measured at 0.66s and 0.88s to create, against 0.006s once collected. That is a
+  # main-thread stall on the first user to trigger any async work.
+  #
+  # Collecting here also makes the warming synchronous, which is the point of it -
+  # startup absorbs the library() load rather than the first user paying for it.
   warming <- lapply(seq_len(future::nbrOfWorkers()), function(i) {
     future::future({
       library(visitorFlowTool)
       TRUE
     })
   })
+  invisible(lapply(warming, function(f) tryCatch(future::value(f), error = function(e) NA)))
+  rm(warming)
 } else {
   # dev / load_all: run async work in the main session (has the compiled code loaded).
   message("visitorFlowTool not installed: using future::sequential (async runs in the main ",
@@ -184,6 +196,39 @@ if (vftInstalled) {
 }
 # currentPlan <- future::plan("future::multisession", workers = 4) #previous backend
 
+
+
+# Pre-build the simplified protected-areas layer before any session exists.
+#
+# Simplifying it costs ~10s. Left lazy, the first user to reach step 5 would pay
+# that as a main-thread freeze felt by everyone connected - precisely the thing
+# this whole effort is removing. Doing it here moves the cost into startup, where
+# there is nobody to block. Every session afterwards just clips the cache (~0.1s).
+#
+# Wrapped in try(): a missing or unreadable data directory should stop the layer
+# from being pre-warmed, not stop the app from starting. vftProtectedAreas() will
+# then build it on first use and surface any real error there.
+try(visitorFlowTool:::vftProtectedAreasCached(), silent = TRUE)
+
+
+# Put tmap in interactive mode once, for the process.
+#
+# tmap_mode() sets a global option. It takes no arguments that vary per session
+# and returns the same state every time, but it was being called INSIDE three
+# renderLeaflet blocks - so every re-render, in every session, re-set a global
+# that was already set, on the shared main thread. In the 2026-08-21 profile that
+# was 3.0s at step1_server.R#427 plus 1.2s in step4's map block: ~4s of pure
+# repetition, and the fourth largest cost in the app.
+#
+# Setting it here is also the more correct place. The option is process-wide, not
+# session-wide, so with several sessions connected the per-render calls were all
+# writing the same value into shared state anyway - just repeatedly, and always
+# while somebody was waiting.
+#
+# Safe to hoist because 'view' is the only mode this app ever asks for; nothing
+# switches to 'plot'. If that ever changes, set the mode around the specific
+# plot-mode call rather than putting this back in a render block.
+tmap::tmap_mode('view')
 
 
 # Persistent on-disk cache for basemap tiles. maptiles::get_tiles() caches individual

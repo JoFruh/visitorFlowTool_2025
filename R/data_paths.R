@@ -98,3 +98,63 @@ vftDataDir <- function(){
 vftData <- function(...){
   file.path(vftDataDir(), ...)
 }
+
+
+#### Shared display layers ####
+
+#' The protected-areas layer, simplified once and reused by every session.
+#'
+#' This layer is display-only - step 5 and newVersions hand it straight to
+#' leaflet::addPolygons() and nothing computes with it - but it is three national
+#' multipolygons carrying 889,260 vertices, which is far more detail than any
+#' screen can show and a large payload for htmlwidgets to serialise on the shared
+#' main thread.
+#'
+#' Two costs were being paid per session, and both are removed here:
+#'
+#'   - the clip: cropping 889k vertices took ~5.7s in EPSG:4326, because sf
+#'     routes lon/lat geometry through s2's spherical predicates. Held in 2056
+#'     the same clip is ~0.10s.
+#'   - the payload: 21,113 vertices and 0.77 MB of GeoJSON for a typical area,
+#'     against 8,933 vertices and 0.33 MB after simplification - 58% less for
+#'     leaflet to serialise and the browser to draw.
+#'
+#' Simplifying costs ~10s, so it must happen once for the process rather than
+#' once per session; global.R warms it at startup so no user ever waits for it.
+#' Cached in .GlobalEnv alongside the .vft_* rasters, and safe there on the same
+#' terms: it derives purely from an immutable national file and holds no user
+#' state.
+#'
+#' 25 m is the tolerance because it is the knee of the curve - it drops 60% of
+#' the vertices for a 0.05% change in area, where 50 m saves little more and
+#' costs 0.34%. It is a display tolerance and nothing measures against this
+#' layer, but keep it well under the width of the features being drawn.
+VFT_PA_TOLERANCE_M <- 25
+
+vftProtectedAreasCached <- function(tolerance = VFT_PA_TOLERANCE_M){
+  if(!exists(".vft_PA_simplified", envir = .GlobalEnv)){
+    pa <- sf::st_read(vftData("maps/protectedAreas/PA_all.gpkg"), quiet = TRUE)
+    .GlobalEnv$.vft_PA_crs <- sf::st_crs(pa)
+    #simplify in the projected CRS so the tolerance is in metres, not degrees
+    .GlobalEnv$.vft_PA_simplified <-
+      sf::st_simplify(sf::st_transform(pa, 2056), dTolerance = tolerance)
+  }
+  .GlobalEnv$.vft_PA_simplified
+}
+
+#' The protected areas within one study area, ready for leaflet.
+#'
+#' Clips the cached layer to `shape` and returns it in the layer's original CRS
+#' (lon/lat), which is what leaflet requires - only the intermediate work happens
+#' in 2056.
+#'
+#' The window is built from `shape`'s bounding box in ITS OWN CRS and then
+#' projected as a polygon. Transforming first and taking st_bbox() afterwards is
+#' not the same region - it cuts a larger one, and shifted the resulting area by
+#' +2.2% when measured - so the order here matters.
+vftProtectedAreas <- function(shape){
+  cached <- vftProtectedAreasCached()
+  win    <- sf::st_transform(sf::st_as_sfc(sf::st_bbox(shape)), 2056)
+  clipped <- sf::st_intersection(cached, win)
+  sf::st_transform(clipped, .GlobalEnv$.vft_PA_crs)
+}

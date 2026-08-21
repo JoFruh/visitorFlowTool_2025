@@ -3,6 +3,12 @@ lastStep_server <- function(id, networkList , versionsUI ,
                             SM_pres, SMColors , shape ,
                             basemap , finalPolygons, species, pathUsage ){
 
+  #count this instantiation. A module server should be created once per
+  #session; this app re-calls it from an observeEvent on a trigger, so any
+  #count above 1 means a duplicate set of observers and outputs is now live
+  #alongside the previous one. See vftModuleInstance() in perf_helpers.R.
+  vftModuleInstance("finalStep")
+
 
   shiny::moduleServer(id, function(input, output, session) {
 

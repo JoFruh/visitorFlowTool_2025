@@ -7,6 +7,12 @@
 # Define server logic
 step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, currentLang, skip = FALSE,
                          needHelp = NULL, finalPolygons = NULL, DULN = NULL, DULN_all = NULL, shape = NULL){
+
+  #count this instantiation. A module server should be created once per
+  #session; this app re-calls it from an observeEvent on a trigger, so any
+  #count above 1 means a duplicate set of observers and outputs is now live
+  #alongside the previous one. See vftModuleInstance() in perf_helpers.R.
+  vftModuleInstance("step4")
   #prepare LETTERS that go beyond 26 (X, Y, Z, AA, AB etc..)
   LETTERS702 <- c(LETTERS, sapply(LETTERS, function(x) paste0(x, LETTERS)))
   #shape is the submitted shapefile, or shape produced by submitted coordinates
@@ -109,10 +115,16 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
     plotMap <- function(){
 
 
-      output$finalAOIMap <- leaflet::renderLeaflet({
+      #vftTimeRender, not vftTime inside the block: this render converts the whole
+      #edge network to sf and hands it to tmap/leaflet, and the JSON serialisation
+      #of that happens AFTER the block returns, inside the function renderLeaflet
+      #produces. A label placed inside would miss it. Reported as user-visible
+      #stall right after Confirm in step 4.
+      output$finalAOIMap <- vftTimeRender("step4:finalAOIMap", leaflet::renderLeaflet({
 
 
-        tmap::tmap_mode('view')
+        #tmap_mode('view') is set once for the process in global.R - see the note
+        #there. It was ~1.2s of main-thread time per render here.
 
         #plot the initial map
 
@@ -156,7 +168,7 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
 
 
 
-      })
+      }))
 
       #a little bit clunky:
       #generate polygons global container that is referenced within function.
@@ -843,11 +855,14 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
         finalPolygons <- r$polygonsList
         parking <- r$parking
 
-        progress2 <- ipc::AsyncProgress$new(message = "Loading Parking information...",
-                                            detail = paste0("Dies sollte weniger als ", 30, "Sekunden dauern"),
-                                            queue = ipc::shinyQueue(),
-                                            millis = 1000)
-        future::future({
+        #vftProgress, not ipc::AsyncProgress: 120 MB of session state was crossing
+        #into the worker from this site - the largest of the two step-4 dispatches
+        #and 4.8s of blocked main thread. See R/async_helpers.R.
+        progress2 <- vftProgress(message = "Loading Parking information...",
+                                 detail = paste0("Dies sollte weniger als ", 30, "Sekunden dauern"),
+                                 queue = ipc::shinyQueue(),
+                                 millis = 1000)
+        vftFuture({
           vftDbg("CONFIRM5")
           vftDbgCat("TEST1\n")
           # cat(file = stderr(), paste0("polygonEnv is made of : ", ls(polygonEnv)))
@@ -1222,10 +1237,12 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
 
           observeEvent(NULL, {
             # LAUNCH PROMISE - generate AOIs ####
-            progress1 <- ipc::AsyncProgress$new(message = "Generating areas of interest...",
-                                                detail = paste0("Dies sollte weniger als ", 30, "Sekunden dauern"),
-                                                queue = ipc::shinyQueue(),
-                                                millis = 1000)
+            #vftProgress, not ipc::AsyncProgress: 117 MB of session state was
+            #crossing into the worker from this site. See R/async_helpers.R.
+            progress1 <- vftProgress(message = "Generating areas of interest...",
+                                     detail = paste0("Dies sollte weniger als ", 30, "Sekunden dauern"),
+                                     queue = ipc::shinyQueue(),
+                                     millis = 1000)
 
 
 
@@ -1234,7 +1251,7 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
 
             # lake_path <- paste0(home, "/inst/app/www/data/maps/lakes.gdb")
 
-            future::future({
+            vftFuture({
 
               DULN <- terra::unwrap(DULN_wrapped)
               DULN_all <- terra::unwrap(DULN_all_wrapped)

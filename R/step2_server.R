@@ -7,6 +7,12 @@
 step2_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE,
                          filterList = NULL, checkboxSave = NULL){
 
+  #count this instantiation. A module server should be created once per
+  #session; this app re-calls it from an observeEvent on a trigger, so any
+  #count above 1 means a duplicate set of observers and outputs is now live
+  #alongside the previous one. See vftModuleInstance() in perf_helpers.R.
+  vftModuleInstance("step2")
+
   #shape is the submitted shapefile, or shape produced by submitted coordinates
   shiny::moduleServer(id, function(input, output, session) {
 
@@ -473,12 +479,14 @@ step2_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE
 
         df_spInfo <- r$df_spInfo
 
-        progress <- ipc::AsyncProgress$new(message = i18n()$t(":aufbereitung:"),
-                                           detail = paste0(i18n()$t("Dies sollte weniger als "), 30, i18n()$t(" Sekunden dauern")),
-                                           queue = ipc::shinyQueue(),
-                                           millis = 1000)
+        #vftProgress, not ipc::AsyncProgress: 78 MB of session state was crossing
+        #into the worker from this site. See R/async_helpers.R.
+        progress <- vftProgress(message = i18n()$t(":aufbereitung:"),
+                                detail = paste0(i18n()$t("Dies sollte weniger als "), 30, i18n()$t(" Sekunden dauern")),
+                                queue = ipc::shinyQueue(),
+                                millis = 1000)
 
-      future::future({
+      vftFuture({
 
         # if(is.null(df_spInfo_old)){
 

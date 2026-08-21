@@ -16,6 +16,12 @@
 newVersions_server <- function(id, networkList, confirm, i18n, currentLang, isFirstRun, SM_pres, SMcolors, shp_PA, finalPolygons = NULL, versionsUI = list(), trigger = 0,
                                DULN = NULL, shape = NULL){
 
+  #count this instantiation. A module server should be created once per
+  #session; this app re-calls it from an observeEvent on a trigger, so any
+  #count above 1 means a duplicate set of observers and outputs is now live
+  #alongside the previous one. See vftModuleInstance() in perf_helpers.R.
+  vftModuleInstance("newVersions")
+
   # r$mapRefresh <- 0
   shiny::moduleServer(id, function(input, output, session) {
 
@@ -283,8 +289,7 @@ if(is.null(r$updateNetworkPlot)){
 
         shiny::isolate(r$networkList[[r$position]]$network <- network )
 
-        #interactive map
-        tmap::tmap_mode('view')
+        #interactive map: mode is set once for the process in global.R
 
         #use this reactive value here only to trigger plotting when value is changed
         r$updateNetworkPlot()

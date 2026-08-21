@@ -192,7 +192,7 @@ app_server <- function(input, output, session){
       # r$step1Refreshing <- TRUE
       shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step1" )
     }
-    step1return <- step1_server("step1", i18n = shiny::reactive(i18n))#, lang = reactive(input$lang_pick)
+    step1return <- vftTime("module:step1", step1_server("step1", i18n = shiny::reactive(i18n)))#, lang = reactive(input$lang_pick)
 
 
     #REACTIVES
@@ -331,9 +331,9 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
 
       #change tabs
       #use shape information to clip, prepare and present SDM information
-      step2return <- step2_server("step2", fshape = r$shape, confirm = step1return$confirm(),
+      step2return <- vftTime("module:step2", step2_server("step2", fshape = r$shape, confirm = step1return$confirm(),
                                   needHelp = r$needHelp, filterList = r$filterList, checkboxSave = r$checkboxSave,
-                                  i18n = shiny::reactive(i18n), currentLang = r$currentLang)
+                                  i18n = shiny::reactive(i18n), currentLang = r$currentLang))
       #Update UI
       shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step2" )
     }
@@ -441,10 +441,10 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
       #use shape information to clip, prepare and present SDM information
       vftDbgCat(paste0("DULN ALL 2: ", r$DULN_all))
 
-      step3return <- step3_server("step3", network = r$network, shape = r$shape, confirm = r$confirm,
+      step3return <- vftTime("module:step3", step3_server("step3", network = r$network, shape = r$shape, confirm = r$confirm,
                                   i18n = shiny::reactive(i18n), currentLang = r$currentLang,
                                   needHelp = r$needHelp, DULN_all = r$DULN_all
-                                  )
+                                  ))
       #Update UI
       shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step3" )
 
@@ -556,9 +556,9 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
     if(triggerStep4() > 0){
       # r$isSkip <- 0
       #Skip polygon generation = FALSE
-      step4return <- step4_server("step4", network = r$network, minThresh = r$minThresh, naturalAreas = r$naturalAreas, confirm = r$confirm, skip = r$isSkip,
+      step4return <- vftTime("module:step4", step4_server("step4", network = r$network, minThresh = r$minThresh, naturalAreas = r$naturalAreas, confirm = r$confirm, skip = r$isSkip,
                                   DULN = r$DULN, DULN_all = r$DULN_all, needHelp = r$needHelp,
-                                  i18n = shiny::reactive(i18n), currentLang = r$currentLang, shape = r$shape)
+                                  i18n = shiny::reactive(i18n), currentLang = r$currentLang, shape = r$shape))
       #Update UI
       shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step4" )
     }else if (triggerStep4() == -1){
@@ -566,9 +566,9 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
       #change tabs
 
       # r$isSkip <- 1
-      step4return <- step4_server("step4", network = r$network, minThresh = r$minThresh, naturalAreas = r$naturalAreas, confirm = r$confirm, skip = r$isSkip,
+      step4return <- vftTime("module:step4", step4_server("step4", network = r$network, minThresh = r$minThresh, naturalAreas = r$naturalAreas, confirm = r$confirm, skip = r$isSkip,
                                   DULN = r$DULN, DULN_all = r$DULN_all, needHelp = r$needHelp,
-                                  i18n = shiny::reactive(i18n), currentLang = r$currentLang)
+                                  i18n = shiny::reactive(i18n), currentLang = r$currentLang))
       #Update UI
       shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step4" )
     }
@@ -681,9 +681,9 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
       #change tabs
       vftDbgCat("TEST8\n")
       # cat(file = stderr(), paste0("contents of envBase: ", ls(envBase)))
-      step5return <- step5_server("step5", networkList = r$networkList, SM_pres = r$SM_pres, SMcolors = r$SMcolors, shape = r$shape, confirm = r$confirm, finalPolygons = r$finalPolygons, versionsUI = r$versionsUI, isFirstRun_stp6 = r$step6FirstRun,
+      step5return <- vftTime("module:step5", step5_server("step5", networkList = r$networkList, SM_pres = r$SM_pres, SMcolors = r$SMcolors, shape = r$shape, confirm = r$confirm, finalPolygons = r$finalPolygons, versionsUI = r$versionsUI, isFirstRun_stp6 = r$step6FirstRun,
                                   needHelp = r$needHelp, basemap = r$basemap, species = r$species,
-                                  i18n = shiny::reactive(i18n), currentLang = r$currentLang, minCutThresh = r$minCutThresh)
+                                  i18n = shiny::reactive(i18n), currentLang = r$currentLang, minCutThresh = r$minCutThresh))
       r$step6FirstRun <- FALSE
     }
 

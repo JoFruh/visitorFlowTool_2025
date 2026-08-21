@@ -1,6 +1,12 @@
 
 # Define server logic
 step1_server <- function(id, i18n){
+
+  #count this instantiation. A module server should be created once per
+  #session; this app re-calls it from an observeEvent on a trigger, so any
+  #count above 1 means a duplicate set of observers and outputs is now live
+  #alongside the previous one. See vftModuleInstance() in perf_helpers.R.
+  vftModuleInstance("step1")
   shiny::moduleServer(id, function(input, output, session){
 
     vftDbgCat("START STEP 1 SERVER\n")
@@ -418,7 +424,9 @@ step1_server <- function(id, i18n){
     # RENDER MAP ####
     output$areaSelectMap <- leaflet::renderLeaflet({
 
-      tmap::tmap_mode('view')
+      #tmap_mode('view') is set once for the process in global.R. It was 3.0s of
+      #main-thread time here, re-setting an unchanged global option on every
+      #render of every session.
 
       #if a shape exists already, draw it and zoom to it
       if(shiny::isolate(!is.null(r1$shape)) ){
@@ -1154,13 +1162,15 @@ step1_server <- function(id, i18n){
 
         finalShape <- r1$finalShape
 
-        progress <- ipc::AsyncProgress$new(message = i18n()$t('Laden von relevanten Daten...'),
-                                           detail = i18n()$t("Dies sollte weniger als 30 Sekunden dauern." ) ,
-                                           queue = ipc::shinyQueue(),
-                                           millis = 1000 )
+        #vftProgress, not ipc::AsyncProgress: the latter carries the Shiny session
+        #into the worker (25 MB from this site alone). See R/async_helpers.R.
+        progress <- vftProgress(message = i18n()$t('Laden von relevanten Daten...'),
+                                detail = i18n()$t("Dies sollte weniger als 30 Sekunden dauern." ) ,
+                                queue = ipc::shinyQueue(),
+                                millis = 1000 )
 
         #launch job in parallel
-        future::future({
+        vftFuture({
 
         #format shape for later use
         #transform to web Mercator
@@ -1250,13 +1260,14 @@ step1_server <- function(id, i18n){
         finalShape <- r1$finalShape
 
         #start progress bar
-        progress <- ipc::AsyncProgress$new(message = i18n()$t('Laden von relevanten Daten...'),
-                                           detail = i18n()$t("Dies sollte weniger als 30 Sekunden dauern.") ,
-                                           queue = ipc::shinyQueue() ,
-                                           millis = 1000)
+        #vftProgress: see the note at the sibling site above.
+        progress <- vftProgress(message = i18n()$t('Laden von relevanten Daten...'),
+                                detail = i18n()$t("Dies sollte weniger als 30 Sekunden dauern.") ,
+                                queue = ipc::shinyQueue() ,
+                                millis = 1000)
 
         #launch job in parallel
-        future::future({
+        vftFuture({
 
         #format shape for later use
         shp <- sf::st_as_sf(finalShape, coords = c("long", "lat"), crs = sf::st_crs(4326))

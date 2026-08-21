@@ -49,6 +49,13 @@
     st$sessions   <- 0L
     st$generation <- 0L
 
+    #latches TRUE at the first session and never resets: it separates "the app
+    #was booting" from "a user was waiting". Not the same as sessions > 0, which
+    #drops back to 0 between connections - work done in a gap is still a stall,
+    #it just froze nobody, whereas work done before the first connection ever is
+    #startup. See .vftPerfTick().
+    st$everSession <- FALSE
+
     #labels of vftTime() blocks currently on the stack, innermost last
     st$stack      <- character(0)
 
@@ -140,7 +147,25 @@ vftPerfLog <- function(kind, label, ms){
     attributable <- p$lastEnd > (now - late - p$interval) &&
                     p$lastDur >= 0.5 * late
     label <- if(attributable) p$lastLabel else "unattributed"
-    vftPerfLog("stall", label, late * 1000)
+
+    #Startup is logged as its own kind, not as a stall. The heartbeat starts near
+    #the top of global.R, so everything after it - loading packages, the ~7.4s
+    #protected-areas warm, tmap_mode, warming the daemons - is genuinely a blocked
+    #main thread, and genuinely blocks nobody: there is no session yet. Counting
+    #it made "49% of wall clock blocked" on a short single-user run, where over a
+    #third of the freeze was the app booting. That number is the one being used to
+    #judge whether any of this work helped, so it has to measure only time a user
+    #could have been waiting.
+    #
+    #Kept in the log rather than dropped: a startup that grows is worth seeing, it
+    #just is not concurrency cost. vftReport() prints it on its own line.
+    #`sessions > 0` is checked as well as the latch, not instead of it. The latch
+    #is what makes a freeze in a gap between connections still count as a stall;
+    #the session count is what stops any path that registers a session without
+    #going through vftPerfSessionStart() from being misfiled as startup. Only a
+    #process that has never had a session, and has none now, is booting.
+    vftPerfLog(if(isTRUE(p$everSession) || p$sessions > 0L) "stall" else "startup",
+               label, late * 1000)
   }
 
   nxt <- as.numeric(Sys.time()) + p$interval
@@ -241,6 +266,37 @@ vftTime <- function(label, expr){
   expr
 }
 
+#' Time a whole render, including the widget serialisation vftTime() cannot see.
+#'
+#' `vftTime()` wraps an expression, so putting it inside renderLeaflet({...})
+#' measures only the code that builds the map object. For htmlwidgets that is
+#' often the smaller half: turning the widget into JSON for the browser happens
+#' afterwards, inside the function renderLeaflet() *returns*, when Shiny calls
+#' it. That cost shows up in a profile as NA#htmlwidgets / NA#shinyRenderWidget
+#' with no line attribution, and is invisible to a label placed inside the block.
+#'
+#' Worse, where a map is built eagerly and the render body is just `map` - as at
+#' step5_server.R#686 - a label inside the block would measure nothing at all
+#' while the real cost sits just outside it.
+#'
+#' This wraps the render function itself, so the timing spans everything Shiny
+#' does to produce the output. Attributes are copied because Shiny inspects them:
+#' render functions carry a class and metadata (output type, async support) and a
+#' bare closure would lose them and change how the output is treated.
+#'
+#' Usage: output$map <- vftTimeRender("step5:map", leaflet::renderLeaflet({...}))
+vftTimeRender <- function(label, renderFunc){
+  force(label)
+  force(renderFunc)
+  p <- .vftP()
+  if(!p$enabled) return(renderFunc)
+
+  wrapped <- function(...) vftTime(label, renderFunc(...))
+  #preserve class/metadata so Shiny still recognises this as a render function
+  attributes(wrapped) <- attributes(renderFunc)
+  wrapped
+}
+
 #' Track how many sessions share the process, so stalls can be read against load.
 #'
 #' A 3s block with one user connected is a slow app; the same block with five
@@ -250,6 +306,9 @@ vftTime <- function(label, expr){
 vftPerfSessionStart <- function(session){
   p <- .vftP()
   if(!p$enabled) return(invisible(NULL))
+  #from here on a freeze has somebody to freeze, so ticks count as stalls rather
+  #than startup - see .vftPerfTick()
+  p$everSession <- TRUE
   p$sessions <- p$sessions + 1L
   vftPerfLog("session", "open", 0)
 
@@ -259,6 +318,57 @@ vftPerfSessionStart <- function(session){
   })
   invisible(NULL)
 }
+
+# ---------------------------------------------------- module instances ---
+
+#' Count how many times a module server has been instantiated in one session.
+#'
+#' A Shiny module server is meant to be called once per session. This app calls
+#' each step's server *inside* an observeEvent on a trigger reactive, and the
+#' triggers are deliberately re-fired - `triggerStep4(triggerStep4() + 1)` is the
+#' navigation idiom - so moving through the app re-runs stepN_server() and builds
+#' a complete fresh set of observers and output bindings each time. Nothing
+#' destroys the previous set: dropping the reference to an observer does not stop
+#' it, so every old copy keeps firing on every matching event forever.
+#'
+#' If that is happening, it is the dominant cost in this app and it explains the
+#' profile: work spread thinly across <Anonymous>/func/flushReact with no single
+#' function to blame, output bookkeeping that grows, and a session that gets
+#' slower the longer it runs. This counter turns that from a theory into a number
+#' in the log - any count above 1 is a duplicate that should not exist.
+#'
+#' Emitted as its own row kind so it can be read alongside the stalls: the
+#' interesting question is whether stall size tracks instance count.
+#' The count MUST be per session, not per process.
+#'
+#' Module instantiation is a per-session event: five browser sessions each
+#' legitimately build their own step1. A process-wide counter therefore reports
+#' "step1 instantiated 5 times" for a perfectly healthy app, which is precisely
+#' the false positive the first version of this function produced - three
+#' sessions, three instantiations, flagged as duplicates when nothing was wrong.
+#'
+#' Keeping the tally in session$userData makes the number mean what the label
+#' claims: how many times *this one session* built the module. Any value above 1
+#' is then a genuine duplicate. getDefaultReactiveDomain() gives the module's
+#' session proxy, whose userData is shared with the root session, so all of a
+#' session's modules count against the same record.
+vftModuleInstance <- function(name){
+  p <- .vftP()
+  if(!p$enabled) return(invisible(0L))
+
+  sess <- shiny::getDefaultReactiveDomain()
+  #outside a session (tests, direct calls) fall back to the process record
+  store <- if(!is.null(sess)) sess$userData else p
+  if(is.null(store$.vftModules)) store$.vftModules <- list()
+
+  n <- (store$.vftModules[[name]] %||% 0L) + 1L
+  store$.vftModules[[name]] <- n
+  vftPerfLog("module", name, n)
+  invisible(n)
+}
+
+`%||%` <- function(a, b) if(is.null(a)) b else a
+
 
 # -------------------------------------------------------- debug output ---
 
@@ -341,17 +451,34 @@ vftRprofStop <- function(){
 
 #' Rank what actually held the main thread, worst first.
 #'
-#' Returns both views, because on their own each one misleads:
+#' Returns three views, because on their own each one misleads:
 #'
-#'   $self   time spent *in* a function, excluding what it called. This is
-#'           almost always a primitive - `%*%`, terra's C entry points, sf's
-#'           GEOS calls - and tells you the kind of work, not the place to fix.
-#'   $total  time spent in a function *including* everything beneath it. This is
-#'           where the app's own renders, observers and helpers appear, and is
-#'           the view that answers "which of my code is blocking everyone".
+#'   $lines  time attributed to a specific `file.R#123`. THE useful one - it
+#'           names the exact line of the app's own code that held the thread.
+#'           Empty unless the package was installed with source refs kept; see
+#'           below, because without them everything collapses into <Anonymous>.
+#'   $self   time spent *in* a function, excluding what it called. Almost always
+#'           a primitive - `%*%`, terra's C entry points, sf's GEOS calls - and
+#'           tells you the kind of work, not the place to fix.
+#'   $total  time spent in a function *including* everything beneath it. Useful
+#'           when $lines is unavailable, but this app's observers and renders are
+#'           anonymous closures, so they show up as <Anonymous>/func/FUN rather
+#'           than by name - which is why the first two profiles could not say
+#'           what was blocking.
 #'
-#' Read $total first to find the responsible app function, then $self to see
-#' what it is spending its time on.
+#' To get $lines populated, the package must be installed with:
+#'
+#'   devtools::install(keep_source = TRUE)
+#'
+#' NOT via Sys.setenv(R_KEEP_PKG_SOURCE = "yes"), which looks like it should work
+#' and does nothing: devtools::install() computes keep_source from its own
+#' argument (defaulting to getOption("keep.source.pkgs")) and builds in a callr
+#' subprocess that does not inherit the variable anyway. Verified by testing both.
+#'
+#' R drops source references from installed packages by default
+#' (keep.source.pkgs = FALSE), and Rprof cannot report a line it has no record
+#' of. This is the single setting that turns "27 unattributed stalls" into a
+#' ranked list of file:line.
 vftRprofReport <- function(file = .vftP()$rprof, top = 25){
   if(is.null(file) || !file.exists(file)){
     message("no Rprof output; run with VFT_RPROF=1 and call vftRprofStop() first")
@@ -359,10 +486,122 @@ vftRprofReport <- function(file = .vftP()$rprof, top = 25){
   }
   s <- summaryRprof(file)
   cat("total sampled time (s):", s$sampling.time, "\n")
-  list(self  = utils::head(s$by.self[order(-s$by.self$self.time), ], top),
+
+  byLine <- tryCatch(summaryRprof(file, lines = "show")$by.line,
+                     error = function(e) NULL)
+  #samples taken in code with no source reference are bucketed under
+  #"<no location>". A table containing only that is not line data, it is the
+  #symptom of a package installed without keep.source - report it as such rather
+  #than handing back a one-row table that says nothing.
+  #How much time has NO line attribution at all. This used to be dropped
+  #silently, which made $lines look like a complete account of the run when it
+  #was not: a profile whose top lines sum to ~10s, next to a stall log showing
+  #85s of blocking, sends you hunting through the 10s. Report the gap instead -
+  #a large <no location> figure means the blocking is in compiled or
+  #srcref-less code (sf/terra/leaflet internals, or the package installed
+  #without keep_source) and that $self / $total are the tables to read, not
+  #$lines.
+  noLoc <- 0
+  if(!is.null(byLine) && nrow(byLine)){
+    hit <- rownames(byLine) == "<no location>"
+    if(any(hit)) noLoc <- sum(byLine$self.time[hit])
+    byLine <- byLine[!hit, , drop = FALSE]
+  }
+  accounted <- if(!is.null(byLine) && nrow(byLine)) sum(byLine$self.time) else 0
+  cat(sprintf("with line attribution: %.1f s | <no location>: %.1f s (%.0f%% of sampled)\n",
+              accounted, noLoc,
+              if(s$sampling.time > 0) 100 * noLoc / s$sampling.time else 0))
+  if(noLoc > accounted){
+    cat("  -> most of the time has no line info: read $self and $total, not $lines\n")
+  }
+
+  if(is.null(byLine) || !nrow(byLine)){
+    cat("\nNO LINE DATA. Reinstall with source refs to get file:line attribution:\n")
+    cat("  devtools::install(keep_source = TRUE)\n")
+    byLine <- NULL
+  }else{
+    byLine <- utils::head(byLine[order(-byLine$self.time), , drop = FALSE], top)
+  }
+
+  list(lines = byLine,
+       self  = utils::head(s$by.self[order(-s$by.self$self.time), ], top),
        total = utils::head(s$by.total[order(-s$by.total$total.time), ], top))
 }
 
+
+#' Everything the log has to say about a run, in one call.
+#'
+#' Finds the newest log in VFT_PERF_DIR by default, so there is no filename to
+#' look up. Prints the module instance counts first because that is currently the
+#' open question: a module server should be created once per session, and any
+#' count above 1 means a duplicate set of observers and outputs is live.
+vftReport <- function(file = NULL, dir = Sys.getenv("VFT_PERF_DIR", "")){
+  if(is.null(file)){
+    if(!nzchar(dir)) dir <- file.path(tempdir(), "vft_perf")
+    fs <- list.files(dir, pattern = "^vft_perf_.*[.]csv$", full.names = TRUE)
+    if(!length(fs)){
+      message("no vft_perf_*.csv found in ", dir,
+              " - set VFT_PERF_DIR before launching the app")
+      return(invisible(NULL))
+    }
+    file <- fs[which.max(file.mtime(fs))]
+  }
+  d <- utils::read.csv(file, stringsAsFactors = FALSE)
+  cat("log:", file, "\n")
+  cat("rows:", nrow(d), "| max concurrent sessions:", max(d$sessions), "\n\n")
+
+  cat("== MODULE INSTANCES (per session; >1 means duplicates are live) ==\n")
+  m <- d[d$kind == "module", ]
+  if(!nrow(m)){
+    cat("  none recorded - the app never reached a step module,\n")
+    cat("  or the installed package predates the counter (reinstall).\n\n")
+  }else{
+    #the count is already per session, so the max across rows is the worst any
+    #single session reached. Total rows are shown too: with N sessions, N rows
+    #all reading 1 is healthy, and is NOT the same thing as one session reaching N.
+    peak <- tapply(m$ms, m$label, max)
+    rows <- table(m$label)
+    for(nm in names(sort(peak, decreasing = TRUE))){
+      cat(sprintf("  %-12s worst session built it %2d time(s)   (%d instantiation(s) across all sessions)%s\n",
+                  nm, peak[[nm]], rows[[nm]],
+                  if(peak[[nm]] > 1) "   <-- DUPLICATE" else ""))
+    }
+    cat("\n")
+  }
+
+  #stall rows only. A labelled block that freezes the thread emits BOTH a `block`
+  #row (how long the function ran) and a `stall` row (how long the loop lost),
+  #so summing both double counts the same freeze. The stall rows are the measured
+  #blocking; block rows exist to attribute it, and appear in the ranking below.
+  #startup is reported, but never counted as blocking - nobody was connected
+  boot <- d[d$kind == "startup", ]
+  if(nrow(boot)){
+    cat("== STARTUP (before any session; blocks nobody) ==\n")
+    cat(sprintf("  %.1f s across %d tick(s), longest %.1f s\n\n",
+                sum(boot$ms)/1000, nrow(boot), max(boot$ms)/1000))
+  }
+
+  s <- d[d$kind == "stall", ]
+  if(nrow(s)){
+    #Wall clock runs from the FIRST SESSION OPENING, not from process start.
+    #Measuring from row 1 charges the app for however long it sat idle booting,
+    #which on a short run swamps the percentage being read.
+    opens <- d[d$kind == "session" & d$label == "open", ]
+    t0 <- as.POSIXct(if(nrow(opens)) opens$time[1] else d$time[1])
+    t1 <- as.POSIXct(d$time[nrow(d)])
+    wall <- max(as.numeric(difftime(t1, t0, units = "secs")), 1e-9)
+    cat("== MAIN-THREAD BLOCKING (from first session onward) ==\n")
+    cat(sprintf("  wall clock       : %.0f s\n", wall))
+    cat(sprintf("  blocked          : %.1f s (%.0f%% of wall clock)\n",
+                sum(s$ms)/1000, 100*sum(s$ms)/1000/wall))
+    cat(sprintf("  longest stall    : %.1f s\n", max(s$ms)/1000))
+    cat(sprintf("  user-seconds lost: %.0f\n\n",
+                sum(s$ms/1000 * pmax(1L, s$sessions))))
+    cat("== WORST OFFENDERS ==\n")
+    print(utils::head(vftPerfSummary(file), 10))
+  }
+  invisible(d)
+}
 
 #' Read the log back as a ranked table - what to fix, worst first.
 #'
