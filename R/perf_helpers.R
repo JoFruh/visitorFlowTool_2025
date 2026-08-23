@@ -75,6 +75,9 @@
     st$lastLabel  <- NA_character_
     st$lastEnd    <- 0
     st$lastDur    <- 0
+    #cumulative process GC seconds at the last tick, so each stall can report
+    #how much of itself was garbage collection
+    st$lastGc     <- sum(gc.time()[1:2])
     st$rprof      <- NULL
 
     #debug tracing off unless asked for; read once rather than per vftDbg() call
@@ -102,7 +105,7 @@
 #' exactly how the process tends to end. The write is a few dozen bytes and only
 #' happens on a threshold breach, so the cost of reopening is irrelevant next to
 #' the stalls being recorded.
-vftPerfLog <- function(kind, label, ms){
+vftPerfLog <- function(kind, label, ms, gcMs = NA_real_){
   p <- .vftP()
   if(!p$enabled) return(invisible(NULL))
   line <- paste0(format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"), ",",
@@ -110,7 +113,13 @@ vftPerfLog <- function(kind, label, ms){
                  #a label with a comma would shift every later column
                  gsub(",", ";", label, fixed = TRUE), ",",
                  round(ms), ",",
-                 p$sessions, "\n")
+                 p$sessions, ",",
+                 #how much of this stall the garbage collector accounts for.
+                 #GC runs at arbitrary allocation points, so its cost lands
+                 #wherever the app happened to be - which is exactly what the
+                 #"unattributed" bucket is made of. gc.time() is free to read
+                 #and never triggers a collection, unlike gc() itself.
+                 ifelse(is.na(gcMs), "", round(gcMs)), "\n")
   #instrumentation must never be able to take the app down with it: an
   #unwritable log directory is a reason to lose measurements, not sessions
   try(cat(line, file = p$file, append = TRUE), silent = TRUE)
@@ -164,8 +173,14 @@ vftPerfLog <- function(kind, label, ms){
     #the session count is what stops any path that registers a session without
     #going through vftPerfSessionStart() from being misfiled as startup. Only a
     #process that has never had a session, and has none now, is booting.
+    #GC is charged to whichever line happened to allocate, so a stall that is
+    #mostly GC is not really "caused" by the code it gets blamed on. Reading
+    #gc.time() costs nothing and never triggers a collection.
+    gcNow    <- sum(gc.time()[1:2])
+    gcMs     <- (gcNow - p$lastGc) * 1000
+    p$lastGc <- gcNow
     vftPerfLog(if(isTRUE(p$everSession) || p$sessions > 0L) "stall" else "startup",
-               label, late * 1000)
+               label, late * 1000, gcMs)
   }
 
   nxt <- as.numeric(Sys.time()) + p$interval
@@ -221,7 +236,7 @@ vftPerfInit <- function(dir = Sys.getenv("VFT_PERF_DIR", ""),
   p$sessions <- 0L
 
   if(!file.exists(p$file)){
-    try(cat("time,kind,label,ms,sessions\n", file = p$file), silent = TRUE)
+    try(cat("time,kind,label,ms,sessions,gc_ms\n", file = p$file), silent = TRUE)
   }
 
   .vftPerfTick(as.numeric(Sys.time()) + interval, gen)
@@ -479,6 +494,92 @@ vftRprofStop <- function(){
 #' (keep.source.pkgs = FALSE), and Rprof cannot report a line it has no record
 #' of. This is the single setting that turns "27 unattributed stalls" into a
 #' ranked list of file:line.
+#' What is actually on the stack while a dispatch is frozen
+#'
+#' Four rounds of custom probes each ruled one thing out and named no cause, and
+#' spilling the payload to disk left async:send untouched at 6s - so the cost is
+#' neither the bytes nor anything a timer wrapped around the call can see. This
+#' stops hypothesising and reads the sampled call stacks directly.
+#'
+#' summaryRprof() aggregates away exactly the detail that matters here, so this
+#' parses the raw .out instead: every sample is a stack, innermost frame first.
+#' Of the samples taken while vftFuture was on the stack, it reports which frame
+#' was actually executing.
+#'
+#' Read it like this: if the innermost frame is mirai itself, the time is inside
+#' the transport's compiled code and no R-level change will move it. If it is
+#' something else, that name is the answer four rounds of timers could not reach.
+#' @param file raw Rprof output; defaults to this run's file
+#' @param frame stack frame marking a dispatch
+#' @keywords internal
+vftSendStacks <- function(file = .vftP()$rprof, frame = "vftFuture"){
+  if(is.null(file) || !nzchar(file) || !file.exists(file)){
+    message("no Rprof output; start the app with VFT_RPROF=1, then vftRprofStop()")
+    return(invisible(NULL))
+  }
+  L <- readLines(file, warn = FALSE)
+  int <- 0.02
+  h <- grep("sample.interval", L, fixed = TRUE)
+  if(length(h)){
+    m <- regmatches(L[h[1]], regexpr("[0-9]+", L[h[1]]))
+    if(length(m)) int <- as.numeric(m)/1e6
+  }
+  keep <- !startsWith(L, "#File") & !grepl("sample.interval", L, fixed = TRUE) &
+          !grepl("line profiling", L, fixed = TRUE) & nzchar(L)
+  L <- L[keep]
+  if(!length(L)){ message("Rprof file has no samples"); return(invisible(NULL)) }
+
+  #each sample is a stack of quoted frame names, innermost first
+  qpat   <- '"[^"]+"'
+  stacks <- lapply(L, function(x)
+    gsub('"', '', regmatches(x, gregexpr(qpat, x))[[1]], fixed = TRUE))
+  #the innermost line ref, when the profile was taken with line.profiling
+  lref <- vapply(L, function(x){
+    m <- regmatches(x, regexpr("[0-9]+#[0-9]+", x)); if(length(m)) m else ""
+  }, "", USE.NAMES = FALSE)
+
+  hit <- vapply(stacks, function(s) frame %in% s, logical(1))
+  message("log: ", file)
+  message("samples: ", length(stacks), " total, ", sum(hit), " with ", frame,
+          " on the stack (", round(sum(hit)*int, 1), " s of ",
+          round(length(stacks)*int, 1), " s profiled)")
+  if(!sum(hit)){
+    message("none - either no dispatch ran while profiling was on, or ", frame,
+            " never appears in the stack")
+    return(invisible(NULL))
+  }
+
+  tab <- function(v, n){
+    t <- sort(table(v), decreasing = TRUE)
+    k <- seq_len(min(n, length(t)))
+    data.frame(name = names(t)[k], samples = as.integer(t)[k],
+               seconds = round(as.integer(t)[k]*int, 3),
+               pct = round(100*as.integer(t)[k]/sum(hit)), stringsAsFactors = FALSE)
+  }
+
+  d <- tab(vapply(stacks[hit], function(s) s[1], ""), 20)
+  names(d)[1] <- "innermost_frame"
+  message("
+== WHAT WAS EXECUTING DURING A DISPATCH ==")
+  print(d, row.names = FALSE)
+
+  p <- tab(vapply(stacks[hit], function(s)
+             paste(rev(utils::head(s, 3)), collapse = " -> "), ""), 10)
+  names(p)[1] <- "path"
+  message("
+== CALL PATHS (outer -> innermost, 3 frames) ==")
+  print(p, row.names = FALSE)
+
+  ln <- lref[hit]; ln <- ln[nzchar(ln)]
+  if(length(ln)){
+    q <- tab(ln, 10); names(q)[1] <- "file#line"
+    message("
+== INNERMOST SOURCE LINES ==")
+    print(q, row.names = FALSE)
+  }
+  invisible(list(inner = d, paths = p))
+}
+
 vftRprofReport <- function(file = .vftP()$rprof, top = 25){
   if(is.null(file) || !file.exists(file)){
     message("no Rprof output; run with VFT_RPROF=1 and call vftRprofStop() first")
@@ -597,6 +698,39 @@ vftReport <- function(file = NULL, dir = Sys.getenv("VFT_PERF_DIR", "")){
     cat(sprintf("  longest stall    : %.1f s\n", max(s$ms)/1000))
     cat(sprintf("  user-seconds lost: %.0f\n\n",
                 sum(s$ms/1000 * pmax(1L, s$sessions))))
+    #GC is reported separately because it is not a bug in any one function. It
+    #runs at arbitrary allocation points, so its cost is charged to whatever
+    #line happened to allocate - which is precisely how a large "unattributed"
+    #bucket forms. If most of the freeze is GC, labelling more code will not
+    #shrink it and the fix is to stop retaining memory, not to move work.
+    if("gc_ms" %in% names(d)){
+      g <- suppressWarnings(as.numeric(d$gc_ms))
+      st <- d$kind == "stall"
+      gcTot <- sum(g[st], na.rm = TRUE)/1000
+      if(gcTot > 0){
+        blocked <- sum(d$ms[st], na.rm = TRUE)/1000
+        cat("== GARBAGE COLLECTION ==
+")
+        cat(sprintf("  GC during stalls : %.1f s (%.0f%% of all blocking)
+",
+                    gcTot, 100 * gcTot/max(blocked, 1e-9)))
+        un <- st & d$label == "unattributed"
+        if(any(un)){
+          cat(sprintf("  of unattributed  : %.1f s of %.1f s (%.0f%%)
+",
+                      sum(g[un], na.rm = TRUE)/1000, sum(d$ms[un], na.rm = TRUE)/1000,
+                      100 * sum(g[un], na.rm = TRUE)/max(sum(d$ms[un], na.rm = TRUE), 1e-9)))
+        }
+        worst <- which.max(ifelse(st, g, NA))
+        if(length(worst) == 1 && is.finite(g[worst]))
+          cat(sprintf("  worst single tick: %.1f s of GC inside a %.1f s stall (%s)
+",
+                      g[worst]/1000, d$ms[worst]/1000, d$label[worst]))
+        cat("
+")
+      }
+    }
+
     cat("== WORST OFFENDERS ==\n")
     print(utils::head(vftPerfSummary(file), 10))
   }

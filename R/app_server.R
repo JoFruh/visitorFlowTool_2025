@@ -51,13 +51,13 @@ app_server <- function(input, output, session){
       # if(r$step == 4){r$SMdateTime <- dateTime}
       #stepName not same name as programming name
       stepName <- switch(r$step,
-        "2" = "1_bereich",
+        "2" = "2_SM",
         "3" = "ignore",
-        "4" = "2_SM",
-        "5" = "3_schnell",
-        "6" = "4_genau",
-        "7" = "5_simulation",
-        "8" = "finalStep"
+        "4" = "3_schnell",
+        "5" = "4_genau",
+        "6" = "5_simulation",
+        "7" = "finalStep",
+        "8" = "finalStep+"
       )
 #"2_SM","4_ZG_genau"
 
