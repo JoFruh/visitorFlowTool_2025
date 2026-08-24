@@ -157,7 +157,22 @@ app_server <- function(input, output, session){
                   envBase_needHelp,
                   envBase_finalPolygons,
                   envBase_species,
-                  envBase_minCutThresh, file = file)) #envBase_SMdateTime,
+                  envBase_minCutThresh, file = file,
+                  #save() defaults to gzip at compression_level 6, which is pure
+                  #main-thread CPU over the whole session state -- the raster
+                  #materialisation, the network, the polygons, the basemap -- and
+                  #this fires on EVERY step transition, nine times a session, on
+                  #the thread every other user is waiting on. Measured on a
+                  #91.6 MB representative payload:
+                  #  level 6 (default) 4.94 s -> 17.8 MB
+                  #  level 3           2.03 s -> 20.2 MB
+                  #  level 1           0.87 s -> 24.1 MB
+                  #  none              0.11 s -> 91.6 MB
+                  #Level 1 is 5.7x less blocking for a 35% larger file, and the
+                  #format is unchanged so load() reads it exactly as before.
+                  #Uncompressed would be faster still but quadruples what the
+                  #user has to download.
+                  compress = "gzip", compression_level = 1)) #envBase_SMdateTime,
       })
     }
   )

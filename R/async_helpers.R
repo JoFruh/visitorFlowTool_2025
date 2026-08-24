@@ -354,7 +354,7 @@ vftPayloadReport <- function(file = NULL, dir = Sys.getenv("VFT_PERF_DIR", "")){
   #tell "the pool died" from "there was never meant to be a pool": in dev the app
   #deliberately runs with daemons(0), and reviving there would hand jobs to bare
   #Rscript daemons that cannot library() an uninstalled package.
-  .vftP()$daemonsWanted <- TRUE
+  st <- .vftP(); st$daemonsWanted <- TRUE
   mirai::daemons(n)
   w <- mirai::everywhere({
     .libPaths(..vftLibs..)
@@ -393,22 +393,56 @@ vftPayloadReport <- function(file = NULL, dir = Sys.getenv("VFT_PERF_DIR", "")){
   invisible(tryCatch(mirai::status()$connections, error = function(e) NA_integer_))
 }
 
-#' Per-job timeout in milliseconds, or NULL for none.
+#' Per-job timeout in milliseconds, or NULL for none. OFF by default.
 #'
-#' A hung job is worse than a failed one: with no timeout the promise never
-#' settles, so the progress bar spins forever, the button stays disabled and the
-#' user has no way to know anything is wrong. With a timeout mirai returns an
-#' error value, the promise rejects, and vftAsyncError() closes the progress,
-#' re-enables the control and says what happened. The default is deliberately
-#' generous -- the ABM is a long job and a timeout that fires on healthy work
-#' would be worse than the bug it guards. VFT_TIMEOUT_S=0 disables it.
+#' This was defaulted on, at 1800s, to convert a silent hang into a visible
+#' error. It caused a worse bug: mirai's .timeout starts when the job is QUEUED,
+#' not when it starts running, so with one worker and three sessions the third
+#' session's job sits behind two others with the clock already running and times
+#' out having never executed. That cannot be fixed from here -- mirai gives no
+#' way to separate queue time from run time -- so the default is off.
+#'
+#' The hang it guarded against is real (a dead daemon queues forever without
+#' erroring) but .vftEnsureDaemons() addresses that directly by reviving the pool,
+#' which is the right fix. Set VFT_TIMEOUT_S to a number of seconds to opt in.
 .vftTimeoutMs <- function(){
-  s <- suppressWarnings(as.numeric(trimws(Sys.getenv("VFT_TIMEOUT_S", "1800"))))
-  #a typo must not silently disable the guard: only an explicit 0 turns it off,
-  #anything unparseable falls back to the default.
-  if(!isTRUE(is.finite(s))) return(1800 * 1000)
-  if(s <= 0) return(NULL)
+  s <- suppressWarnings(as.numeric(trimws(Sys.getenv("VFT_TIMEOUT_S", "0"))))
+  if(!isTRUE(is.finite(s)) || s <= 0) return(NULL)
   s * 1000
+}
+
+#' Send cumulative subsets of the args, to find where the cost appears.
+#'
+#' Established: each arg alone sends in 0.001-0.002s, all of them together take
+#' as long as the real send (margs_s 6.955 against send_s 6.948), and the
+#' expression is free (mexpr_s 0). So the cost is in some COMBINATION, and
+#' singletons cannot show it. Thirteen synthetic reproductions failed -- arg
+#' count, package functions among the args, and closures sharing one environment
+#' are all instant on a spare machine -- so the bisect has to run against the
+#' real objects, in the real process.
+#'
+#' Sends args[1], args[1:2], ... args[1:n] and times each. The step where the
+#' time appears names the arg that is only expensive in company. Sorted by name
+#' first so the order is stable between dispatches and the jump lands in the same
+#' place every time, rather than moving with whatever order globalsOf returned.
+.vftCumProbe <- function(args){
+  if(!identical(Sys.getenv("VFT_MIRAI_PROBE", "0"), "1")) return(NULL)
+  nms <- names(args)
+  if(is.null(nms) || !length(nms)) return(NULL)
+  keep <- !is.na(nms) & nzchar(nms)
+  args <- args[keep]; nms <- nms[keep]
+  o <- order(nms); args <- args[o]; nms <- nms[o]
+  out <- rep(NA_real_, length(args))
+  for(i in seq_along(args)){
+    out[i] <- tryCatch({
+      t <- as.numeric(Sys.time())
+      p <- mirai::mirai(1L, .args = args[seq_len(i)])
+      s <- as.numeric(Sys.time()) - t
+      try(mirai::stop_mirai(p), silent = TRUE)
+      s
+    }, error = function(e) NA_real_)
+  }
+  stats::setNames(out, nms)
 }
 
 #' Split the real send into its two halves: the expression, and the args.
@@ -532,7 +566,8 @@ vftPayloadReport <- function(file = NULL, dir = Sys.getenv("VFT_PERF_DIR", "")){
                              cold = NULL, pingSecs = c(empty = NA_real_,
                                                        sized = NA_real_),
                              mprobe = NULL,
-                             sprobe = c(expr = NA_real_, args = NA_real_)){
+                             sprobe = c(expr = NA_real_, args = NA_real_),
+                             cprobe = NULL){
   #self-targeting, but it must trigger on EITHER half. If the cold probe
   #absorbs the first-touch cost then send_s goes small and a send-only trigger
   #would log nothing at all -- losing exactly the evidence we added it for.
@@ -583,6 +618,8 @@ vftPayloadReport <- function(file = NULL, dir = Sys.getenv("VFT_PERF_DIR", "")){
     d$ping_s      <- round(unname(pingSecs["empty"]), 3)
     d$pingbig_s   <- round(unname(pingSecs["sized"]), 3)
     #per-object mirai send time, aligned to the same rows as ser_s and cold_s
+    d$cum_s       <- if(is.null(cprobe)) NA_real_ else
+                       round(unname(cprobe[match(d$global, names(cprobe))]), 3)
     d$mexpr_s     <- round(unname(sprobe["expr"]), 3)
     d$margs_s     <- round(unname(sprobe["args"]), 3)
     d$mirai_s     <- if(is.null(mprobe)) NA_real_ else
@@ -598,7 +635,7 @@ vftPayloadReport <- function(file = NULL, dir = Sys.getenv("VFT_PERF_DIR", "")){
     utils::write.table(
       d[, c("time","site","global","class","bytes","ser_s",
             "send_s","globals_s","gc_s","whole_MB","whole_ser_s",
-            "cold_s","cold_tot_s","cold_whl_s","cold_MB","ping_s","pingbig_s","mirai_s","mexpr_s","margs_s","awaiting","executing")],
+            "cold_s","cold_tot_s","cold_whl_s","cold_MB","ping_s","pingbig_s","mirai_s","cum_s","mexpr_s","margs_s","awaiting","executing")],
       file = f, sep = ",", row.names = FALSE,
       col.names = !file.exists(f), append = file.exists(f))
   }, error = function(e) NULL)
@@ -682,18 +719,30 @@ vftDispatchReport <- function(file = NULL, dir = Sys.getenv("VFT_PERF_DIR", ""))
           " Both ~0 -> the cost is in combining them.")
 
   if("mirai_s" %in% names(d) && any(is.finite(d$mirai_s))){
-    ms <- d[is.finite(d$mirai_s), c("site","global","class","MB","mirai_s","ser_s","cold_s")]
+    cols <- c("site","global","class","MB","mirai_s","cum_s","ser_s","cold_s")
+    cols <- cols[cols %in% names(d)]
+    ms <- d[is.finite(d$mirai_s), cols]
     if(nrow(ms)){
       message("
 == PER-OBJECT MIRAI SEND (VFT_MIRAI_PROBE=1) ==")
       ms$MB <- round(ms$MB, 2)
-      print(utils::head(ms[order(-ms$mirai_s), ], 20), row.names = FALSE)
+      #ordered by cum_s where we have it, so the table reads as the bisect it is:
+      #rows in the order they were added, and the step where the seconds appear.
+      print(utils::head(if("cum_s" %in% names(ms) && any(is.finite(ms$cum_s)))
+                          ms[order(ms$cum_s), ] else ms[order(-ms$mirai_s), ],
+                        25), row.names = FALSE)
       message("  each object sent ALONE through mirai, expression 1L, so only the",
               " object differs from the empty ping that is known to be instant.",
               " A large mirai_s beside a near-zero ser_s is the answer: R can",
               " serialise that object in no time, and mirai cannot. That object",
               " is what to stop capturing -- pass what the worker needs instead",
               " of the thing that holds it.")
+      message("  cum_s is the cumulative bisect: args sent as [1], [1:2], [1:3]",
+              " ... in name order, so the row where cum_s jumps is the arg that",
+              " is only expensive IN COMPANY. mirai_s is that same arg sent",
+              " ALONE. An arg with mirai_s ~0 and a large cum_s is the answer:",
+              " harmless by itself, expensive once combined with what came",
+              " before it.")
     }
   }
 
@@ -938,13 +987,15 @@ vftFuture <- function(expr, ..., envir = parent.frame()){
       mprobe <- .vftMiraiProbe(argl)
       #and the two halves of the real message: expression alone, args alone
       sprobe <- .vftSplitProbe(wrapped, argl)
+      #and where in the arg set the cost appears
+      cprobe <- .vftCumProbe(argl)
 
       tS <- as.numeric(Sys.time()); gc0 <- sum(gc.time()[1:2])
       m  <- vftTime("async:send", mirai::mirai(wrapped, .args = argl,
                                               .timeout = .vftTimeoutMs()))
       .vftDispatchDiag(ex, argl, wrapped, as.numeric(Sys.time()) - tS,
                        tS - tG, sum(gc.time()[1:2]) - gc0, cold, pingS, mprobe,
-                       sprobe)
+                       sprobe, cprobe)
 
       #the worker has read them by the time it answers; drop them either way
       #so a long session cannot silently fill the temp directory.
