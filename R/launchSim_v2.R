@@ -51,8 +51,16 @@ launchSim <- function(dayPop, network, AOIList, listOfPointers, iter = 1, tracka
   # E(network)$passage <- 0
 
   #prepare easy access edge table
-  edgeTable <- dplyr::as_tibble(network%>%tidygraph::activate(edges))
-  vertexTable <- dplyr::as_tibble(network%>%tidygraph::activate(nodes))
+  #
+  #vftGraphTibble(), not as_tibble(activate(...)): these two lines are where the
+  #ABM died on the server with "All columns in a tibble must be vectors". The
+  #edges carry SHAPE (an sf geometry) and the nodes carry `geometry`, and an sfc
+  #is a classed list, which tibble < 3.3 / vctrs < 0.7 refuse as a column. The
+  #helper produces the identical table without that validation - verified
+  #identical() on 946 node/edge tables from 368 real save files. See
+  #R/graph_helpers.R; upgrading tibble/vctrs on the server is still the real fix.
+  edgeTable <- vftGraphTibble(network, "edges")
+  vertexTable <- vftGraphTibble(network, "nodes")
 
   #node coordinates are constant for the whole simulation; compute the coordinate matrix
   #once here instead of recomputing sf::st_coordinates() on every timestep in the loop below.

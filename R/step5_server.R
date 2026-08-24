@@ -25,7 +25,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
     r$needHelp <- needHelp
     r$currentLang <- currentLang
 
-    cat(file = stderr(),"CURRENTLANG : " )
+    vftDbgCat("CURRENTLANG : ")
     vftDbgCat(r$currentLang )
 
     #keep track of checkbox
@@ -582,8 +582,21 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
               leaflet.extras::setMapWidgetStyle(list(background = "white"))
 
           }else{
+            #This is the rebuild every checkbox toggle goes through (sensitivity
+            #matrix, AOI, within-AOI, starting points, parking, ...): wipe the
+            #overlays, then re-add them below from the current inputs.
+            #
+            #vftClearNetworkLines() is NOT optional here. clearShapes() used to
+            #remove the network because it was SVG polylines, but it does not
+            #touch WebGL layers - they live in their own canvases - so without
+            #this each toggle left the old network behind and stacked another set
+            #of canvases on top of it, in a pane above the AOI polygons, the
+            #raster and the starting points. A few toggles and the browser is
+            #holding a dozen live WebGL contexts (most cap around 16) and the
+            #other layers stop showing.
             map <- leaflet::leafletProxy("mapAreaLeaflet")|>
-              leaflet::clearShapes()|>leaflet::clearGeoJSON()|>leaflet::clearImages()
+              leaflet::clearShapes()|>leaflet::clearGeoJSON()|>leaflet::clearImages()|>
+              vftClearNetworkLines(group = "paths")
           }
           }else{
             #create map if null
@@ -602,14 +615,16 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
               leaflet.extras::setMapWidgetStyle(list(background = "white"))
             }
 
-            map <- map|>leaflet::addPolylines(stroke = TRUE,
-                                  weight = 2 + (as.numeric(passageTable[,agentTypePassage,drop = TRUE]) / max(as.numeric(passageTable[,"passageAOI",drop = TRUE])) ) *2,
-                                  color = ~pal(as.numeric(passageTable[,agentTypePassage,drop = TRUE])),
-                                  fill = FALSE,
-                                  opacity = 1,
-                                  options = leaflet::pathOptions(pane = "layer2"),
-                                  group = "paths",
-                                  data = passageTable)
+            #the network is the single largest main-thread cost in the app:
+            #addPolylines() encodes every edge into nested JSON on the shared
+            #thread and scales with edge count, so a 50k-edge network froze every
+            #session for ~15s. vftAddNetworkLines() draws it through WebGL in
+            #~0.6s and keeps both the colour ramp and the 2-4px width. See
+            #data_paths.R; VFT_GL=0 restores this exact addPolylines call.
+            map <- vftAddNetworkLines(map, passageTable,
+                                      values    = passageTable[,agentTypePassage,drop = TRUE],
+                                      weightRef = passageTable[,"passageAOI",drop = TRUE],
+                                      pal = pal, group = "paths", pane = "layer2")
             if(input$aoi == TRUE){
               map <- map |> leaflet::addPolygons(data = finalPolygons,
                                                   weight = 3,
@@ -758,44 +773,27 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
 
 
 
-        if(r$currentLang == "de"){
-          noSimPic <- vftTime("step5:readNoSimPNG", png::readPNG( "www/noSimYet_de.png"))
-        }else if(r$currentLang == "fr"){
-          noSimPic <- vftTime("step5:readNoSimPNG", png::readPNG( "www/noSimYet_fr.png"))
-        }else if(r$currentLang == "en"){
-          noSimPic <- vftTime("step5:readNoSimPNG", png::readPNG( "www/noSimYet_en.png"))
-        }
-
-        # output$mapScript <- shiny::renderUI({
-        #   tags$script(HTML(paste0(
-        #     'document.getElementById("step5-mapAreaLeaflet").style.height="0px";',
-        #     'document.getElementById("step5-mapArea").style.height="600px";',
-        #     'document.getElementById("step5-mapAreaLeaflet").style.width="0px";',
-        #     'document.getElementById("step5-mapArea").style.width="884x";'
+        #The "no simulation yet" placeholder is a static image, and it used to
+        #cost 0.83s of the shared main thread per session to show one: 0.22s for
+        #png::readPNG to decode a 1865x2748x4 PNG into a ~20 MB array, then 0.61s
+        #for renderPlot to open an 884x600 device, rasterImage it and re-encode
+        #the result to PNG. That was the stall users reported between step 5
+        #loading and the placeholder appearing.
         #
-        #   )))
-        # })
-          #plot an image of empty simulation
-          # output$mapArea <- shiny::renderUI({})
+        #The browser can fetch the file itself. www is registered as a resource
+        #path in zzz.R, so an <img> costs the main thread nothing at all - no
+        #decode, no device, no re-encode, no output binding to maintain.
+        #only these three placeholders exist in www; the old code left noSimPic
+        #undefined for anything else and failed in the render, so fall back
+        #rather than asking the browser for a file that is not there.
+        noSimLang <- if(isTRUE(r$currentLang %in% c("de", "fr", "en"))) r$currentLang else "de"
 
         output$mapArea_UI <- renderUI({
-
-          shiny::plotOutput(NS(id, "mapArea"), height = 600, width = 884)
-
+          shiny::tags$img(src    = paste0("noSimYet_", noSimLang, ".png"),
+                          width  = 884,
+                          height = 600,
+                          alt    = i18n()$t("Noch keine Simulation"))
         })
-          #the "noSim" placeholder the user sees on entering step 5 - reported as
-          #appearing only after a stall, so time the whole render including the
-          #PNG being encoded for the browser
-          output$mapArea <- vftTimeRender("step5:noSimPlot", shiny::renderPlot({
-
-              plot(1, type = "n", xlab = "",
-                   ylab = "", xlim = c(0, 10),
-                   ylim = c(0, 10), bty ="n",axes=F,frame.plot=F, xaxt='n', ann=FALSE, yaxt='n')
-
-              graphics::rasterImage(noSimPic,0,0,10,10)
-
-              vftDbg("EMPTY RENDERPLOT")
-            }, height = 600, width = 884))
 
           r$mapPresent <- FALSE
       }
@@ -1277,7 +1275,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
         if(input$onlyAOIcheckbox == 1){
           proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet"
           )|>
-            leaflet::clearGroup(group = "paths")
+            vftClearNetworkLines(group = "paths")
 
           #determine agent to focus on
           if(input$agentCheckbox == "1"){
@@ -1293,18 +1291,18 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
           }
           passageTable <- getPassageTable()
           pal <- leaflet::colorNumeric(c("darkgrey", colorRampPalette(c("lightblue", "steelblue", "#182db5", "#37046e"))(max(passageTable$passageAOI)-1)), domain = c(0,max(passageTable$passageAOI)) )
-          proxy |> leaflet::addPolylines(data = passageTable,
-                                          stroke = TRUE,
-                                          weight = 2 + (as.numeric(passageTable[,agentTypePassage,drop = TRUE]) / max(as.numeric(passageTable[,"passageAOI",drop = TRUE])) ) *2,
-                                          color = ~pal(as.numeric(passageTable[,agentTypePassage,drop = TRUE])),
-                                          fill = FALSE,
-                                          opacity = 1,
-                                          options = leaflet::pathOptions(pane = "layer2"),
-                                          group = "paths")
+          #drawn through WebGL: addPolylines() encodes every edge into
+          #nested JSON on the shared main thread and scales with edge
+          #count. See vftAddNetworkLines() in data_paths.R; VFT_GL=0
+          #restores the original addPolylines call.
+          proxy |> vftAddNetworkLines(passageTable,
+                             values    = passageTable[,agentTypePassage,drop = TRUE],
+                             weightRef = passageTable[,"passageAOI",drop = TRUE],
+                             pal = pal, group = "paths", pane = "layer2")
         }else{
           proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet"
           )|>
-            leaflet::clearGroup(group = "paths")
+            vftClearNetworkLines(group = "paths")
 
           #determine agent to focus on
           if(input$agentCheckbox == "1"){
@@ -1321,14 +1319,14 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
           passageTable <- getPassageTable()
           pal <- leaflet::colorNumeric(c("darkgrey", colorRampPalette(c("lightblue", "steelblue", "#182db5", "#37046e"))(max(passageTable$passage)-1)), domain = c(0,max(passageTable$passage)) )
 
-          proxy |> leaflet::addPolylines(data = passageTable,
-                                          stroke = TRUE,
-                                          weight = 2 + (as.numeric(passageTable[,agentTypePassage,drop = TRUE]) / max(as.numeric(passageTable[,"passage",drop = TRUE])) ) *2,
-                                          color = ~pal(as.numeric(passageTable[,agentTypePassage,drop = TRUE])),
-                                          fill = FALSE,
-                                          opacity = 1,
-                                          options = leaflet::pathOptions(pane = "layer2"),
-                                          group = "paths")
+          #drawn through WebGL: addPolylines() encodes every edge into
+          #nested JSON on the shared main thread and scales with edge
+          #count. See vftAddNetworkLines() in data_paths.R; VFT_GL=0
+          #restores the original addPolylines call.
+          proxy |> vftAddNetworkLines(passageTable,
+                             values    = passageTable[,agentTypePassage,drop = TRUE],
+                             weightRef = passageTable[,"passage",drop = TRUE],
+                             pal = pal, group = "paths", pane = "layer2")
         }
 
       }, ignoreInit = TRUE)
@@ -1341,7 +1339,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
           if(input$onlyAOIcheckbox == 1){
             proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet"
             )|>
-              leaflet::clearGroup(group = "paths")
+              vftClearNetworkLines(group = "paths")
 
             #determine agent to focus on
             if(input$agentCheckbox == "1"){
@@ -1357,14 +1355,14 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
             }
             passageTable <- getPassageTable()
             pal <- leaflet::colorNumeric(c("darkgrey", colorRampPalette(c("lightblue", "steelblue", "#182db5", "#37046e"))(max(passageTable$passageAOI)-1)), domain = c(0,max(passageTable$passageAOI)) )
-            proxy |> leaflet::addPolylines(data = passageTable,
-                                            stroke = TRUE,
-                                            weight = 2 + (as.numeric(passageTable[,agentTypePassage,drop = TRUE]) / max(as.numeric(passageTable[,"passageAOI",drop = TRUE])) ) *2,
-                                            color = ~pal(as.numeric(passageTable[,agentTypePassage,drop = TRUE])),
-                                            fill = FALSE,
-                                            opacity = 1,
-                                            options = leaflet::pathOptions(pane = "layer2"),
-                                            group = "paths")
+            #drawn through WebGL: addPolylines() encodes every edge into
+            #nested JSON on the shared main thread and scales with edge
+            #count. See vftAddNetworkLines() in data_paths.R; VFT_GL=0
+            #restores the original addPolylines call.
+            proxy |> vftAddNetworkLines(passageTable,
+                               values    = passageTable[,agentTypePassage,drop = TRUE],
+                               weightRef = passageTable[,"passageAOI",drop = TRUE],
+                               pal = pal, group = "paths", pane = "layer2")
           }else{
 
             #determine agent to focus on
@@ -1381,18 +1379,18 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
             }
             proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet"
             )|>
-              leaflet::clearGroup(group = "paths")
+              vftClearNetworkLines(group = "paths")
 
             passageTable <- getPassageTable()
             pal <- leaflet::colorNumeric(c("darkgrey", colorRampPalette(c("lightblue", "steelblue", "#182db5", "#37046e"))(max(passageTable$passage)-1)), domain = c(0,max(passageTable$passage)) )
-            proxy |> leaflet::addPolylines(data = passageTable,
-                                            stroke = TRUE,
-                                            weight = 2 + (as.numeric(passageTable[,agentTypePassage,drop = TRUE]) / max(as.numeric(passageTable[,"passage",drop = TRUE])) ) *2,
-                                            color = ~pal(as.numeric(passageTable[,agentTypePassage,drop = TRUE])),
-                                            fill = FALSE,
-                                            opacity = 1,
-                                            options = leaflet::pathOptions(pane = "layer2"),
-                                            group = "paths")
+            #drawn through WebGL: addPolylines() encodes every edge into
+            #nested JSON on the shared main thread and scales with edge
+            #count. See vftAddNetworkLines() in data_paths.R; VFT_GL=0
+            #restores the original addPolylines call.
+            proxy |> vftAddNetworkLines(passageTable,
+                               values    = passageTable[,agentTypePassage,drop = TRUE],
+                               weightRef = passageTable[,"passage",drop = TRUE],
+                               pal = pal, group = "paths", pane = "layer2")
           }
 
         }

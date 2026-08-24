@@ -64,10 +64,11 @@ app_server <- function(input, output, session){
       return(paste0("visitorFlowSave_step",stepName, "_", dateTime, ".RData"))
     },
     content = function(file){
-      #known general-setup hot spot: this fires on every step transition and does
-      #a full terra materialisation plus a save() of the whole session state, all
-      #on the thread every other user is waiting on. Labelled so the stall log
-      #attributes it by name rather than to "unattributed".
+      #known general-setup hot spot: a save() of the whole session state on the
+      #thread every other user is waiting on. It used to fire at all eight step
+      #transitions; it now runs at three checkpoints only (see the dropped-site
+      #comments below). Labelled so the stall log attributes it by name rather
+      #than to "unattributed".
       vftTime("app:downloadSave", {
       #save all elements of envBase (a bit of a detour by saving as variables first)
       envBase_step <- r$step
@@ -113,14 +114,31 @@ app_server <- function(input, output, session){
       envBase_filterList <- r$filterList
       # envBase_weightInputs <- r$weightInputs
 
-      #save spatRaster as a data.frame with geo ref information.
-      #Cached in r$SM_pres_df: SM_pres only changes in step 3 (and on resume), so this
-      #materialization is computed once and reused on every later step transition instead
-      #of being recomputed on the main thread each time downloadSave fires.
-      if(is.null(r$SM_pres_df)){
-        r$SM_pres_df <- terra::as.data.frame(r$SM_pres, xy = TRUE, na.rm = FALSE)
+      #The sensitivity raster has to travel in the save file as a plain R object,
+      #because a SpatRaster is an external pointer and does not survive save().
+      #
+      #This used to be terra::as.data.frame(xy = TRUE, na.rm = FALSE) - one row
+      #per cell INCLUDING NAs, carrying two full-precision coordinate doubles per
+      #cell that are entirely redundant for a regular grid, and dropping the CRS
+      #(hence the explicit crs<- on the restore path below). terra::wrap() holds
+      #the same information as a PackedSpatRaster. Measured at 100 m resolution
+      #over a 100 km area (1M cells): 20.0 MB -> 4.0 MB retained per session and
+      #0.11s -> 0.01s to build.
+      #
+      #The RAM is the point, not the time: this is cached for the life of the
+      #session, on a host where daemons have already been OOM-killed.
+      #
+      #Backward compatible on purpose: terra::rast() has methods for BOTH a
+      #data.frame and a PackedSpatRaster, so the restore path below reads old and
+      #new save files without branching.
+      #
+      #Cached because SM_pres only changes in step 2 (and on resume), so this is
+      #built once and reused by every later checkpoint rather than recomputed on
+      #the main thread each time.
+      if(is.null(r$SM_pres_packed)){
+        r$SM_pres_packed <- terra::wrap(r$SM_pres)
       }
-      envBase_SM_pres <- r$SM_pres_df
+      envBase_SM_pres <- r$SM_pres_packed
 
       #save MinCutThreshold
       envBase_minCutThresh <- r$minCutThresh
@@ -155,14 +173,12 @@ app_server <- function(input, output, session){
                   envBase_weightInputs,
                   envBase_weightNames,
                   envBase_needHelp,
-                  envBase_finalPolygons,
                   envBase_species,
                   envBase_minCutThresh, file = file,
                   #save() defaults to gzip at compression_level 6, which is pure
-                  #main-thread CPU over the whole session state -- the raster
-                  #materialisation, the network, the polygons, the basemap -- and
-                  #this fires on EVERY step transition, nine times a session, on
-                  #the thread every other user is waiting on. Measured on a
+                  #main-thread CPU over the whole session state -- the raster,
+                  #the network, the polygons, the basemap -- on the thread every
+                  #other user is waiting on. Measured on a
                   #91.6 MB representative payload:
                   #  level 6 (default) 4.94 s -> 17.8 MB
                   #  level 3           2.03 s -> 20.2 MB
@@ -239,7 +255,13 @@ app_server <- function(input, output, session){
         # r$parking <- step1return$parking()
         #activate download
         r$step <- 2
-        shinyjs::click("downloadSave", asis = FALSE)
+        #autosave dropped here, on leaving step 1 (shape + path network). downloadSave
+        #materialises the raster and save()s the whole session state on the
+        #shared main thread, and it used to fire at all eight step transitions.
+        #It now runs only at the three checkpoints where losing work is
+        #expensive: the sensitivity matrix, the confirmed network + parking,
+        #and the finished simulation. Restore with:
+        #  shinyjs::click("downloadSave", asis = FALSE)
         #change reactiveVal
         if(is.null(triggerStep2()) ){
           triggerStep2(1)
@@ -309,13 +331,28 @@ app_server <- function(input, output, session){
 
 vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
 
-        #load saved sensitivity matrix (converted back from dataframe)
+        #Load the saved sensitivity matrix. terra::rast() has methods for both
+        #shapes this can arrive in - a PackedSpatRaster from a current save file,
+        #or the xy data.frame older files carry - so both restore here without
+        #branching. Only the data.frame form loses the CRS, hence the crs<-
+        #below; on a packed raster it is a harmless no-op (it is already 4326).
+        #
+        #The guard used to be `length(envBase_SM_pres > 0)`, which compares the
+        #whole object against 0 and takes the length of the RESULT. That is never
+        #0 for a non-empty data.frame, so it never actually guarded anything -
+        #and it ERRORS outright on a PackedSpatRaster ("comparison (>) is
+        #possible only for atomic and list types"), which would have made every
+        #new save file unloadable.
         if(exists("envBase_SM_pres")){
-          if(length(envBase_SM_pres > 0)){
+          if(!is.null(envBase_SM_pres)){
             r$SM_pres <- terra::rast(envBase_SM_pres)
             terra::crs(r$SM_pres) <- "epsg:4326"
-            #the loaded object is already the data.frame downloadSave needs: reuse it directly
-            r$SM_pres_df <- envBase_SM_pres
+            #Deliberately NOT reusing the loaded object as the save cache: an old
+            #file hands back a 20 MB data.frame, and keeping it would both retain
+            #it for the session and write the old fat form again at the next
+            #checkpoint. Leaving this NULL costs one terra::wrap() (~0.01s) and
+            #means every file this session writes is the compact form.
+            r$SM_pres_packed <- NULL
           }
         }
 
@@ -373,9 +410,9 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
 
         #
         r$SM_pres <- step2return$SM_pres()
-        #new sensitivity raster from step 2: invalidate the cached data.frame so the next
-        #downloadSave recomputes it once (then reuses it for later transitions)
-        r$SM_pres_df <- NULL
+        #new sensitivity raster from step 2: invalidate the packed copy so the next
+        #checkpoint repacks it once (then reuses it for later checkpoints)
+        r$SM_pres_packed <- NULL
         # r$SM_noPres <- step2return$SM_noPres()
         r$SMcolors <- step2return$SMcolors()
         r$minCutThresh <- step2return$minCutThresh()
@@ -490,7 +527,13 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
 
         #activate download
         r$step <- 4
-        shinyjs::click("downloadSave", asis = FALSE)
+        #autosave dropped here, on leaving step 3 (threshold choice). downloadSave
+        #materialises the raster and save()s the whole session state on the
+        #shared main thread, and it used to fire at all eight step transitions.
+        #It now runs only at the three checkpoints where losing work is
+        #expensive: the sensitivity matrix, the confirmed network + parking,
+        #and the finished simulation. Restore with:
+        #  shinyjs::click("downloadSave", asis = FALSE)
 
         vftDbg(input$`step3-confirmButton3`)
 
@@ -541,7 +584,13 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
         #activate download
         r$isSkip <- step3return$isSkip()
         r$step <- 4
-        shinyjs::click("downloadSave", asis = FALSE)
+        #autosave dropped here, on leaving step 3 via the skip path. downloadSave
+        #materialises the raster and save()s the whole session state on the
+        #shared main thread, and it used to fire at all eight step transitions.
+        #It now runs only at the three checkpoints where losing work is
+        #expensive: the sensitivity matrix, the confirmed network + parking,
+        #and the finished simulation. Restore with:
+        #  shinyjs::click("downloadSave", asis = FALSE)
 
         triggerStep4(-1)
       }
@@ -554,7 +603,13 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
         #activate download
         r$isSkip <- step3return$isSkip()
         r$step <- 4
-        shinyjs::click("downloadSave", asis = FALSE)
+        #autosave dropped here, on leaving step 3 via the skip button. downloadSave
+        #materialises the raster and save()s the whole session state on the
+        #shared main thread, and it used to fire at all eight step transitions.
+        #It now runs only at the three checkpoints where losing work is
+        #expensive: the sensitivity matrix, the confirmed network + parking,
+        #and the finished simulation. Restore with:
+        #  shinyjs::click("downloadSave", asis = FALSE)
 
         triggerStep4(-1)
       }
@@ -903,7 +958,13 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
 
         #activate download
         r$step <- 5
-        shinyjs::click("downloadSave", asis = FALSE)
+        #autosave dropped here, on returning from newVersions. downloadSave
+        #materialises the raster and save()s the whole session state on the
+        #shared main thread, and it used to fire at all eight step transitions.
+        #It now runs only at the three checkpoints where losing work is
+        #expensive: the sensitivity matrix, the confirmed network + parking,
+        #and the finished simulation. Restore with:
+        #  shinyjs::click("downloadSave", asis = FALSE)
 
         #change reactiveVal
         if(length(triggerStep5()) > 0){

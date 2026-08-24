@@ -16,8 +16,11 @@ launchMultiSim <- function(pop, network, days, finalPolygons, iter = 1, progress
 
   vftDbg("list of Pointers")
   #prepare adjacency lists for pathfinding in C++ (get pointers to C++ objects: avoids converting large tables back to R)
-  listOfPointers <- generateAdjListAndDistTbl_cpp(edgeTable = dplyr::as_tibble(tidygraph::activate(network, "edges")),
-                                                  vertexTable = dplyr::as_tibble(tidygraph::activate(network, "nodes")))
+  #vftGraphTibble() for the same reason as in launchSim_v2.R: this runs inside
+  #the worker too, and as_tibble() on edges carrying an sf geometry column is
+  #what killed the ABM on tibble < 3.3. See R/graph_helpers.R.
+  listOfPointers <- generateAdjListAndDistTbl_cpp(edgeTable = vftGraphTibble(network, "edges"),
+                                                  vertexTable = vftGraphTibble(network, "nodes"))
 # print(days)
 progress$inc(1/2)
 

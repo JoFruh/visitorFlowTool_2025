@@ -181,19 +181,19 @@ lastStep_server <- function(id, networkList , versionsUI ,
 
           proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet"
           )|>
-            leaflet::clearGroup(group = "paths")
+            vftClearNetworkLines(group = "paths")
 
           #update map with new version polylines
           passageTable <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(edges) ) ), drop = T, what = "ZM")
           pal <- leaflet::colorNumeric(c("grey", colorRampPalette(c("yellow2", "orange2", "red2", "purple", "purple3"))(max(passageTable$passage)-1)), domain = c(0,max(passageTable$passage)) )
-          proxy |> leaflet::addPolylines(data = passageTable,
-                                          stroke = TRUE,
-                                          weight = 2 + (as.numeric(passageTable[,agentTypePassage,drop = TRUE]) / max(as.numeric(passageTable[,"passage",drop = TRUE])) ) *2,
-                                          color = ~pal(as.numeric(passageTable[,agentTypePassage,drop = TRUE])),
-                                          fill = FALSE,
-                                          opacity = 1,
-                                          options = leaflet::pathOptions(pane = "layer2"),
-                                          group = "paths")
+          #drawn through WebGL: addPolylines() encodes every edge into
+          #nested JSON on the shared main thread and scales with edge
+          #count. See vftAddNetworkLines() in data_paths.R; VFT_GL=0
+          #restores the original addPolylines call.
+          proxy |> vftAddNetworkLines(passageTable,
+                             values    = passageTable[,agentTypePassage,drop = TRUE],
+                             weightRef = passageTable[,"passage",drop = TRUE],
+                             pal = pal, group = "paths", pane = "layer2")
 
 
 
@@ -262,14 +262,16 @@ lastStep_server <- function(id, networkList , versionsUI ,
         map <- leaflet::leaflet(data = passageTable, options = leaflet::leafletOptions(doubleClickZoom = FALSE, preferCanvas = TRUE), height = 500 ) |>
           leaflet::addMapPane("layer_SM", zIndex = 405)|>
           leaflet::addMapPane("layer1", zIndex = 410)|> leaflet::addMapPane("layer2", zIndex = 420)|> leaflet::addMapPane("layer3", zIndex = 450) |>
-          leaflet::addProviderTiles("OpenStreetMap.CH", options = leaflet::providerTileOptions(opacity = 0.5, zIndex = 400)) |>
-          leaflet::addPolylines(stroke = TRUE,
-                                weight = 2 + (passageTable$passage / max(passageTable$passage) ) *4,
-                                color = pal(passageTable$passage),
-                                fill = FALSE,
-                                opacity = 1,
-                                options = leaflet::pathOptions(pane = "layer2"),
-                                group = "paths")|>
+          leaflet::addProviderTiles("OpenStreetMap.CH", options = leaflet::providerTileOptions(opacity = 0.5, zIndex = 400))
+
+        #drawn through WebGL - see vftAddNetworkLines() in data_paths.R. This map
+        #uses a wider stroke than step 5 (0-4 px, hence span = 4), which is why
+        #the helper takes the span rather than hard-coding one.
+        map <- vftAddNetworkLines(map, passageTable,
+                                  values = passageTable$passage, pal = pal,
+                                  group = "paths", span = 4, pane = "layer2")
+
+        map <- map |>
           leaflet::addPolygons(data = finalPolygons,
                                weight = 3,
                                color = "green",
