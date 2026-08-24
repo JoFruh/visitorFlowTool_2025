@@ -290,11 +290,13 @@ vftPayloadReport <- function(file = NULL, dir = Sys.getenv("VFT_PERF_DIR", "")){
   for(i in seq_along(args)){
     nm <- nms[i]
     #the seed is ours and tiny; never round-trip it through disk
-    if(!nzchar(nm) || nm == "..vftSeed..") next
+    if(!nzchar(nm) || nm %in% c("..vftSeed..", "..vftLibs..")) next
     v <- args[[i]]
     #a path is only cheaper than the object if the object is actually big, and
     #object.size is far cheaper than serialising to find out
-    if(!isTRUE(utils::object.size(v) > lim)) next
+    big <- tryCatch(isTRUE(utils::object.size(v) > lim),
+                    error = function(e) FALSE)
+    if(!big) next
     ok <- tryCatch({
       p <- tempfile(pattern = "vftspill_", fileext = ".rds")
       saveRDS(v, p, compress = FALSE)
@@ -331,8 +333,206 @@ vftPayloadReport <- function(file = NULL, dir = Sys.getenv("VFT_PERF_DIR", "")){
   }, error = function(e) NULL)
 }
 
+#' The configured worker count, parsed once and defended in one place.
+#'
+#' Lived inline in global.R, which meant the health check below could not agree
+#' with it. VFT_WORKERS=1 is honoured deliberately: mirai::daemons(1) starts one
+#' real daemon. Only unusable values fall back.
+.vftWorkerCount <- function(){
+  n <- suppressWarnings(as.integer(trimws(Sys.getenv("VFT_WORKERS", "2"))))
+  if(is.na(n) || n < 1L) 2L else n
+}
+
+#' Start the daemon pool and warm every daemon, returning their pids.
+#'
+#' everywhere() rather than n separate mirai() calls: the dispatcher routes short
+#' tasks to whichever daemon is idle, so n calls can all land on the same one and
+#' leave the rest cold. .libPaths() is carried across explicitly because daemons
+#' launch as bare Rscript and under Shiny Server frequently do not inherit it.
+.vftStartDaemons <- function(n = .vftWorkerCount()){
+  #record that a pool was started ON PURPOSE. .vftEnsureDaemons() must be able to
+  #tell "the pool died" from "there was never meant to be a pool": in dev the app
+  #deliberately runs with daemons(0), and reviving there would hand jobs to bare
+  #Rscript daemons that cannot library() an uninstalled package.
+  .vftP()$daemonsWanted <- TRUE
+  mirai::daemons(n)
+  w <- mirai::everywhere({
+    .libPaths(..vftLibs..)
+    library(visitorFlowTool)
+    Sys.getpid()
+  }, ..vftLibs.. = .libPaths())
+  mirai::call_mirai(w)
+  unlist(lapply(w, function(x) if(is.numeric(x$data)) x$data else NA_integer_))
+}
+
+#' Restart the pool if every daemon has died.
+#'
+#' A daemon that dies -- crash, or the OOM killer on a 9.7 GiB host -- takes the
+#' pool to connections = 0 while daemons() is still configured. In that state
+#' mirai() keeps ACCEPTING work and queueing it, and nothing ever executes:
+#' awaiting climbs, executing stays 0, and the job never resolves and never
+#' errors. The user sees a spinner that runs forever. Reproduced by killing the
+#' only daemon: a subsequent job was still unresolved after 10s with awaiting 1,
+#' executing 0. With one worker a single death bricks the app silently.
+#'
+#' Only act on connections == 0, never on a merely reduced pool: at zero nothing
+#' can be running, so restarting cannot cancel live work.
+.vftEnsureDaemons <- function(){
+  #never started on purpose -> dev, inline is the intended path, leave it alone
+  if(!isTRUE(.vftP()$daemonsWanted)) return(invisible(0L))
+  n <- .vftWorkerCount()
+  conns <- tryCatch(mirai::status()$connections, error = function(e) NA_integer_)
+  if(!length(conns) || is.na(conns) || conns > 0L) return(invisible(conns))
+  message("vftFuture: all ", n, " daemon(s) are gone (connections = 0). ",
+          "Jobs would queue forever without erroring; restarting the pool.")
+  pids <- tryCatch(.vftStartDaemons(n), error = function(e){
+    message("vftFuture: could not restart daemons: ", conditionMessage(e)); NA_integer_
+  })
+  message("vftFuture: daemon pool restarted; worker pids ",
+          paste(pids, collapse = ", "))
+  invisible(tryCatch(mirai::status()$connections, error = function(e) NA_integer_))
+}
+
+#' Per-job timeout in milliseconds, or NULL for none.
+#'
+#' A hung job is worse than a failed one: with no timeout the promise never
+#' settles, so the progress bar spins forever, the button stays disabled and the
+#' user has no way to know anything is wrong. With a timeout mirai returns an
+#' error value, the promise rejects, and vftAsyncError() closes the progress,
+#' re-enables the control and says what happened. The default is deliberately
+#' generous -- the ABM is a long job and a timeout that fires on healthy work
+#' would be worse than the bug it guards. VFT_TIMEOUT_S=0 disables it.
+.vftTimeoutMs <- function(){
+  s <- suppressWarnings(as.numeric(trimws(Sys.getenv("VFT_TIMEOUT_S", "1800"))))
+  #a typo must not silently disable the guard: only an explicit 0 turns it off,
+  #anything unparseable falls back to the default.
+  if(!isTRUE(is.finite(s))) return(1800 * 1000)
+  if(s <= 0) return(NULL)
+  s * 1000
+}
+
+#' Split the real send into its two halves: the expression, and the args.
+#'
+#' The per-object probe came back with every capture at 0.001-0.002s while the
+#' real send took 13s. The parts sum to ~0.01s; the whole is 13s. So it is not
+#' any one object, and the probe never sent the one thing production does send
+#' alongside them: the expression. Every probe so far used .expr = 1L.
+#'
+#'   expr_s slow, args_s ~0  -> it is the EXPRESSION. mirai(wrapped) carries the
+#'                              bquote'd body, and with the package installed
+#'                              keep.source = TRUE hangs srcrefs off it, each
+#'                              pointing at a srcfile environment.
+#'   args_s slow, expr_s ~0  -> it is the args TOGETHER, i.e. something shared
+#'                              between them that sending one at a time cannot
+#'                              show -- a common environment reached twice.
+#'   both ~0                 -> the cost is in combining them, and the next cut
+#'                              is cumulative subsets.
+#'
+#' Same opt-in as the per-object probe, same reason.
+.vftSplitProbe <- function(wrapped, args){
+  none <- c(expr = NA_real_, args = NA_real_)
+  if(!identical(Sys.getenv("VFT_MIRAI_PROBE", "0"), "1")) return(none)
+  one <- function(f){
+    tryCatch({
+      t <- as.numeric(Sys.time())
+      p <- f()
+      s <- as.numeric(Sys.time()) - t
+      try(mirai::stop_mirai(p), silent = TRUE)
+      s
+    }, error = function(e) NA_real_)
+  }
+  c(expr = one(function() mirai::mirai(wrapped)),
+    args = one(function() mirai::mirai(1L, .args = args)))
+}
+
+#' Time a mirai send of EACH captured object on its own, to name the culprit.
+#'
+#' The controls have narrowed this as far as aggregate numbers can. An empty send
+#' is instant; a send of a raw vector of exactly the real message's length is
+#' instant; R's own serialize() of the whole real message is instant (cold_s = 0);
+#' /proc shows pure user CPU with majflt = 0, so no paging. Yet the real send
+#' takes up to 14 seconds. It is therefore something specific IN the message, and
+#' aggregates cannot say which thing.
+#'
+#' So send each captured object by itself and time it. Whatever is responsible
+#' shows up as one row carrying the seconds, and it is named.
+#'
+#' Opt-in via VFT_MIRAI_PROBE=1, because if one object really does cost 14s then
+#' probing it adds those seconds to the freeze. That is an acceptable price for
+#' one diagnostic run and not something to inflict on every dispatch.
+#'
+#' Each probe carries `1L` as the expression, so only the captured object differs
+#' from the empty ping that is already known to be instant.
+.vftMiraiProbe <- function(args){
+  if(!identical(Sys.getenv("VFT_MIRAI_PROBE", "0"), "1")) return(NULL)
+  nms <- names(args)
+  if(is.null(nms)) return(NULL)
+  out <- rep(NA_real_, length(args))
+  for(i in seq_along(args)){
+    nm <- nms[i]
+    #.args insists on non-empty names; skip anything unnamed rather than error
+    if(is.na(nm) || !nzchar(nm)) next
+    out[i] <- tryCatch({
+      t <- as.numeric(Sys.time())
+      p <- mirai::mirai(1L, .args = stats::setNames(list(args[[i]]), nm))
+      s <- as.numeric(Sys.time()) - t
+      try(mirai::stop_mirai(p), silent = TRUE)
+      s
+    }, error = function(e) NA_real_)
+  }
+  stats::setNames(out, nms)
+}
+
+#' Time two control dispatches immediately before the real one.
+#'
+#' The empty ping (a single integer) separates "the transport or daemon layer is
+#' slow" from "our message is slow". Production answered that: ping 0.000s beside
+#' a 7.8s send, microseconds apart, same process, same load. So it is the message.
+#'
+#' But "the message" is two things, and they need separating too: how many BYTES
+#' it is, and WHAT is in it. The sized ping carries a raw vector of exactly the
+#' real message's length -- same bytes, no structure, no closures, no
+#' environments, nothing to walk. Comparing the three:
+#'
+#'   empty ~0, sized ~0, real slow   -> the CONTENT: something in the message
+#'                                      costs far more than its size (an
+#'                                      environment chain, a reference object)
+#'   empty ~0, sized SLOW, real slow -> the SIZE: allocating and moving that many
+#'                                      bytes is what costs, regardless of what
+#'                                      they are. On a memory-tight host that
+#'                                      points at allocation, not serialisation.
+#'
+#' Ten reproductions on a spare machine could not make mirai::mirai() slow -- not
+#' with production's exact call shape, not with a saturated pool, not with this
+#' ping in front of it. So the cause is something about the production process
+#' that a fresh R session does not have, and size is the one axis still untested.
+#'
+#' Only the mirai() calls are timed, never their results: the send returns as soon
+#' as the message is queued, so a backed-up queue cannot inflate these.
+.vftPing <- function(bytes = NA_real_){
+  one <- function(expr){
+    tryCatch({
+      t <- as.numeric(Sys.time())
+      p <- expr()
+      s <- as.numeric(Sys.time()) - t
+      #cancel rather than leave it queued: a control must not take a worker slot
+      #ahead of the real job it is measured against.
+      try(mirai::stop_mirai(p), silent = TRUE)
+      s
+    }, error = function(e) NA_real_)
+  }
+  empty <- one(function() mirai::mirai(1L))
+  sized <- if(is.finite(bytes) && bytes > 0)
+             one(function() mirai::mirai(1L, .args = list(..vftBlob.. = raw(bytes))))
+           else NA_real_
+  c(empty = empty, sized = sized)
+}
+
 .vftDispatchDiag <- function(ex, args, wrapped, sendSecs, globalsSecs, gcSecs,
-                             cold = NULL){
+                             cold = NULL, pingSecs = c(empty = NA_real_,
+                                                       sized = NA_real_),
+                             mprobe = NULL,
+                             sprobe = c(expr = NA_real_, args = NA_real_)){
   #self-targeting, but it must trigger on EITHER half. If the cold probe
   #absorbs the first-touch cost then send_s goes small and a send-only trigger
   #would log nothing at all -- losing exactly the evidence we added it for.
@@ -379,6 +579,14 @@ vftPayloadReport <- function(file = NULL, dir = Sys.getenv("VFT_PERF_DIR", "")){
     d$cold_tot_s  <- if(is.null(cold)) NA_real_ else round(cold$total_s, 3)
     d$cold_whl_s  <- if(is.null(cold)) NA_real_ else round(cold$whole_s, 3)
     d$cold_MB     <- if(is.null(cold)) NA_real_ else round(cold$whole_MB, 2)
+    #the empty-payload send taken in the same second as the real one.
+    d$ping_s      <- round(unname(pingSecs["empty"]), 3)
+    d$pingbig_s   <- round(unname(pingSecs["sized"]), 3)
+    #per-object mirai send time, aligned to the same rows as ser_s and cold_s
+    d$mexpr_s     <- round(unname(sprobe["expr"]), 3)
+    d$margs_s     <- round(unname(sprobe["args"]), 3)
+    d$mirai_s     <- if(is.null(mprobe)) NA_real_ else
+                       round(unname(mprobe[match(d$global, names(mprobe))]), 3)
     d$time      <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
     d$site      <- .vftCallSite(ex)
     d$send_s    <- round(sendSecs, 3)
@@ -390,7 +598,7 @@ vftPayloadReport <- function(file = NULL, dir = Sys.getenv("VFT_PERF_DIR", "")){
     utils::write.table(
       d[, c("time","site","global","class","bytes","ser_s",
             "send_s","globals_s","gc_s","whole_MB","whole_ser_s",
-            "cold_s","cold_tot_s","cold_whl_s","cold_MB","awaiting","executing")],
+            "cold_s","cold_tot_s","cold_whl_s","cold_MB","ping_s","pingbig_s","mirai_s","mexpr_s","margs_s","awaiting","executing")],
       file = f, sep = ",", row.names = FALSE,
       col.names = !file.exists(f), append = file.exists(f))
   }, error = function(e) NULL)
@@ -427,6 +635,10 @@ vftDispatchReport <- function(file = NULL, dir = Sys.getenv("VFT_PERF_DIR", ""))
   per <- data.frame(
     site       = vapply(grp, function(i) as.character(d$site[i][1]), ""),
     send_s     = num(function(g) g$send_s[1]),
+    ping_s     = round(num(function(g) if(is.null(g$ping_s)) NA else g$ping_s[1]), 3),
+    pingbig_s  = round(num(function(g) if(is.null(g$pingbig_s)) NA else g$pingbig_s[1]), 3),
+    mexpr_s    = round(num(function(g) if(is.null(g$mexpr_s)) NA else g$mexpr_s[1]), 3),
+    margs_s    = round(num(function(g) if(is.null(g$margs_s)) NA else g$margs_s[1]), 3),
     globals_s  = num(function(g) g$globals_s[1]),
     payload_MB = round(num(function(g) sum(g$MB, na.rm = TRUE)), 1),
     ser_s      = round(num(function(g) sum(g$ser_s, na.rm = TRUE)), 2),
@@ -453,6 +665,37 @@ vftDispatchReport <- function(file = NULL, dir = Sys.getenv("VFT_PERF_DIR", ""))
           " is first-touch materialisation and the object is named under COLD",
           " FIRST-TOUCH below. If send_s still carries them, it is neither",
           " payload nor GC nor first-touch.")
+  message("  ping_s is an EMPTY mirai send (one integer) and pingbig_s a send of a",
+          " raw vector of exactly the real message's length -- both taken in the",
+          " same second, same process, same load. ping_s ~0 with pingbig_s ~0 and",
+          " send_s in seconds means the COST IS THE CONTENT, not the size: the",
+          " bytes move fine, something in the message costs far more than its",
+          " length. ping_s ~0 with pingbig_s ALSO slow means the cost is the SIZE",
+          " -- allocating and moving that many bytes -- which on a memory-tight",
+          " host points at allocation rather than serialisation.")
+  message("  mexpr_s is mirai(wrapped) with NO args; margs_s is mirai(1L, .args=argl)",
+          " with the trivial expression. The per-object probe put every capture at",
+          " 0.001-0.002s while the whole send took 13s, so the parts do not sum to",
+          " the whole and the expression was the one thing never sent alone.",
+          " mexpr_s slow -> it is the EXPRESSION. margs_s slow -> it is the args",
+          " TOGETHER, something shared between them that one-at-a-time cannot show.",
+          " Both ~0 -> the cost is in combining them.")
+
+  if("mirai_s" %in% names(d) && any(is.finite(d$mirai_s))){
+    ms <- d[is.finite(d$mirai_s), c("site","global","class","MB","mirai_s","ser_s","cold_s")]
+    if(nrow(ms)){
+      message("
+== PER-OBJECT MIRAI SEND (VFT_MIRAI_PROBE=1) ==")
+      ms$MB <- round(ms$MB, 2)
+      print(utils::head(ms[order(-ms$mirai_s), ], 20), row.names = FALSE)
+      message("  each object sent ALONE through mirai, expression 1L, so only the",
+              " object differs from the empty ping that is known to be instant.",
+              " A large mirai_s beside a near-zero ser_s is the answer: R can",
+              " serialise that object in no time, and mirai cannot. That object",
+              " is what to stop capturing -- pass what the worker needs instead",
+              " of the thing that holds it.")
+    }
+  }
 
   if("cold_s" %in% names(d)){
     cs <- d[is.finite(d$cold_s) & d$cold_s > 0.05,
@@ -498,6 +741,44 @@ vftDispatchReport <- function(file = NULL, dir = Sys.getenv("VFT_PERF_DIR", ""))
     stream
   }
 })
+
+#' Standard rejection handler for a vftFuture() chain
+#'
+#' Every one of the six async sites chained `%...>%` and none attached `%...!%`.
+#' An unhandled promise rejection inside an observer does not merely fail that
+#' observer - it propagates, and under `runApp()` in a non-interactive process it
+#' halts R. On a single-process Shiny Server that means one user's failed job
+#' takes down every other user's session. That is how a worker error at step 5
+#' turned into "Execution halted".
+#'
+#' So: close the progress bar, log the message where the server log will keep it,
+#' tell the user, and re-enable whatever control was disabled for the run - but
+#' never re-raise.
+#'
+#' @param progress a vftProgress/AsyncProgress handle to close, or NULL
+#' @param what human-readable name of the job, used in the message
+#' @param enable optional shinyjs input id to re-enable, so a failed run does not
+#'   leave the launch button dead until reload
+#' @return a function(e) suitable for `%...!%`
+#' @keywords internal
+vftAsyncError <- function(progress = NULL, what = "background job", enable = NULL){
+  force(progress); force(what); force(enable)
+  function(e){
+    msg <- tryCatch(conditionMessage(e), error = function(...) "unknown error")
+
+    #each of these is best-effort: the handler's own failure must not become a
+    #second unhandled rejection on top of the first
+    try(if(!is.null(progress)) progress$close(), silent = TRUE)
+    #several sites disable a pair of buttons together, so accept a vector; one
+    #id that no longer exists must not stop the others being re-enabled.
+    for(..id.. in enable) try(shinyjs::enable(..id..), silent = TRUE)
+
+    message("vftFuture: ", what, " failed: ", msg)
+    try(shiny::showNotification(paste0(what, " failed: ", msg),
+                                type = "error", duration = NULL), silent = TRUE)
+    invisible(NULL)
+  }
+}
 
 #' Dispatch async work without freezing every other user.
 #'
@@ -561,9 +842,24 @@ vftFuture <- function(expr, ..., envir = parent.frame()){
       #dev / load_all: global.R installs a sequential plan and never starts
       #daemons. Run inline so developing against the package keeps working, and
       #so a globals problem cannot hide behind a backend difference.
+      #a dead pool queues forever without erroring, so try to revive it before
+      #deciding we have no daemons and falling back to the main thread
+      .vftEnsureDaemons()
       conns <- tryCatch(mirai::status()$connections, error = function(e) 0L)
       if(!length(conns) || is.na(conns) || conns < 1L){
-        resolve(eval(ex, envir))
+        #Label it. This branch runs the WHOLE job synchronously on the shared main
+        #thread, freezing every other user for its full duration -- the single worst
+        #thing the app can do. Unlabelled it is invisible: it produces no
+        #async:send rows at all, so the dispatch report goes quiet exactly when
+        #the problem is at its worst and the stall lands in "unattributed".
+        st <- .vftP()
+        if(!isTRUE(st$inlineWarned)) {
+          st$inlineWarned <- TRUE
+          message("vftFuture: NO mirai daemons -- running async jobs INLINE on the ",
+                  "main thread. Every job now blocks every user for its full ",
+                  "duration. Install visitorFlowTool on this host and restart.")
+        }
+        resolve(vftTime("async:INLINE", eval(ex, envir)))
         return(invisible(NULL))
       }
 
@@ -580,7 +876,8 @@ vftFuture <- function(expr, ..., envir = parent.frame()){
       })
 
       argl <- c(as.list(gl),
-                list(..vftSeed.. = if(useSeed) .vftNextSeed() else NULL))
+                list(..vftSeed.. = if(useSeed) .vftNextSeed() else NULL,
+                     ..vftLibs.. = .libPaths()))
 
       #SPILL. Six reproductions could not make mirai slow: a 9 MB tbl_graph
       #sends in 6 ms here, busy pool or idle, and 16 MB through a saturated pool
@@ -598,9 +895,24 @@ vftFuture <- function(expr, ..., envir = parent.frame()){
       #then runs the original expression spliced in verbatim. Helper names are
       #deliberately ugly so they cannot collide with a captured global.
       wrapped <- bquote({
+        #daemons are spawned as bare Rscript and do NOT necessarily inherit the
+        #app process library path - under Shiny Server they frequently do not.
+        #Give them ours, or every package function the expression calls comes
+        #back as "could not find function" from deep inside the job.
+        .libPaths(..vftLibs..)
+        ..vftMissing.. <- character(0)
         for(..vftPkg.. in .(pkgs))
-          suppressWarnings(require(..vftPkg.., character.only = TRUE,
-                                   quietly = TRUE))
+          if(!suppressWarnings(require(..vftPkg.., character.only = TRUE,
+                                       quietly = TRUE)))
+            ..vftMissing.. <- c(..vftMissing.., ..vftPkg..)
+        #require() returns FALSE instead of erroring, and discarding that turns a
+        #precise, fixable problem into a confusing one raised much later and
+        #somewhere else. Name the package and where the worker actually looked.
+        if(length(..vftMissing..))
+          stop("async worker could not attach: ",
+               paste(..vftMissing.., collapse = ", "),
+               " -- worker .libPaths(): ",
+               paste(.libPaths(), collapse = " ; "), call. = FALSE)
         for(..vftSpill.. in .(sp$names))
           assign(..vftSpill.., readRDS(get(..vftSpill..)))
         if(!is.null(..vftSeed..))
@@ -617,10 +929,22 @@ vftFuture <- function(expr, ..., envir = parent.frame()){
       #seconds, first-touch is the answer and the object name is in cold_s.
       cold <- .vftColdProbe(wrapped, argl)
 
+      #ping FIRST, so it samples the process immediately before the real send
+      #rather than after it has already paid whatever the real send costs.
+      #size the control from the cold probe, which has already measured the real
+      #message in bytes. Same length, trivial content.
+      pingS <- .vftPing(if(is.null(cold)) NA_real_ else cold$whole_MB * 1024^2)
+      #opt-in, and after the ping so it cannot perturb the controls
+      mprobe <- .vftMiraiProbe(argl)
+      #and the two halves of the real message: expression alone, args alone
+      sprobe <- .vftSplitProbe(wrapped, argl)
+
       tS <- as.numeric(Sys.time()); gc0 <- sum(gc.time()[1:2])
-      m  <- vftTime("async:send", mirai::mirai(wrapped, .args = argl))
+      m  <- vftTime("async:send", mirai::mirai(wrapped, .args = argl,
+                                              .timeout = .vftTimeoutMs()))
       .vftDispatchDiag(ex, argl, wrapped, as.numeric(Sys.time()) - tS,
-                       tS - tG, sum(gc.time()[1:2]) - gc0, cold)
+                       tS - tG, sum(gc.time()[1:2]) - gc0, cold, pingS, mprobe,
+                       sprobe)
 
       #the worker has read them by the time it answers; drop them either way
       #so a long session cannot silently fill the temp directory.

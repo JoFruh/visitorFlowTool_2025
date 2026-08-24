@@ -562,7 +562,7 @@ step2_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE
           shinyjs::delay(1500, shiny::updateCheckboxInput(inputId = "groupCheckbox_all", value = TRUE) )
 
 
-      })
+      })%...!%(vftAsyncError(progress, "Species data", NULL))
 
     }, once = TRUE, ignoreInit = FALSE, ignoreNULL = FALSE, priority = 12)
 

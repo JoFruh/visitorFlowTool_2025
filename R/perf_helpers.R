@@ -454,7 +454,24 @@ vftRprofStart <- function(dir = Sys.getenv("VFT_PERF_DIR", ""), interval = 0.02)
   #attribution is already enough to pick the next thing to fix
   utils::Rprof(f, interval = interval, line.profiling = TRUE,
                memory.profiling = FALSE)
-  message("vftPerf: Rprof sampling every ", interval * 1000, "ms to ", f)
+
+  #Rprof buffers, so the file is only complete once sampling stops. Under Shiny
+  #Server the app is launched from a browser and has no console attached, so
+  #there is nobody to call vftRprofStop() - the profile would stay unflushed and
+  #every reader would report "no Rprof output" while the file sat on disk.
+  #Stop ourselves instead, on the app`s own event loop, after long enough to
+  #drive a couple of sessions through the whole flow.
+  secs <- suppressWarnings(as.numeric(Sys.getenv("VFT_RPROF_SECS", "300")))
+  if(!isTRUE(is.finite(secs)) || secs <= 0) secs <- 300
+  later::later(function(){
+    tryCatch({
+      utils::Rprof(NULL)
+      message("vftPerf: Rprof stopped after ", secs, "s; profile complete at ", f)
+    }, error = function(e) NULL)
+  }, delay = secs)
+
+  message("vftPerf: Rprof sampling every ", interval * 1000, "ms to ", f,
+          " (auto-stops after ", secs, "s; set VFT_RPROF_SECS to change)")
   invisible(TRUE)
 }
 
@@ -494,6 +511,31 @@ vftRprofStop <- function(){
 #' (keep.source.pkgs = FALSE), and Rprof cannot report a line it has no record
 #' of. This is the single setting that turns "27 unattributed stalls" into a
 #' ranked list of file:line.
+#' Locate a profile written by this app, from any R session
+#'
+#' `.vftP()$rprof` only exists in the process that started sampling. When the app
+#' is launched from a browser under Shiny Server there is no console attached to
+#' it, so the report functions are run from a separate ssh session - which has
+#' empty state and would otherwise report "no Rprof output" while the file sat on
+#' disk the whole time. vftReport() never had this problem because it scans the
+#' directory; this makes the profile readers behave the same way.
+#' @keywords internal
+#' @noRd
+.vftFindRprof <- function(file = NULL, dir = Sys.getenv("VFT_PERF_DIR", "")){
+  if(!is.null(file) && nzchar(file) && file.exists(file)) return(file)
+
+  #this session's own, when there is one
+  own <- tryCatch(.vftP()$rprof, error = function(e) NULL)
+  if(!is.null(own) && nzchar(own) && file.exists(own)) return(own)
+
+  if(!nzchar(dir)) dir <- file.path(tempdir(), "vft_perf")
+  fs <- list.files(dir, pattern = "^vft_rprof_.*out$", full.names = TRUE)
+  #a zero-length file means sampling started but nothing has been flushed yet
+  fs <- fs[file.size(fs) > 0]
+  if(!length(fs)) return("")
+  fs[which.max(file.mtime(fs))]
+}
+
 #' What is actually on the stack while a dispatch is frozen
 #'
 #' Four rounds of custom probes each ruled one thing out and named no cause, and
@@ -512,9 +554,18 @@ vftRprofStop <- function(){
 #' @param file raw Rprof output; defaults to this run's file
 #' @param frame stack frame marking a dispatch
 #' @keywords internal
-vftSendStacks <- function(file = .vftP()$rprof, frame = "vftFuture"){
-  if(is.null(file) || !nzchar(file) || !file.exists(file)){
-    message("no Rprof output; start the app with VFT_RPROF=1, then vftRprofStop()")
+vftSendStacks <- function(file = NULL, frame = "vftFuture",
+                          dir = Sys.getenv("VFT_PERF_DIR", "")){
+  file <- .vftFindRprof(file, dir)
+  if(!nzchar(file)){
+    message("no Rprof output found. Looked in: ",
+            if(nzchar(dir)) dir else file.path(tempdir(), "vft_perf"),
+            "
+  - the app must have started with VFT_RPROF=1",
+            "
+  - if it is still running, the profile is not flushed yet:",
+            " sampling auto-stops after VFT_RPROF_SECS (default 300s), or",
+            " stop the app to flush it")
     return(invisible(NULL))
   }
   L <- readLines(file, warn = FALSE)
@@ -580,7 +631,9 @@ vftSendStacks <- function(file = .vftP()$rprof, frame = "vftFuture"){
   invisible(list(inner = d, paths = p))
 }
 
-vftRprofReport <- function(file = .vftP()$rprof, top = 25){
+vftRprofReport <- function(file = NULL, top = 25,
+                           dir = Sys.getenv("VFT_PERF_DIR", "")){
+  file <- .vftFindRprof(file, dir)
   if(is.null(file) || !file.exists(file)){
     message("no Rprof output; run with VFT_RPROF=1 and call vftRprofStop() first")
     return(invisible(NULL))

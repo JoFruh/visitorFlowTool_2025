@@ -1142,7 +1142,7 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
                       parking = shiny::reactive(r$parking),
                       currentLang = shiny::reactive(i18n()$get_translation_language())) )
 
-        })
+        })%...!%(vftAsyncError(progress2, "Parking areas", c("confirmButton4", "resetButton")))
         }else{
           shinyjs::enable("confirmButton4")
           shinyjs::enable("resetButton")
@@ -1278,7 +1278,7 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
               r$promiseFinished <- 1
               vftDbg("promise finished")
 
-            })
+            })%...!%(vftAsyncError(progress1, "Areas of interest", NULL))
           }, ignoreInit = FALSE, ignoreNULL = FALSE, once = TRUE)
         }else{
           #if natural areas were selected

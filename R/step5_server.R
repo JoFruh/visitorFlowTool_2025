@@ -1267,7 +1267,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
         #enable launch sim button
         shinyjs::enable("launchSim")
 
-        })
+        })%...!%(vftAsyncError(progress, "Agent-Based Model", "launchSim"))
 
       }, ignoreInit = TRUE)
 

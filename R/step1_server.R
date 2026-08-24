@@ -1230,7 +1230,7 @@ step1_server <- function(id, i18n){
 
           )
         )
-      })
+      })%...!%(vftAsyncError(progress, "Path network", NULL))
 
 
       }else{
@@ -1330,7 +1330,7 @@ step1_server <- function(id, i18n){
 
           )
         )
-        })
+        })%...!%(vftAsyncError(progress, "Path network", NULL))
 
       }else{
         output$errorText <- shiny::renderText(i18n()$t("ERROR: cannot determine shapefile") )

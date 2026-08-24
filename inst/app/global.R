@@ -158,41 +158,59 @@ visitorFlowTool:::vftRprofStart()
 # behave the same and a globals problem cannot hide in the sequential fallback.
 options(future.globals.maxSize = +Inf)
 
-vftInstalled <- "visitorFlowTool" %in% rownames(utils::installed.packages())
+# The question this must answer is "can a bare Rscript daemon library() this
+# package?", and only an installed copy in .libPaths() can. installed.packages()
+# was the wrong instrument: it scans metadata, is slow, and its result is easy to
+# misread when pkgload::load_all() has the package attached from source. Look for
+# the installed DESCRIPTION directly - immune to pkgload's shims of system.file()
+# and find.package(), which both point back at the source tree under load_all.
+#
+# Getting this wrong is not a degraded mode, it is the worst mode: vftFuture()
+# then runs every job inline on the shared main thread, freezing all users for
+# its full duration. So say so loudly rather than falling back in silence.
+vftInstalled <- any(file.exists(file.path(.libPaths(), "visitorFlowTool",
+                                          "DESCRIPTION")))
 
 if (vftInstalled) {
-  # Default 2, not 3. The production host has 4 cores, and the main thread has to
-  # compete with the daemons for them: at 3 workers a running job starves the very
-  # thread that serves everyone else's UI, so the app feels *slower* during async
-  # work rather than faster. Main + 2 daemons + Shiny Server overhead fits 4 cores.
-  # Raise VFT_WORKERS only along with the core count.
-  workers <- as.integer(Sys.getenv("VFT_WORKERS", "2"))
-  currentPlan <- future::plan(future.mirai::mirai_multisession, workers = workers)
+  # Worker count and pool startup both live in the package now, so the runtime
+  # health check cannot disagree with what was configured here. VFT_WORKERS=1 is
+  # honoured: mirai::daemons(1) starts one real daemon. Only unusable values fall
+  # back to 2. See .vftWorkerCount() / .vftStartDaemons().
+  workers <- visitorFlowTool:::.vftWorkerCount()
+  wpids   <- visitorFlowTool:::.vftStartDaemons(workers)
 
-  # Pre-warm the daemons so each has visitorFlowTool (incl. its compiled DLL) loaded.
-  #
-  # The values MUST be collected. future treats a worker as busy until the future
-  # occupying it is resolved *and* collected, so warming futures left dangling leave
-  # nbrOfFreeWorkers() at 0 for the life of the process. The daemons still run work
-  # in parallel, but the first future() calls afterwards pay to reclaim the slots:
-  # measured at 0.66s and 0.88s to create, against 0.006s once collected. That is a
-  # main-thread stall on the first user to trigger any async work.
-  #
-  # Collecting here also makes the warming synchronous, which is the point of it -
-  # startup absorbs the library() load rather than the first user paying for it.
-  warming <- lapply(seq_len(future::nbrOfWorkers()), function(i) {
-    future::future({
-      library(visitorFlowTool)
-      TRUE
-    })
-  })
-  invisible(lapply(warming, function(f) tryCatch(future::value(f), error = function(e) NA)))
-  rm(warming)
+  # Report the pids AND the state that decided them. When this warned before, the
+  # pid alone could not say why: installed-but-no-daemons and not-installed look
+  # identical from here, and cost a round trip each to tell apart.
+  message("visitorFlowTool: main pid ", Sys.getpid(),
+          "; async worker pids ", paste(wpids, collapse = ", "),
+          "; VFT_WORKERS=", Sys.getenv("VFT_WORKERS", "<unset>"),
+          " -> workers=", workers,
+          "; mirai connections=",
+          tryCatch(mirai::status()$connections, error = function(e) "ERROR"),
+          "; job timeout=",
+          {tm <- visitorFlowTool:::.vftTimeoutMs()
+           if(is.null(tm)) "off" else paste0(tm/1000, "s")})
+  if(!length(wpids) || anyNA(wpids) || any(wpids == Sys.getpid()))
+    message("*** WARNING: async work is NOT leaving the main process. Every job ",
+            "will freeze every connected user for its full duration. ***")
 } else {
   # dev / load_all: run async work in the main session (has the compiled code loaded).
-  message("visitorFlowTool not installed: using future::sequential (async runs in the main ",
-          "session). Install the package to enable parallel mirai daemons.")
-  currentPlan <- future::plan("future::sequential")
+  #
+  # Loud, and naming .libPaths(), because this is not a degraded mode -- it is the
+  # worst one. vftFuture() has no daemons to send to, so it evaluates every job
+  # inline on the shared main thread and freezes all connected users for the job's
+  # full duration. In dev that is correct and wanted; in production it is the whole
+  # concurrency problem, and it had been happening in silence.
+  message("*** visitorFlowTool is NOT INSTALLED in .libPaths() ***")
+  message("    Async jobs will run INLINE on the shared main thread and freeze every")
+  message("    connected user for their full duration. Correct for dev; the worst")
+  message("    possible production configuration.")
+  message("    .libPaths(): ", paste(.libPaths(), collapse = " ; "))
+  #Make the inline path explicit rather than merely implied: with no daemons
+  #vftFuture() gates on connections < 1 and evaluates in-process. Ensure that is
+  #true even if daemons were started earlier in the same session.
+  mirai::daemons(0)
 }
 # currentPlan <- future::plan("future::multisession", workers = 4) #previous backend
 

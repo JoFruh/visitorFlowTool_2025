@@ -9,5 +9,5 @@ License: GPL (>= 3)
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.2.3
-Imports: Rcpp,promises,future,future.mirai,mirai,later,png,globals,parallel, plyr,dplyr,ggplot2,geojsonsf,readxl,shiny (>= 1.8.1),shinyjs,sf,ggmap,maptiles,shinyWidgets,terra,tidygraph,igraph,leaflet,shinycssloaders,tmap,raster,concaveman,ipc,sfnetworks,sfarrow,base64enc
+Imports: Rcpp,promises,future,future.mirai,mirai,later,png,globals,parallel,plyr,dplyr (>= 1.2.1),ggplot2,geojsonsf,readxl,shiny (>= 1.8.1),shinyjs,sf,ggmap,maptiles,shinyWidgets,terra,tidygraph (>= 1.3.1),igraph (>= 2.3.1),leaflet,shinycssloaders,tmap,raster,concaveman,ipc,sfnetworks,sfarrow,base64enc,tibble (>= 3.3.0),vctrs (>= 0.7.0)
 LinkingTo: Rcpp
