@@ -150,6 +150,33 @@ vftNavAllows <- function(step){
   step %in% vftNavSteps()
 }
 
+#' Which steps may be RE-entered, as opposed to entered once.
+#'
+#' Empty until Stage 5 converts the modules. Entering a step calls its module
+#' server, and today that BUILDS ANOTHER ONE: the previous instance keeps its
+#' observers, its outputs and the plain values it captured at construction. Two
+#' instances of step 4 both answer the same confirm button, and the older one
+#' writes the network it froze before the user changed anything back into `r$` -
+#' observed as two "Original" scenarios in step 5, one simulated against the
+#' superseded area of interest.
+#'
+#' So the nav bar is a forward instrument for now: it gates steps whose inputs do
+#' not exist and it skips ahead, but it will not return you to a step this
+#' session has already built. That is the plan's own sequencing - "keep VFT_NAV
+#' gating each step until its module is converted" - and this is the list that
+#' does the keeping. Add a step here when its module becomes a first-touch
+#' singleton with an enter() closure, and its button starts working both ways.
+#'
+#' Note this restricts the NAV BAR only. The app's own transitions
+#' (`vftGoToStep(check = FALSE)`) are untouched, which is what lets step 5 and
+#' newVersions keep bouncing between each other.
+VFT_REENTRANT_STEPS <- character(0)
+
+#' May the nav bar return to this step after it has been built once?
+vftStepReentrant <- function(step){
+  step %in% VFT_REENTRANT_STEPS
+}
+
 #' The input id of one nav bar button. Unnamespaced - the bar lives at app level.
 vftNavInputId <- function(step){
   paste0("vftNav_", step)

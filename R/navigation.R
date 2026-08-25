@@ -67,6 +67,29 @@ vftStepTrigger <- function(session, step){
   if(n == 0L) NULL else n
 }
 
+#' Has this session already built this step's module?
+#'
+#' The visit counters are the record: `vftGoToStep()` bumps one every time it
+#' sends the user somewhere, and each step's observer builds its module when that
+#' counter moves. A counter above 0 therefore means "a module server for this
+#' step exists in this session" - which, until Stage 5, means entering again
+#' would build a SECOND one.
+#'
+#' step 1 is the exception in both directions: it is built at session start by
+#' its own `ignoreNULL = FALSE` observer, without anyone calling vftGoToStep(),
+#' so its counter reads 0 while its module is very much live.
+#'
+#' isolate(): callers either have no reactive context (vftGoToStep, from an
+#' isolated handler) or re-run for another reason anyway - the nav bar's observe
+#' reads `r$navStep`, which changes on every navigation, so it re-evaluates this
+#' at exactly the moments it can have changed.
+vftStepEntered <- function(step, session = shiny::getDefaultReactiveDomain()){
+  if(identical(step, "step1")) return(TRUE)
+  nav <- tryCatch(session$userData$vftNav, error = function(e) NULL)
+  if(is.null(nav) || is.null(nav[[step]])) return(FALSE)
+  shiny::isolate(nav[[step]]()) > 0L
+}
+
 #' Go to a step: record it, show its tab, and ask its server to run.
 #'
 #' This is the only supported way to change step. It is deliberately not a
@@ -102,6 +125,17 @@ vftGoToStep <- function(r, step, session = shiny::getDefaultReactiveDomain(),
     #Deliberately NOT applied to the app's own forward transitions (check =
     #FALSE): a confirm handler runs after the work it depends on has resolved,
     #and blocking it would strand the user on a step they have finished.
+    #Re-entry builds a second module server on top of the live one. Blocked here
+    #rather than only greyed in the bar, for the same reason as everything else
+    #in this branch: the input can be fired from the console. Lifts per step as
+    #Stage 5 converts them - see VFT_REENTRANT_STEPS.
+    if(!vftStepReentrant(step) && vftStepEntered(step, session)){
+      vftDbg(paste0("NAV BLOCKED -> ", step, " (already built this session)"))
+      try(shiny::showNotification(
+        "Dieser Schritt wurde bereits besucht - der Weg zurück folgt später.",
+        type = "message", duration = 4, session = session), silent = TRUE)
+      return(invisible(NULL))
+    }
     if(shiny::isolate(vftSessionBusy(session))){
       vftDbg(paste0("NAV BLOCKED -> ", step, " (async job in flight)"))
       try(shiny::showNotification(
@@ -250,7 +284,12 @@ vftNavBarServer <- function(r, input, session = shiny::getDefaultReactiveDomain(
       #availability is evaluated FIRST and unconditionally, not short-circuited
       #behind !busy: it is what takes the dependency on each step's `needs`, and
       #skipping it while busy would drop those dependencies.
-      ok <- vftStepAvailable(r, s) && !busy
+      #
+      #A step already built this session greys out permanently (until Stage 5
+      #makes it re-entrant), so the bar shows what it will actually do rather
+      #than inviting a click it is going to refuse.
+      ok <- vftStepAvailable(r, s) && !busy &&
+            (vftStepReentrant(s) || !vftStepEntered(s, session))
       if(!identical(ok, sent[[s]])){
         shinyjs::toggleState(id = vftNavInputId(s), condition = ok)
         sent[[s]] <<- ok

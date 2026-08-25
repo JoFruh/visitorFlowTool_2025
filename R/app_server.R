@@ -379,8 +379,17 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
   shiny::observeEvent(vftStepTrigger(session, "step2"), {
     vftDbg("BUILD STEP 2")
     #use shape information to clip, prepare and present SDM information
+    #The whole confirmed selection goes back in, not just checkboxSave. These six
+    #are written together when step 2 confirms and restored together from a save
+    #file, and step 2's delayed restore block reads all six - but only
+    #checkboxSave used to be passed, so a second visit ran that block against a
+    #module that still had NULLs and died twice over. app_server has held these
+    #values all along; they simply never travelled back.
     step2return <- vftTime("module:step2", step2_server("step2", fshape = r$shape,
                                 needHelp = r$needHelp, filterList = r$filterList, checkboxSave = r$checkboxSave,
+                                groupSave_all = r$groupSave_all, groupSave_sens = r$groupSave_sens,
+                                groupSave_type = r$groupSave_type, groupSave_class = r$groupSave_class,
+                                weightInputs = r$weightInputs, weightNames = r$weightNames,
                                 i18n = shiny::reactive(i18n), currentLang = r$currentLang))
 
 

@@ -4,8 +4,24 @@
 #' @importFrom promises %...!%
 #'
 # df_spInfo_old = NULL,
+#' @param checkboxSave the species checkboxes as they were last confirmed, and
+#'   the switch that turns the whole restore block on.
+#' @param groupSave_all,groupSave_sens,groupSave_type,groupSave_class the group
+#'   checkboxes as last confirmed. These used NOT to be passed: the module was
+#'   handed `checkboxSave` alone, and the restore block that `checkboxSave`
+#'   enables reads all four. On a first visit that is harmless because
+#'   `checkboxSave` is NULL too and the block never runs, but on a SECOND visit -
+#'   the nav bar going back to step 2, or a save file restored at step 2 - the
+#'   block runs against a module whose group state is still NULL and dies on
+#'   `if(NULL == TRUE)`.
+#' @param weightInputs,weightNames the per-species weight fields, for the same
+#'   reason: the block writes them back with `1:length(weightInputs)`, which is
+#'   `c(1, 0)` when that is NULL.
 step2_server <- function(id, fshape, i18n, currentLang, needHelp = TRUE,
-                         filterList = NULL, checkboxSave = NULL){
+                         filterList = NULL, checkboxSave = NULL,
+                         groupSave_all = NULL, groupSave_sens = NULL,
+                         groupSave_type = NULL, groupSave_class = NULL,
+                         weightInputs = NULL, weightNames = NULL){
 
   #count this instantiation. A module server should be created once per
   #session; this app re-calls it from an observeEvent on a trigger, so any
@@ -38,6 +54,16 @@ step2_server <- function(id, fshape, i18n, currentLang, needHelp = TRUE,
     r$filterList <- filterList
     r$checkboxSave <- checkboxSave
     r$currentLang <- currentLang
+
+    #the rest of the confirmed selection, restored alongside checkboxSave. All
+    #six travel together: the delayed restore block below is switched on by
+    #checkboxSave and reads every one of them.
+    r$groupSave_all   <- groupSave_all
+    r$groupSave_sens  <- groupSave_sens
+    r$groupSave_type  <- groupSave_type
+    r$groupSave_class <- groupSave_class
+    r$weightInputs    <- weightInputs
+    r$weightNames     <- weightNames
 
     shiny.i18n::update_lang(r$currentLang)
     shiny::updateSelectInput(inputId = "languageSelect_2", selected = currentLang)
@@ -1697,12 +1723,24 @@ vftDbg("CHOSEN")
           vftDbg("DELAY SAVED CHECKS")
 
 
-          if(r$groupSave_all == TRUE){
-            shiny::updateCheckboxGroupInput(inputId = "groupCheckbox_all", selected = r$groupSave_all)
-          }else{
-            shiny::updateCheckboxGroupInput(inputId = "groupCheckbox_sens", selected = r$groupSave_sens)
-            shiny::updateCheckboxGroupInput(inputId = "groupCheckbox_type", selected = r$groupSave_type)
-            shiny::updateCheckboxGroupInput(inputId = "groupCheckbox_class", selected = r$groupSave_class)
+          #Restore the group boxes only if something was actually saved for them.
+          #An old save file predating these fields, or any partially populated
+          #instance, leaves them NULL - and the else branch would then blank
+          #three group selections rather than restore them.
+          #
+          #isTRUE(), not a bare ==: `NULL == TRUE` is logical(0) and if() on that
+          #is "argument is of length zero", which is precisely how re-entering
+          #step 2 from step 3 killed the session. isTRUE() is also safe if the
+          #value ever arrives as a vector, where if() would error outright.
+          if(!is.null(r$groupSave_all)  || !is.null(r$groupSave_sens) ||
+             !is.null(r$groupSave_type) || !is.null(r$groupSave_class)){
+            if(isTRUE(r$groupSave_all == TRUE)){
+              shiny::updateCheckboxGroupInput(inputId = "groupCheckbox_all", selected = r$groupSave_all)
+            }else{
+              shiny::updateCheckboxGroupInput(inputId = "groupCheckbox_sens", selected = r$groupSave_sens)
+              shiny::updateCheckboxGroupInput(inputId = "groupCheckbox_type", selected = r$groupSave_type)
+              shiny::updateCheckboxGroupInput(inputId = "groupCheckbox_class", selected = r$groupSave_class)
+            }
           }
 
           shiny::updateCheckboxGroupInput(inputId = "speciesCheckbox", selected = r$checkboxSave)
@@ -1712,7 +1750,16 @@ vftDbg("CHOSEN")
             r$checkboxSave <- NULL
             #load weights into every weight field
             isolate({
-              for(weightNo in 1:length(r$weightInputs) ){
+              #seq_along, not 1:length(): 1:length(NULL) is c(1, 0), so an
+              #instance with no saved weights indexed r$weightNames[[1]] on NULL
+              #and died with "subscript out of bounds" - the second crash on the
+              #same re-entry, half a second behind the first. seq_along is empty
+              #for NULL, so nothing runs when there is nothing to restore.
+              #
+              #The two lists are written together at confirm, but a save file is
+              #not a contract: stop at the shorter one rather than index past it.
+              nWeights <- min(length(r$weightInputs), length(r$weightNames))
+              for(weightNo in seq_len(nWeights) ){
                 updateTextInput( inputId = r$weightNames[[weightNo]],
                                  value = r$weightInputs[[weightNo]]
                 )
@@ -1784,9 +1831,23 @@ vftDbg("CHOSEN")
     # BUTTON OBSERVERS ####
     vftDbgCat(paste0("Button Observers" ) )
 
+    #The three weight buttons all walked `1:length(r3$spChoices)`, which is
+    #c(1, 0) - not an empty sequence - when there are no species chosen. That is
+    #a live state: r3$spChoices is written in exactly one place, the
+    #`ignoreInit = TRUE` observer on input$filterList, so a module that has been
+    #rebuilt (nav bar, or a restored save) has the filter input already set on the
+    #client, sees no CHANGE to it, and never runs that observer. Clicking a weight
+    #button then looked up species number 1 of none:
+    #  speciesData$ch.priority[speciesData$latinN == NULL] -> character(0)
+    #and switch() on that is "EXPR must be a length 1 vector".
+    #
+    #seq_along() is empty for NULL, so with nothing chosen these now do nothing
+    #instead of erroring. Note that "nothing" is the honest outcome and not a
+    #full fix: the buttons stay inert until r3$spChoices is populated. See the
+    #comment on obsPrWeights.
     obsReset <- shiny::observeEvent(input$resetWeights, {
       #go through all weights and reset to 1
-      for(i in 1:length(r3$spChoices)){
+      for(i in seq_along(r3$spChoices)){
         shiny::updateTextInput(
           inputId = paste0("weight_", i),
           value = 1
@@ -1797,10 +1858,16 @@ vftDbg("CHOSEN")
 
     obsRWeights <- shiny::observeEvent(input$redListWeights, {
       #go through all weights and reset to 1
-      for(i in 1:length(r3$spChoices)){
+      for(i in seq_along(r3$spChoices)){
         #determine value based on Red List status (CRitical = 5, ENdanger = 4, VUlnerable = 3, etc.)
         threatLvl <- speciesData$threat[speciesData$latinN == r3$spChoices[i]]
         newValue = 1
+        #a species that is not in speciesInformation_SDMapsCH.csv looks up to
+        #character(0), and one that appeared twice would look up to length 2;
+        #switch() errors on both. The table has 667 unique latinN today, so
+        #neither happens - but a lookup miss must not be able to take the app
+        #down, and the `newValue = 1` above already says what to do instead.
+        if(length(threatLvl) != 1L || is.na(threatLvl)) next
         newValue <- switch(threatLvl,
                            CR = 5,
                            EN = 4,
@@ -1808,6 +1875,9 @@ vftDbg("CHOSEN")
                            NT = 2,
                            LC = 1
         )
+        #switch() with no match returns NULL invisibly - updateTextInput() would
+        #then send value = NULL and blank the field rather than leave it at 1.
+        if(is.null(newValue)) newValue <- 1
         shiny::updateTextInput(
           inputId = paste0("weight_", i),
           value = newValue
@@ -1816,12 +1886,24 @@ vftDbg("CHOSEN")
       }
     })
 
+    #This is the observer that crashed: "Gewicht Priorität" on a step 2 that had
+    #been returned to. The switch() below is the reported line, but the empty
+    #r3$spChoices described above is the cause - see obsReset.
+    #
+    #What is NOT fixed here: with nothing chosen the button now does nothing at
+    #all. Populating r3$spChoices on entry means re-running the per-visit setup
+    #that `ignoreInit = TRUE` deliberately skips at construction, which is
+    #Stage 5's enter() closure. Guarding the crash is not the same as making the
+    #button work on a second visit, and it should not be mistaken for it.
     obsPrWeights <- shiny::observeEvent(input$priorityWeights, {
       #go through all weights and reset to 1
-      for(i in 1:length(r3$spChoices)){
+      for(i in seq_along(r3$spChoices)){
         #determine value based on Red List status (CRitical = 5, ENdanger = 4, VUlnerable = 3, etc.)
         prrLvl <- speciesData$ch.priority[speciesData$latinN == r3$spChoices[i]]
         newValue = 1
+        #as in obsRWeights: a miss or a duplicate must not error. "N/A" is a real
+        #value in this column and already falls through to the trailing default.
+        if(length(prrLvl) != 1L || is.na(prrLvl)) next
         newValue <- switch(prrLvl,
                            "1" = 5,
                            "2" = 4,
