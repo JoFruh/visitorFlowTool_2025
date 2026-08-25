@@ -146,6 +146,15 @@ newVersions_server <- function(id, networkList, confirm, i18n, currentLang, isFi
     shiny.i18n::update_lang(r$currentLang)
     shiny::updateSelectInput(inputId = "languageSelect_7", selected = currentLang)
 
+    #this step never set its banner on entry - the old renderUI only ran from
+    #the language selector, so the strip stayed blank until the user touched it.
+    #The UI ships the German image, so only the other two need saying.
+    if(identical(currentLang, "fr")){
+      vftSetBanner(id, "www/stepNewVersions_wsl_fr.png")
+    }else if(identical(currentLang, "en")){
+      vftSetBanner(id, "www/stepNewVersions_wsl_en.png")
+    }
+
     # parkingShape <- shiny::isolate(r$networkList[[r$position]]$parking)
     # parkingShape <- parkingShape %>% dplyr::rename(polygons = .data$`_ogr_geometry_`)
     # parkingShape <- parkingShape %>% dplyr::select(.data$polygons)
@@ -1220,11 +1229,7 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
 
 
 
-    output$bannerUI_7 <- shiny::renderUI({
-      imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/stepNewVersions_wsl_de.png"), list() )
-      #replace /" with ', to avoid problems
-      return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-    })
+    vftSetBanner(id, "www/stepNewVersions_wsl_de.png")
 
 
     r$currentLang <- "de"
@@ -1235,11 +1240,7 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
     shiny.i18n::update_lang("fr")
 
 
-    output$bannerUI_7 <- shiny::renderUI({
-      imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/stepNewVersions_wsl_fr.png"), list() )
-      #replace /" with ', to avoid problems
-      return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-    })
+    vftSetBanner(id, "www/stepNewVersions_wsl_fr.png")
 
 
     r$currentLang <- "fr"
@@ -1250,11 +1251,7 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
     i18n()$set_translation_language("en")
 
 
-    output$bannerUI_7 <- shiny::renderUI({
-      imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/stepNewVersions_wsl_en.png"), list() )
-      #replace /" with ', to avoid problems
-      return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-    })
+    vftSetBanner(id, "www/stepNewVersions_wsl_en.png")
 
 
     r$currentLang <- "en"
@@ -3649,7 +3646,6 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
 
 
 
-        output$inputList <- shiny::renderPrint({shiny::reactiveValuesToList(input)})
 
 
 

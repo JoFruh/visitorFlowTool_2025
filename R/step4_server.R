@@ -5,7 +5,7 @@
 # source("polygonEraser.R", local = TRUE)
 
 # Define server logic
-step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, currentLang, skip = FALSE,
+step4_server <- function(id, network, minThresh, confirm, i18n, currentLang, skip = FALSE,
                          needHelp = NULL, finalPolygons = NULL, DULN = NULL, DULN_all = NULL, shape = NULL){
 
   #count this instantiation. A module server should be created once per
@@ -20,17 +20,9 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
 
     #render banner image from start
     if(currentLang == "de"){
-      output$bannerUI_4 <- shiny::renderUI({
-        imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/step4_wsl.png"), list() )
-        #replace /" with ', to avoid problems
-        return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-      })
+      vftSetBanner(id, "www/step4_wsl.png")
     }else if(currentLang == "fr"){
-      output$bannerUI_4 <- shiny::renderUI({
-        imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/step4_wsl_fr.png"), list() )
-        #replace /" with ', to avoid problems
-        return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-      })
+      vftSetBanner(id, "www/step4_wsl_fr.png")
     }
 
     r <- shiny::reactiveValues()
@@ -765,11 +757,7 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
           shiny.i18n::update_lang("de")
           i18n()$set_translation_language("de")
           vftDbg("DE")
-          output$bannerUI_4 <- shiny::renderUI({
-            imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/step4_wsl.png"), list() )
-            #replace /" with ', to avoid problems
-            return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-          })
+          vftSetBanner(id, "www/step4_wsl.png")
 
 
 
@@ -778,33 +766,21 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
           shiny.i18n::update_lang("fr")
           i18n()$set_translation_language("fr")
 
-          output$bannerUI_4 <- shiny::renderUI({
-            imgMap <- imageMap(NS(id, "banner"), "www/step4_wsl_fr.png", list() )
-            #replace /" with ', to avoid problems
-            return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-          })
+          vftSetBanner(id, "www/step4_wsl_fr.png")
 
 
           vftDbg("FR")
         }else if(input$languageSelect_4 == "en"){
           # i18n$set_translation_language('en')
           shiny.i18n::update_lang("en")
-          output$bannerUI_4 <- shiny::renderUI({
-            imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/step4_wsl.png"), list() )
-            #replace /" with ', to avoid problems
-            return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-          })
+          vftSetBanner(id, "www/step4_wsl.png")
 
 
           vftDbg("EN")
         }else if(input$languageSelect_4 == "it"){
           # i18n$set_translation_language('it')
           shiny.i18n::update_lang("it")
-          output$bannerUI_4 <- shiny::renderUI({
-            imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/step4_wsl.png"), list() )
-            #replace /" with ', to avoid problems
-            return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-          })
+          vftSetBanner(id, "www/step4_wsl.png")
 
 
           vftDbg("IT")
@@ -1230,69 +1206,58 @@ step4_server <- function(id, network, minThresh, naturalAreas, confirm, i18n, cu
     if(is.null(r$finalPolygons ) ){
       if(skip == FALSE){
 
-        if(is.null(naturalAreas[[1]])){
+        #naturalAreas was always NULL - step 3 set it to NULL and never
+        #populated it - so the "natural areas were selected" branch that used
+        #to sit opposite this one could never be reached, and is gone with it.
 
-          DULN <- r$DULN
-          DULN_all <- r$DULN_all
+        DULN <- r$DULN
+        DULN_all <- r$DULN_all
 
-          observeEvent(NULL, {
-            # LAUNCH PROMISE - generate AOIs ####
-            #vftProgress, not ipc::AsyncProgress: 117 MB of session state was
-            #crossing into the worker from this site. See R/async_helpers.R.
-            progress1 <- vftProgress(message = "Generating areas of interest...",
-                                     detail = paste0("Dies sollte weniger als ", 30, "Sekunden dauern"),
-                                     queue = ipc::shinyQueue(),
-                                     millis = 1000)
-
-
-
-            DULN_wrapped <- terra::wrap(DULN)
-            DULN_all_wrapped <- terra::wrap(DULN_all)
-
-            # lake_path <- paste0(home, "/inst/app/www/data/maps/lakes.gdb")
-
-            vftFuture({
-
-              DULN <- terra::unwrap(DULN_wrapped)
-              DULN_all <- terra::unwrap(DULN_all_wrapped)
-
-              progress1$set(1/2)
-              finalAOI <- generateAoI2(network, minThresh = minThresh, perimeter = shape,
-                                       DULN = DULN, DULN_all = DULN_all) #, lake_path = lake_path
-              progress1$set(2/2)
-              progress1$close()
-              finalAOI
-
-            }, seed = TRUE) %...>% (function(finalAOI){
+        observeEvent(NULL, {
+          # LAUNCH PROMISE - generate AOIs ####
+          #vftProgress, not ipc::AsyncProgress: 117 MB of session state was
+          #crossing into the worker from this site. See R/async_helpers.R.
+          progress1 <- vftProgress(message = "Generating areas of interest...",
+                                   detail = paste0("Dies sollte weniger als ", 30, "Sekunden dauern"),
+                                   queue = ipc::shinyQueue(),
+                                   millis = 1000)
 
 
-              #create a local version of the global variable to plot it
-              #complications due to observe events being called by functions (TO DO: improve this coding)
-              r$startingPolygons <- sf::st_transform(finalAOI, crs = 4326)
 
-              if(is.null(r$startingPolygons$id) & !is.null(nrow(r$startingPolygons)) ){
-                r$startingPolygons$id <- 1:nrow(r$startingPolygons)
-              }
-              r$polygonsList <- r$startingPolygons
+          DULN_wrapped <- terra::wrap(DULN)
+          DULN_all_wrapped <- terra::wrap(DULN_all)
 
-              r$promiseFinished <- 1
-              vftDbg("promise finished")
+          # lake_path <- paste0(home, "/inst/app/www/data/maps/lakes.gdb")
 
-            })%...!%(vftAsyncError(progress1, "Areas of interest", NULL))
-          }, ignoreInit = FALSE, ignoreNULL = FALSE, once = TRUE)
-        }else{
-          #if natural areas were selected
-          r$startingPolygons <- naturalAreas[[1]]
-          #generate polygon ids
-          if(is.null(r$startingPolygons$id) & !is.null(nrow(r$startingPolygons)) ){
-            r$startingPolygons$id <- 1:nrow(r$startingPolygons)
-          }
+          vftFuture({
 
-          r$polygonsList <- r$startingPolygons
-          plotMap()
-          vftDbg("promise finished")
+            DULN <- terra::unwrap(DULN_wrapped)
+            DULN_all <- terra::unwrap(DULN_all_wrapped)
 
-        }
+            progress1$set(1/2)
+            finalAOI <- generateAoI2(network, minThresh = minThresh, perimeter = shape,
+                                     DULN = DULN, DULN_all = DULN_all) #, lake_path = lake_path
+            progress1$set(2/2)
+            progress1$close()
+            finalAOI
+
+          }, seed = TRUE) %...>% (function(finalAOI){
+
+
+            #create a local version of the global variable to plot it
+            #complications due to observe events being called by functions (TO DO: improve this coding)
+            r$startingPolygons <- sf::st_transform(finalAOI, crs = 4326)
+
+            if(is.null(r$startingPolygons$id) & !is.null(nrow(r$startingPolygons)) ){
+              r$startingPolygons$id <- 1:nrow(r$startingPolygons)
+            }
+            r$polygonsList <- r$startingPolygons
+
+            r$promiseFinished <- 1
+            vftDbg("promise finished")
+
+          })%...!%(vftAsyncError(progress1, "Areas of interest", NULL))
+        }, ignoreInit = FALSE, ignoreNULL = FALSE, once = TRUE)
 
 
 

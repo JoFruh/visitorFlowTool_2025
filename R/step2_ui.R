@@ -16,8 +16,7 @@ step2_ui <- function(id, i18n){
 
                      shiny::column(4,align = "center",
                                    # shiny::h1("Schritt 1")
-                                   shiny::uiOutput(NS(id,"bannerUI_2"))
-                                   # imageMap(NS(id,"banner"), 'www/step2_wsl.png' , list(A = "0,0,0,100,70,100,70,0") )
+                                   vftBannerImg(id, "www/step2_wsl.png")
 
 
                      ),

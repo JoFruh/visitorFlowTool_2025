@@ -1,7 +1,6 @@
 # Define server logic
 lastStep_server <- function(id, networkList , versionsUI ,
-                            SM_pres, SMColors , shape ,
-                            basemap , finalPolygons, species, pathUsage ){
+                            SM_pres, shape , finalPolygons ){
 
   #count this instantiation. A module server should be created once per
   #session; this app re-calls it from an observeEvent on a trigger, so any
@@ -236,7 +235,7 @@ lastStep_server <- function(id, networkList , versionsUI ,
 
     # RENDER COMBINED MAPS ####
 
-    output$mapArea <- shiny::renderPlot({
+    output$mapArea <- shiny::renderUI({
 
       bboxUsage <- NULL
       map <- NULL
@@ -293,16 +292,12 @@ lastStep_server <- function(id, networkList , versionsUI ,
         map <- map |> leaflet::addPolygons(data= sf::st_zm(sf::st_transform(shape, "epsg:4326"), drop = TRUE, what = "ZM" ), stroke = TRUE, fill = FALSE, color = "black",
                                             weight = 5, options = leaflet::pathOptions(pane = "layer2"))
 
-        output$mapArea <- shiny::renderUI({
-
-          leaflet::leafletOutput(NS(id, "mapAreaLeaflet"), height = 500)
-
-        })
-
         output$mapAreaLeaflet <- leaflet::renderLeaflet({
           map
 
         })
+
+        leafletSlot <- leaflet::leafletOutput(NS(id, "mapAreaLeaflet"), height = 500)
 
 
         # bboxUsage <- sf::st_bbox(passageTable["passage"]$`_ogr_geometry_`)
@@ -400,10 +395,11 @@ lastStep_server <- function(id, networkList , versionsUI ,
         #   plotResults(1)
         # }
 
+        leafletSlot
+
       }else{
-        #plot empty basemap
-
-
+        #no simulation selected yet: nothing to show in the map slot
+        NULL
       }
 
     })

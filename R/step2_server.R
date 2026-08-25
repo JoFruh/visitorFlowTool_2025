@@ -19,23 +19,11 @@ step2_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE
 
     #render banner image from start
     if(currentLang == "de"){
-      output$bannerUI_2 <- shiny::renderUI({
-        imgMap <- imageMap(NS(id, "banner"), "www/step2_wsl.png", list() )
-        #replace /" with ', to avoid problems
-        return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-      })
+      vftSetBanner(id, "www/step2_wsl.png")
     }else if(currentLang == "fr"){
-      output$bannerUI_2 <- shiny::renderUI({
-        imgMap <- imageMap(NS(id, "banner"), "www/step2_wsl_fr.png", list() )
-        #replace /" with ', to avoid problems
-        return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-      })
+      vftSetBanner(id, "www/step2_wsl_fr.png")
     }else if(currentLang == "en"){
-      output$bannerUI_2 <- shiny::renderUI({
-        imgMap <- imageMap(NS(id, "banner"), "www/step2_wsl_en.png", list() )
-        #replace /" with ', to avoid problems
-        return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-      })
+      vftSetBanner(id, "www/step2_wsl_en.png")
     }
 
 
@@ -68,7 +56,6 @@ step2_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE
     SM <- NULL
     r$SMcolors <- NULL
     r$SM_pres <- NULL
-    SM_noPres <- NULL
     toSelectSpAfter <- FALSE
     shp <- sf::st_transform(fshape, 2056)
     shp_otherWGS <- sf::st_transform(fshape, 3395)
@@ -841,11 +828,7 @@ vftDbgCat(paste0("r3$spChoices = ", r3$spChoices ) )
         i18n()$set_translation_language("de")
         r$currentLang <- "de"
         vftDbg("DE")
-        output$bannerUI_2 <- shiny::renderUI({
-          imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/step2_wsl.png"), list() )
-          #replace /" with ', to avoid problems
-          return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-        })
+        vftSetBanner(id, "www/step2_wsl.png")
 
 
         r3$spChoices_html <- buildHTMLList(r3$spChoices, speciesData, language = "de")
@@ -936,11 +919,7 @@ vftDbgCat(paste0("r3$spChoices = ", r3$spChoices ) )
         i18n()$set_translation_language("fr")
         r$currentLang <- "fr"
 
-        output$bannerUI_2 <- shiny::renderUI({
-          imgMap <- imageMap(NS(id, "banner"), "www/step2_wsl_fr.png", list() )
-          #replace /" with ', to avoid problems
-          return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-        })
+        vftSetBanner(id, "www/step2_wsl_fr.png")
 
         # #trigger an update of the species choices checkbox
         # r3$triggerSpChckUpdate <- r3$triggerSpChckUpdate  + 1
@@ -1041,11 +1020,7 @@ vftDbgCat(paste0("r3$spChoices = ", r3$spChoices ) )
         i18n()$set_translation_language("en")
         r$currentLang <- "en"
 
-        output$bannerUI_2 <- shiny::renderUI({
-          imgMap <- imageMap(NS(id, "banner"), "www/step2_wsl_en.png", list() )
-          #replace /" with ', to avoid problems
-          return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-        })
+        vftSetBanner(id, "www/step2_wsl_en.png")
 
 
         # #trigger an update of the species choices checkbox
@@ -1095,11 +1070,7 @@ vftDbgCat(paste0("r3$spChoices = ", r3$spChoices ) )
       }else if(input$languageSelect_2 == "it"){
         # i18n$set_translation_language('it')
         shiny.i18n::update_lang("it")
-        output$bannerUI_2 <- shiny::renderUI({
-          imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/step2_wsl.png"), list() )
-          #replace /" with ', to avoid problems
-          return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-        })
+        vftSetBanner(id, "www/step2_wsl.png")
 
 
         vftDbg("IT")

@@ -11,7 +11,10 @@ lastStep_ui <- function(id){
                                    shiny::h2("Visitor Flow Tool: ")                         ),
                      shiny::column(4,align = "center",
                                    # shiny::h1("Schritt 1")
-                                     imageMap(NS(id, "banner"), 'www/lastStep_wsl.png' , list(A = "0,0,0,100,70,100,70,0", B = "70,0,70,100,160,100,160,0", C = "160,0,160,100,260,100,260,0", D = "260,0,260,100,310,100,310,0", E = "310,0,310,100,360,100,360,0" ))
+                                     #this used to pass five clickable <area> coords for back navigation,
+                                     #but they were never rendered - the helper returned a bare <img> before
+                                     #it built the <map>, so this is exactly what the page already showed.
+                                     vftBannerImg(id, 'www/lastStep_wsl.png')
 
 
                      ),

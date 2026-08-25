@@ -1,0 +1,4 @@
+VFT_PERF_DIR=/home/frueh/vft_perf
+VFT_RPROF=1
+VFT_WORKERS=1
+VFT_RPROF_SECS=1200 

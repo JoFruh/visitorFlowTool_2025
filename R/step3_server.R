@@ -1,6 +1,6 @@
 
 # Define server logic
-step3_server <- function(id, network, shape, confirm, i18n, currentLang,
+step3_server <- function(id, shape, confirm, i18n, currentLang,
                          needHelp = FALSE, DULN_all = NULL){
 
   #count this instantiation. A module server should be created once per
@@ -14,23 +14,11 @@ step3_server <- function(id, network, shape, confirm, i18n, currentLang,
 
     #render banner image from start
     if(currentLang == "de"){
-      output$bannerUI_3 <- shiny::renderUI({
-        imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/step3_wsl.png"), list() )
-        #replace /" with ', to avoid problems
-        return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-      })
+      vftSetBanner(id, "www/step3_wsl.png")
     }else if(currentLang == "fr"){
-      output$bannerUI_3 <- shiny::renderUI({
-        imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/step3_wsl_fr.png"), list() )
-        #replace /" with ', to avoid problems
-        return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-      })
+      vftSetBanner(id, "www/step3_wsl_fr.png")
     }else if(currentLang == "en"){
-      output$bannerUI_3 <- shiny::renderUI({
-        imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/step3_wsl_en.png"), list() )
-        #replace /" with ', to avoid problems
-        return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-      })
+      vftSetBanner(id, "www/step3_wsl_en.png")
     }
 
     r <- shiny::reactiveValues()
@@ -97,8 +85,6 @@ step3_server <- function(id, network, shape, confirm, i18n, currentLang,
     r$x <- NULL
     r$confirm <- NULL
 
-    r$naturalAreas <- NULL
-
     r$isSkip <- 0
 
     plotUpdate <- reactiveVal(1)
@@ -117,9 +103,6 @@ step3_server <- function(id, network, shape, confirm, i18n, currentLang,
     # #Blur it to make it a smoother selection
     # r$DULN_all <- terra::focal(r$DULN_all, w=matrix(1, 5, 5), mean)
     # DULN <- terra::project(DULN, "epsg:4326")
-    pathMap <- network |> tidygraph::activate(edges) |> dplyr::as_tibble() |> sf::st_as_sf()
-    pathMap <- sf::st_transform(pathMap, 4326)
-
     basemap <- terra::project(basemap, "epsg:4326")
 
     # Pre-crop the basemap once (vectExt is constant for this session)
@@ -235,11 +218,7 @@ step3_server <- function(id, network, shape, confirm, i18n, currentLang,
         shiny.i18n::update_lang("de")
         i18n()$set_translation_language("de")
         vftDbg("DE")
-        output$bannerUI_3 <- shiny::renderUI({
-          imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/step3_wsl.png"), list() )
-          #replace /" with ', to avoid problems
-          return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-        })
+        vftSetBanner(id, "www/step3_wsl.png")
 
 
 
@@ -248,33 +227,21 @@ step3_server <- function(id, network, shape, confirm, i18n, currentLang,
         shiny.i18n::update_lang("fr")
         i18n()$set_translation_language("fr")
 
-        output$bannerUI_3 <- shiny::renderUI({
-          imgMap <- imageMap(NS(id, "banner"), "www/step3_wsl_fr.png", list() )
-          #replace /" with ', to avoid problems
-          return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-        })
+        vftSetBanner(id, "www/step3_wsl_fr.png")
 
 
         vftDbg("FR")
       }else if(input$languageSelect_3 == "en"){
         # i18n$set_translation_language('en')
         shiny.i18n::update_lang("en")
-        output$bannerUI_3 <- shiny::renderUI({
-          imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/step3_wsl.png"), list() )
-          #replace /" with ', to avoid problems
-          return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-        })
+        vftSetBanner(id, "www/step3_wsl.png")
 
 
         vftDbg("EN")
       }else if(input$languageSelect_3 == "it"){
         # i18n$set_translation_language('it')
         shiny.i18n::update_lang("it")
-        output$bannerUI_3 <- shiny::renderUI({
-          imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/step3_wsl.png"), list() )
-          #replace /" with ', to avoid problems
-          return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-        })
+        vftSetBanner(id, "www/step3_wsl.png")
 
 
         vftDbg("IT")
@@ -295,7 +262,7 @@ step3_server <- function(id, network, shape, confirm, i18n, currentLang,
 
 
       return(list(minThresh = shiny::reactive(r$x), confirm = shiny::reactive({r$confirm}), skip = shiny::reactive({input$skipButton}), isSkip = shiny::reactive({r$isSkip}),
-                  needHelp = shiny::reactive(r$needHelp), naturalAreas = shiny::reactive(NULL),
+                  needHelp = shiny::reactive(r$needHelp),
                   currentLang = shiny::reactive(i18n()$get_translation_language())) )
 
       #trigger return to past (return with specific confirm value?)
@@ -328,7 +295,7 @@ step3_server <- function(id, network, shape, confirm, i18n, currentLang,
       }
 
       return(list(minThresh = shiny::reactive(r$x), confirm = shiny::reactive({r$confirm }), skip = shiny::reactive({input$skipButton}), isSkip = shiny::reactive({r$isSkip}),
-                  needHelp = shiny::reactive(r$needHelp), naturalAreas = shiny::reactive(r$naturalAreas ),
+                  needHelp = shiny::reactive(r$needHelp),
                   currentLang = shiny::reactive(i18n()$get_translation_language())) )
 
     }, ignoreInit = TRUE)
@@ -339,12 +306,10 @@ step3_server <- function(id, network, shape, confirm, i18n, currentLang,
 
       r$confirm <- input$confirmButton3
 
-      r$naturalAreas <- NULL
-
       r$isSkip <- 1
 
       return(list(minThresh = shiny::reactive(r$x), confirm = shiny::reactive({r$confirm }), skip = shiny::reactive({input$skipButton}), isSkip = shiny::reactive({r$isSkip}),
-                  needHelp = shiny::reactive(r$needHelp), naturalAreas = shiny::reactive(r$naturalAreas)) )
+                  needHelp = shiny::reactive(r$needHelp)) )
 
     }, ignoreInit = TRUE)
 
@@ -429,7 +394,7 @@ step3_server <- function(id, network, shape, confirm, i18n, currentLang,
 
     r$confirm <- input$confirmButton3
     return(list(minThresh = shiny::reactive(r$x), confirm = shiny::reactive({r$confirm }), skip = shiny::reactive({input$skipButton}), isSkip = shiny::reactive({r$isSkip}),
-                needHelp = shiny::reactive(r$needHelp), naturalAreas = shiny::reactive(r$naturalAreas),
+                needHelp = shiny::reactive(r$needHelp),
                 currentLang = shiny::reactive(i18n()$get_translation_language())) )
   })
 }

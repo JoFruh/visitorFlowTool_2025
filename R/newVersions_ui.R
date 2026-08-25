@@ -26,8 +26,7 @@ vftDbg("UI6")
                  ),
                  shiny::column(4,align = "center",
                                # shiny::h1("Schritt 1")
-                               shiny::uiOutput(NS(id,"bannerUI_7"))
-                               # imageMap(NS(id, "banner"), 'www/stepNewVersions_wsl.png' , list() )
+                               vftBannerImg(id, "www/stepNewVersions_wsl_de.png")
 
 
                  ),

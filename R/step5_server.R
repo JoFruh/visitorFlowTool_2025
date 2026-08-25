@@ -1,8 +1,8 @@
 
 
 # Define server logic
-step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, confirm, i18n, currentLang, isFirstRun_stp6, finalPolygons = NULL, versionsUI = list(), triggerStp6 = 0,
-                         basemap = NULL, needHelp = FALSE, species = NULL, minCutThresh = NULL){
+step5_server <- function(id, networkList, SM_pres, SMcolors, shape, confirm, i18n, currentLang, isFirstRun_stp6, finalPolygons = NULL, versionsUI = list(), triggerStp6 = 0,
+                         needHelp = FALSE, species = NULL, minCutThresh = NULL){
 
   #count this instantiation. A module server should be created once per
   #session; this app re-calls it from an observeEvent on a trigger, so any
@@ -40,22 +40,11 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
     shiny::updateSelectInput(inputId = "languageSelect_5", selected = currentLang)
 
 
-    #reset map UI if already present
-    output$mapAreaLeaflet <- renderUI({return(NULL)})
-
     #render banner image from start
     if(r$currentLang == "de"){
-      output$bannerUI_5 <- shiny::renderUI({
-        imgMap <- imageMap(NS(id, "banner_5"), i18n()$t("www/step5_wsl.png"), list() )
-        #replace /" with ', to avoid problems
-        return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-      })
+      vftSetBanner(id, "www/step5_wsl.png")
     }else if(r$currentLang == "fr"){
-      output$bannerUI_5 <- shiny::renderUI({
-        imgMap <- imageMap(NS(id, "banner_5"), i18n()$t("www/step5_wsl_fr.png"), list() )
-        #replace /" with ', to avoid problems
-        return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-      })
+      vftSetBanner(id, "www/step5_wsl_fr.png")
     }
 
 
@@ -945,11 +934,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
           shiny.i18n::update_lang("de")
           i18n()$set_translation_language("de")
           vftDbg("DE")
-          output$bannerUI_5 <- shiny::renderUI({
-            imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/step5_wsl.png"), list() )
-            #replace /" with ', to avoid problems
-            return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-          })
+          vftSetBanner(id, "www/step5_wsl.png")
 
           output$agentCheckbox_ui <- shiny::renderUI({
 
@@ -967,11 +952,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
           shiny.i18n::update_lang("fr")
           i18n()$set_translation_language("fr")
 
-          output$bannerUI_5 <- shiny::renderUI({
-            imgMap <- imageMap(NS(id, "banner"), "www/step5_wsl_fr.png", list() )
-            #replace /" with ', to avoid problems
-            return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-          })
+          vftSetBanner(id, "www/step5_wsl_fr.png")
 
           output$agentCheckbox_ui <- shiny::renderUI({
 
@@ -991,11 +972,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
           i18n()$set_translation_language("en")
 
 
-          output$bannerUI_5 <- shiny::renderUI({
-            imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/step5_wsl_en.png"), list() )
-            #replace /" with ', to avoid problems
-            return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-          })
+          vftSetBanner(id, "www/step5_wsl_en.png")
 
           output$agentCheckbox_ui <- shiny::renderUI({
 
@@ -1012,11 +989,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
         }else if(input$languageSelect_5 == "it"){
           # i18n$set_translation_language('it')
           shiny.i18n::update_lang("it")
-          output$bannerUI_5 <- shiny::renderUI({
-            imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/step5_wsl.png"), list() )
-            #replace /" with ', to avoid problems
-            return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-          })
+          vftSetBanner(id, "www/step5_wsl.png")
 
 
           vftDbg("IT")

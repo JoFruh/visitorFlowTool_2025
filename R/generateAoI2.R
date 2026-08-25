@@ -18,11 +18,6 @@ generateAoI2 <- function(network, minThresh, perimeter = NULL, #, lake_path = NU
   polygons <- sf::st_sfc(crs = 4326) #list of final generated sf polygons #
 
 
-  #vftGraphTibble(), not as_tibble(activate(nodes)): this runs inside the step-4
-  #worker and the nodes carry an sf `geometry` column, which tibble < 3.3 refuses
-  #as "not a vector" - the same failure that killed the ABM. See graph_helpers.R.
-  networkPts <- terra::vect(sf::st_as_sf(vftGraphTibble(network, "nodes")))
-
   # networkEdgs <- terra::vect(network |> tidygraph::activate(edges) |> dplyr::as_tibble() |> sf::st_as_sf())
   #get vertices above selected threshold (Areas of Interest)
 

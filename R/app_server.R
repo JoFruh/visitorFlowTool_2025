@@ -12,15 +12,19 @@ app_server <- function(input, output, session){
   i18n$set_translation_language('de')
 
   r <- shiny::reactiveValues()
-  #shortcut for accessing tool's various steps instantly
-  step <- 1
 
-  #give banners an original value
-  shinyjs::runjs("Shiny.setInputValue('step2-banner', 'O')")
-  shinyjs::runjs("Shiny.setInputValue('step3-banner', 'O')")
-  shinyjs::runjs("Shiny.setInputValue('step4-banner', 'O')")
-  shinyjs::runjs("Shiny.setInputValue('step5-banner', 'O')")
-  shinyjs::runjs("Shiny.setInputValue('lastStep-banner', 'O')")
+  #give banners an original value.
+  #One runjs, not five: each setInputValue is an input message from the client,
+  #and every input message batch makes ShinySession$manageInputs() call
+  #manageHiddenOutputs(), which sweeps the whole registered-output list. Sent
+  #together they arrive in one batch and cost one sweep instead of five.
+  shinyjs::runjs(paste0(
+    "Shiny.setInputValue('step2-banner', 'O');",
+    "Shiny.setInputValue('step3-banner', 'O');",
+    "Shiny.setInputValue('step4-banner', 'O');",
+    "Shiny.setInputValue('step5-banner', 'O');",
+    "Shiny.setInputValue('lastStep-banner', 'O');"
+  ))
 
   #initialise triggers
   restartSteps <- shiny::reactiveVal()
@@ -103,7 +107,6 @@ app_server <- function(input, output, session){
       envBase_triggerstep6_nr <- r$triggerstep6_nr
       envBase_pathUsage <- r$pathUsage
       envBase_newVersionsFirstRun <- r$newVersionsFirstRun
-      envBase_basemap <- r$basemap
       # envBase_SMdateTime <- r$SMdateTime #not needed anymore?
       envBase_groupSave_all <- r$groupSave_all
       envBase_groupSave_sens <- r$groupSave_sens
@@ -163,7 +166,6 @@ app_server <- function(input, output, session){
                   envBase_pathUsage,
                   envBase_step6FirstRun,
                   envBase_newVersionsFirstRun,
-                  envBase_basemap,
                   envBase_groupSave_all ,
                   envBase_groupSave_sens,
                   envBase_groupSave_type,
@@ -244,8 +246,6 @@ app_server <- function(input, output, session){
 
 
         vftDbg("PRE-TRIGGER STEP 2")
-        r$basemap <- step1return$basemap()
-        r$basemap_bw <- step1return$basemap_bw()
         r$shape <- step1return$ffshape()
         r$network <- step1return$network()
         r$needHelp <- step1return$needHelp()
@@ -301,7 +301,9 @@ app_server <- function(input, output, session){
         if(exists("envBase_triggerstep6_nr")){r$triggerstep6_nr <- envBase_triggerstep6_nr}
         if(exists("envBase_pathUsage")){r$pathUsage <- envBase_pathUsage}
         if(exists("envBase_newVersionsFirstRun")){r$newVersionsFirstRun <- envBase_newVersionsFirstRun}
-        if(exists("envBase_basemap")){r$basemap <- envBase_basemap}
+        #envBase_basemap is deliberately NOT read back. step1 never assigned it,
+        #so every save file that carries it carries a NULL; load() tolerates the
+        #extra object, and current save files no longer write it at all.
         if(exists("envBase_dateTime")){r$dateTime <- envBase_dateTime}
 
         if(exists("envBase_groupSave_all")){r$groupSave_all <- envBase_groupSave_all}
@@ -369,7 +371,7 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
           triggerStep5(1)
         }
       }
-    }, once = TRUE)
+    }, ignoreInit = TRUE, once = TRUE)
   }, ignoreInit = FALSE, ignoreNULL = FALSE)
   #
   #
@@ -493,7 +495,7 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
       #use shape information to clip, prepare and present SDM information
       vftDbgCat(paste0("DULN ALL 2: ", r$DULN_all))
 
-      step3return <- vftTime("module:step3", step3_server("step3", network = r$network, shape = r$shape, confirm = r$confirm,
+      step3return <- vftTime("module:step3", step3_server("step3", shape = r$shape, confirm = r$confirm,
                                   i18n = shiny::reactive(i18n), currentLang = r$currentLang,
                                   needHelp = r$needHelp, DULN_all = r$DULN_all
                                   ))
@@ -516,7 +518,6 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
 
         #save returns
         r$minThresh <- step3return$minThresh()
-        r$naturalAreas <- step3return$naturalAreas()
         r$isSkip <- step3return$isSkip()
         # r$DULN <- step3return$DULN()
         # r$DULN_all <- step3return$DULN_all()
@@ -594,7 +595,7 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
 
         triggerStep4(-1)
       }
-    }, once = TRUE)
+    }, ignoreInit = TRUE, once = TRUE)
 
     shiny::observeEvent(step3return$skip(), {
       if(step3return$isSkip() > 0 ){
@@ -613,7 +614,7 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
 
         triggerStep4(-1)
       }
-    }, once = TRUE)
+    }, ignoreInit = TRUE, once = TRUE)
 
 
   })
@@ -626,7 +627,7 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
     if(triggerStep4() > 0){
       # r$isSkip <- 0
       #Skip polygon generation = FALSE
-      step4return <- vftTime("module:step4", step4_server("step4", network = r$network, minThresh = r$minThresh, naturalAreas = r$naturalAreas, confirm = r$confirm, skip = r$isSkip,
+      step4return <- vftTime("module:step4", step4_server("step4", network = r$network, minThresh = r$minThresh, confirm = r$confirm, skip = r$isSkip,
                                   DULN = r$DULN, DULN_all = r$DULN_all, needHelp = r$needHelp,
                                   i18n = shiny::reactive(i18n), currentLang = r$currentLang, shape = r$shape))
       #Update UI
@@ -636,7 +637,7 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
       #change tabs
 
       # r$isSkip <- 1
-      step4return <- vftTime("module:step4", step4_server("step4", network = r$network, minThresh = r$minThresh, naturalAreas = r$naturalAreas, confirm = r$confirm, skip = r$isSkip,
+      step4return <- vftTime("module:step4", step4_server("step4", network = r$network, minThresh = r$minThresh, confirm = r$confirm, skip = r$isSkip,
                                   DULN = r$DULN, DULN_all = r$DULN_all, needHelp = r$needHelp,
                                   i18n = shiny::reactive(i18n), currentLang = r$currentLang))
       #Update UI
@@ -736,7 +737,7 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
 
         # restartSteps(restartSteps() + 1)
       }
-    }, once = TRUE)
+    }, ignoreInit = TRUE, once = TRUE)
   })
 
   #STEP 5
@@ -752,7 +753,7 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
       vftDbgCat("TEST8\n")
       # cat(file = stderr(), paste0("contents of envBase: ", ls(envBase)))
       step5return <- vftTime("module:step5", step5_server("step5", networkList = r$networkList, SM_pres = r$SM_pres, SMcolors = r$SMcolors, shape = r$shape, confirm = r$confirm, finalPolygons = r$finalPolygons, versionsUI = r$versionsUI, isFirstRun_stp6 = r$step6FirstRun,
-                                  needHelp = r$needHelp, basemap = r$basemap, species = r$species,
+                                  needHelp = r$needHelp, species = r$species,
                                   i18n = shiny::reactive(i18n), currentLang = r$currentLang, minCutThresh = r$minCutThresh))
       r$step6FirstRun <- FALSE
     }
@@ -996,8 +997,8 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
 
       #Skip polygon generation = FALSE
       finalStepReturn <- lastStep_server("finalStep", networkList = r$networkList, versionsUI = r$versionsUI,
-                                         SM_pres = r$SM_pres, SMColors = r$SMColors, shape = r$shape,
-                                         basemap = r$basemap, finalPolygons = r$finalPolygons, species = r$spChc)
+                                         SM_pres = r$SM_pres, shape = r$shape,
+                                         finalPolygons = r$finalPolygons)
 
 
     }
@@ -1018,7 +1019,7 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
         # }
         #
 
-      }else if(step5return$confirm() == "A"){
+      }else if(finalStepReturn$confirm() == "A"){
         r$step <- 1
         # step1return$confirm <- reactive(0) #reset confirm
         #reset all inputs
@@ -1035,7 +1036,7 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
         # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step1" )
 
         # restartSteps(restartSteps() + 1)
-      }else if(step5return$confirm() == "B"){
+      }else if(finalStepReturn$confirm() == "B"){
         r$step <- 2
         # step1return$confirm <- reactive(0) #reset confirm
         #reset all inputs
@@ -1051,7 +1052,7 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
         }
 
         # restartSteps(restartSteps() + 1)
-      }else if(step5return$confirm() == "C"){
+      }else if(finalStepReturn$confirm() == "C"){
         r$step <- 3
         # step1return$confirm <- reactive(0) #reset confirm
         #reset all inputs
@@ -1067,7 +1068,7 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
           triggerStep3(triggerStep3() + 1)
         }
         # restartSteps(restartSteps() + 1)
-      }else if(step5return$confirm() == "D"){
+      }else if(finalStepReturn$confirm() == "D"){
         r$step <- 4
         # step1return$confirm <- reactive(0) #reset confirm
         #reset all inputs
@@ -1083,8 +1084,8 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
           triggerStep4(triggerStep4() + 1)
         }
         # restartSteps(restartSteps() + 1)
-      }else if(step5return$confirm() == "E"){
-        r$step <- 4
+      }else if(finalStepReturn$confirm() == "E"){
+        r$step <- 5
         # step1return$confirm <- reactive(0) #reset confirm
         #reset all inputs
         # shinyjs::reset()
@@ -1093,156 +1094,16 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
         #Update UI
         # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step4" )
         vftDbg("RESTART STEP 5")
-        if(is.null(triggerStep4())){
-          triggerStep4(1)
+        if(is.null(triggerStep5())){
+          triggerStep5(1)
         }else{
-          triggerStep4(triggerStep5() + 1)
+          triggerStep5(triggerStep5() + 1)
         }
         # restartSteps(restartSteps() + 1)
       }
-    }, once = TRUE)
+    }, ignoreInit = TRUE, once = TRUE)
   })
 
-
-  #TODO: REMOVE?
-
-  #SHORTCUTS:
-  if(step == 2){
-
-    shp <- sf::st_read(vftData("maps/wiggerPerimeter_shp/wiggerPerimeter_LV95.shp"))
-    shp <- sf::st_as_sf(shp, coords = c("long", "lat"), crs = sf::st_crs(4326))
-    shp <- sf::st_combine(shp)
-    shp <- sf::st_cast(shp, "POLYGON")
-
-    shp <- sf::st_transform(shp, crs = 4326)
-    #shpWGS <- st_transform(shp, crs = "EPSG:3857")
-
-    bb <- sf::st_bbox(shp)
-    names(bb) <- c("left", "bottom", "right", "top")
-    # basemap <<- get_map(location=bb,  maptype = 'terrain', source = 'google')
-
-
-    #transform to web Mercator
-    shp <- sf::st_transform(shp, crs = "EPSG:3857")
-
-    r$shape <- shp
-
-    #place buffer around polygon for some margin
-    shape_larger <- sf::st_buffer(shp, dist = 1000)
-
-    #use shape to prepare spatial filter as wkt (well-known text), grow slightly for buffer
-    wkt <- sf::st_as_text( shape_larger )
-
-    #extract relevant foot paths
-    loadedPaths <- sf::st_read(vftData("maps/paths/paths_DULN_final2.shp"),
-                               query = 'SELECT * FROM "paths_DULN_final2"',
-                               wkt_filter = wkt
-    )
-
-    #use function to prepare node-edge table
-    r$network <- sf_to_tidygraph(loadedPaths, shape_larger, directed = FALSE)
-
-    r$confirm <- shiny::reactiveVal(1)
-
-    #trigger step 2
-    vftDbg("TRIGGER STEP 2")
-    triggerStep2(1)
-
-
-  }else if (step == 3){
-    shp <- sf::st_read(vftData("maps/wiggerPerimeter_shp/wiggerPerimeter_LV95.shp"))
-    shp <- sf::st_as_sf(shp, coords = c("long", "lat"), crs = sf::st_crs(4326))
-    shp <- sf::st_combine(shp)
-    shp <- sf::st_cast(shp, "POLYGON")
-
-    shp <- sf::st_transform(shp, crs = 4326)
-    #shpWGS <- st_transform(shp, crs = "EPSG:3857")
-
-    bb <- sf::st_bbox(shp)
-    names(bb) <- c("left", "bottom", "right", "top")
-    # basemap <<- get_map(location=bb,  maptype = 'terrain', source = 'google')
-
-
-    #transform to web Mercator
-    shp <- sf::st_transform(shp, crs = "EPSG:3857")
-
-    r$shape <- shp
-
-    #place buffer around polygon for some margin
-    shape_larger <- sf::st_buffer(shp, dist = 1000)
-
-    #use shape to prepare spatial filter as wkt (well-known text), grow slightly for buffer
-    wkt <- sf::st_as_text( shape_larger )
-
-    #extract relevant foot paths
-    loadedPaths <- sf::st_read(vftData("maps/paths/archive/paths_DULN_final2.shp"),
-                               query = 'SELECT * FROM "paths_DULN_final2"',
-                               wkt_filter = wkt
-    )
-
-    #use function to prepare node-edge table
-    r$network <- sf_to_tidygraph(loadedPaths, shape_larger, directed = FALSE)
-
-    r$confirm <- shiny::reactiveVal(1)
-    #trigger step 3
-    vftDbg("TRIGGER STEP 3")
-    triggerStep3(1)
-  }else if(step == 4){
-
-    load("envBase_step5.RData")
-
-    vftDbg("TRIGGERSTEP4")
-    vftDbg(r$finalPolygons)
-    triggerStep4(1)
-  }else if (step == 5){
-    vftDbgCat(paste0("CURRENT WD: ",getwd()) )
-
-
-    # r$newVersionsFirstRun <- TRUE
-    # r$step6FirstRun <- TRUE
-    #
-    # areasOfInterest = NULL
-    # #make default area shape
-    # shp <- sf::st_read(vftData("maps/wiggerPerimeter_shp/wiggerPerimeter_LV95.shp"))
-    # shp <- sf::st_as_sf(shp, coords = c("long", "lat"), crs = sf::st_crs(4326))
-    # shp <- sf::st_combine(shp)
-    # shp <- sf::st_cast(shp, "POLYGON")
-    #
-    # r$shape <- shp
-    #
-    # r$SM_pres <- terra::rast("www/defaultRaster_SM_pres.tif")
-    # r$SM_noPres <- terra::rast("www/defaultRaster_SM_noPres.tif")
-    # r$SMcolors <- load("www/SMcolors_default.RData")
-    # networkList <- NULL
-    # load("www/objectsForStep6_2.RData")
-    # r$networkList <- networkList
-    # r$confirm <- shiny::reactiveVal(1)
-
-
-    #try instead
-    load("envBase_step6.RData")
-
-    vftDbg("TRIGGERSTEP5")
-    triggerStep5(1)
-    r$triggerStep5_nr <- 1
-
-  }else if(step == 62){
-    #make default area shape
-    shp <- sf::st_read(vftData("maps/wiggerPerimeter_shp/wiggerPerimeter_LV95.shp"))
-    shp <- sf::st_as_sf(shp, coords = c("long", "lat"), crs = sf::st_crs(4326))
-    shp <- sf::st_combine(shp)
-    shp <- sf::st_cast(shp, "POLYGON")
-
-    r$shape <- shp
-
-    load("objectsForStep6.RData")
-    r$networkList <- list(network = r$network, pathUsage = NULL, parking = r$parking, residential = NULL, newAttr = NULL)
-
-    r$confirm <- shiny::reactiveVal(1)
-
-    triggerNewVersions(1)
-    r$triggerNewVersions_nr <- 1
-  }
 
   # #### TRIGGERS WHEN CHANGING TABS
   # observeEvent(input$tabs){

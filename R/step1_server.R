@@ -20,11 +20,7 @@ step1_server <- function(id, i18n){
     shiny::titlePanel("Besucherlenkungs-Tool")
 
     #render banner image from start
-    output$bannerUI <- shiny::renderUI({
-      imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/step1_wsl.png"), list() )
-#replace /" with ', to avoid problems
-      return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-    })
+    vftSetBanner(id, "www/step1_wsl.png")
 
     #Welcome window with info
     shinyjs::delay(500, {
@@ -95,7 +91,6 @@ step1_server <- function(id, i18n){
 
 
     #PREPARE DATA####
-    ch_basemap2 <- NULL
     # Cache country border — same file for every user, load only once per R session
     if (!exists(".vft_countryshape", envir = .GlobalEnv)) {
       .GlobalEnv$.vft_countryshape <- sf::st_read(dsn = vftData("maps/countryBorders/swissBorder_final.gpkg"), quiet = TRUE)
@@ -125,8 +120,6 @@ step1_server <- function(id, i18n){
     r1$shape <- NULL
     r1$finalShape <- NULL
 
-    r1$basemap <- NULL
-    r1$basemap_bw <-NULL
     r1$network <- NULL
 
     # RESET BUTTONS####
@@ -538,21 +531,13 @@ step1_server <- function(id, i18n){
         i18n()$set_translation_language("de")
         r$currentLang <- "de"
         vftDbg("DE")
-        output$bannerUI <- shiny::renderUI({
-          imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/step1_wsl.png"), list() )
-          #replace /" with ', to avoid problems
-          return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-        })
+        vftSetBanner(id, "www/step1_wsl.png")
 
         if(input[[paste0(leafletMapID, "_zoom")]] >= 13){
-          output$zoomText <- renderText({
-            paste0("")
-          })
+          shinyjs::html(id = "zoomText", html = paste0(""))
         }else{
           #below a zoom level, write warning
-          output$zoomText <- renderText({
-            paste0("<font color=\'#dd1717\' size='3'><b>",i18n()$t("Warnung: In diesem Maßstab können die Berechnungen sehr lange dauern."), "<br>", i18n()$t("Bitte zoomen Sie weiter hinein, bevor Sie einen Bereich auswählen."),  "</b></font>")
-          })
+          shinyjs::html(id = "zoomText", html = paste0("<font color=\'#dd1717\' size='3'><b>",i18n()$t("Warnung: In diesem Maßstab können die Berechnungen sehr lange dauern."), "<br>", i18n()$t("Bitte zoomen Sie weiter hinein, bevor Sie einen Bereich auswählen."),  "</b></font>"))
         }
       }else if(input$languageSelect_1 == "fr"){
         # i18n$set_translation_language('fr')
@@ -560,20 +545,12 @@ step1_server <- function(id, i18n){
         i18n()$set_translation_language("fr")
         r$currentLang <- "fr"
 
-        output$bannerUI <- shiny::renderUI({
-          imgMap <- imageMap(NS(id, "banner"), "www/step1_wsl_fr.png", list() )
-          #replace /" with ', to avoid problems
-          return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-        })
+        vftSetBanner(id, "www/step1_wsl_fr.png")
         if(input[[paste0(leafletMapID, "_zoom")]] >= 13){
-          output$zoomText <- renderText({
-            paste0("")
-          })
+          shinyjs::html(id = "zoomText", html = paste0(""))
         }else{
           #below a zoom level, write warning
-          output$zoomText <- renderText({
-            paste0("<font color=\'#dd1717\' size='3'><b>",i18n()$t("Warnung: In diesem Maßstab können die Berechnungen sehr lange dauern."), "<br>", i18n()$t("Bitte zoomen Sie weiter hinein, bevor Sie einen Bereich auswählen."),  "</b></font>")
-          })
+          shinyjs::html(id = "zoomText", html = paste0("<font color=\'#dd1717\' size='3'><b>",i18n()$t("Warnung: In diesem Maßstab können die Berechnungen sehr lange dauern."), "<br>", i18n()$t("Bitte zoomen Sie weiter hinein, bevor Sie einen Bereich auswählen."),  "</b></font>"))
         }
         vftDbg("FR")
       }else if(input$languageSelect_1 == "en"){
@@ -582,39 +559,23 @@ step1_server <- function(id, i18n){
         i18n()$set_translation_language("en")
         r$currentLang <- "en"
 
-        output$bannerUI <- shiny::renderUI({
-          imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/step1_wsl_en.png"), list() )
-          #replace /" with ', to avoid problems
-          return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-        })
+        vftSetBanner(id, "www/step1_wsl_en.png")
         if(input[[paste0(leafletMapID, "_zoom")]] >= 13){
-          output$zoomText <- renderText({
-            paste0("")
-          })
+          shinyjs::html(id = "zoomText", html = paste0(""))
         }else{
           #below a zoom level, write warning
-          output$zoomText <- renderText({
-            paste0("<font color=\'#dd1717\' size='3'><b>",i18n()$t("Warnung: In diesem Maßstab können die Berechnungen sehr lange dauern."), "<br>", i18n()$t("Bitte zoomen Sie weiter hinein, bevor Sie einen Bereich auswählen."),  "</b></font>")
-          })
+          shinyjs::html(id = "zoomText", html = paste0("<font color=\'#dd1717\' size='3'><b>",i18n()$t("Warnung: In diesem Maßstab können die Berechnungen sehr lange dauern."), "<br>", i18n()$t("Bitte zoomen Sie weiter hinein, bevor Sie einen Bereich auswählen."),  "</b></font>"))
         }
         vftDbg("EN")
       }else if(input$languageSelect_1 == "it"){
         # i18n$set_translation_language('it')
         shiny.i18n::update_lang("it")
-        output$bannerUI <- shiny::renderUI({
-          imgMap <- imageMap(NS(id, "banner"), i18n()$t("www/step1_wsl.png"), list() )
-          #replace /" with ', to avoid problems
-          return(shiny::tagList(shiny::HTML(gsub( "\"", "'",paste0(imgMap) ))  ) )
-        })
+        vftSetBanner(id, "www/step1_wsl.png")
         if(input[[paste0(leafletMapID, "_zoom")]] >= 13){
-          output$zoomText <- renderText({
-            paste0("")
-          })
+          shinyjs::html(id = "zoomText", html = paste0(""))
         }else{
           #below a zoom level, write warning
-          output$zoomText <- renderText({
-            paste0("<font color=\'#dd1717\' size='3'><b>",i18n()$t("Warnung: In diesem Maßstab können die Berechnungen sehr lange dauern."), "<br>", i18n()$t("Bitte zoomen Sie weiter hinein, bevor Sie einen Bereich auswählen."),  "</b></font>")
-          })
+          shinyjs::html(id = "zoomText", html = paste0("<font color=\'#dd1717\' size='3'><b>",i18n()$t("Warnung: In diesem Maßstab können die Berechnungen sehr lange dauern."), "<br>", i18n()$t("Bitte zoomen Sie weiter hinein, bevor Sie einen Bereich auswählen."),  "</b></font>"))
         }
         vftDbg("IT")
       }
@@ -660,14 +621,10 @@ step1_server <- function(id, i18n){
     zoomTextObs <- observeEvent(input[[paste0(leafletMapID, "_zoom")]],{
       #above a zoom level, no warning
       if(input[[paste0(leafletMapID, "_zoom")]] >= 13){
-        output$zoomText <- renderText({
-          paste0("")
-        })
+        shinyjs::html(id = "zoomText", html = paste0(""))
       }else{
         #below a zoom level, write warning
-          output$zoomText <- renderText({
-            paste0("<font color=\'#dd1717\' size='3'><b>",i18n()$t("Warnung: In diesem Maßstab können die Berechnungen sehr lange dauern."), "<br>", i18n()$t("Bitte zoomen Sie weiter hinein, bevor Sie einen Bereich auswählen."),  "</b></font>")
-          })
+          shinyjs::html(id = "zoomText", html = paste0("<font color=\'#dd1717\' size='3'><b>",i18n()$t("Warnung: In diesem Maßstab können die Berechnungen sehr lange dauern."), "<br>", i18n()$t("Bitte zoomen Sie weiter hinein, bevor Sie einen Bereich auswählen."),  "</b></font>"))
       }
     })
 
@@ -1120,8 +1077,6 @@ step1_server <- function(id, i18n){
       return(
         list(ffshape = shiny::reactive(r1$finalShape),
              confirm = shiny::reactive(r1$confirm),
-             basemap = shiny::reactive(r1$basemap),
-             basemap_bw = shiny::reactive(r1$basemap_bw),
              network = shiny::reactive(r1$pathNetwork),
              needHelp = shiny::reactive(r1$needHelp),
              DULN = shiny::reactive(r$DULN),
@@ -1219,8 +1174,6 @@ step1_server <- function(id, i18n){
         return(
           list(ffshape = shiny::reactive(r1$finalShape),
                confirm = shiny::reactive(r1$confirm),
-               basemap = shiny::reactive(r1$basemap),
-               basemap_bw = shiny::reactive(r1$basemap_bw),
                network = shiny::reactive(r1$pathNetwork),
                needHelp = shiny::reactive(r1$needHelp),
                DULN = shiny::reactive(r$DULN),
@@ -1234,7 +1187,8 @@ step1_server <- function(id, i18n){
 
 
       }else{
-        output$errorText <- shiny::renderText(i18n()$t("ERROR: cannot determine shapefile") )
+        shiny::showNotification(i18n()$t("ERROR: cannot determine shapefile"),
+                                type = "error", duration = 10)
       }
 
 
@@ -1319,8 +1273,6 @@ step1_server <- function(id, i18n){
         return(
           list(ffshape = shiny::reactive(r1$finalShape),
                confirm = shiny::reactive(r1$confirm),
-               basemap = shiny::reactive(r1$basemap),
-               basemap_bw = shiny::reactive(r1$basemap_bw),
                network = shiny::reactive(r1$pathNetwork),
                needHelp = shiny::reactive(r1$needHelp),
                DULN = shiny::reactive(r$DULN),
@@ -1333,7 +1285,8 @@ step1_server <- function(id, i18n){
         })%...!%(vftAsyncError(progress, "Path network", NULL))
 
       }else{
-        output$errorText <- shiny::renderText(i18n()$t("ERROR: cannot determine shapefile") )
+        shiny::showNotification(i18n()$t("ERROR: cannot determine shapefile"),
+                                type = "error", duration = 10)
       }
 
     })
@@ -1341,8 +1294,6 @@ step1_server <- function(id, i18n){
     return(list(
       ffshape = shiny::reactive(r1$finalShape),
       confirm = shiny::reactive(r1$confirm),
-      basemap = shiny::reactive(r1$basemap),
-      basemap_bw = shiny::reactive(r1$basemap_bw),
       network = shiny::reactive(r1$pathNetwork),
       needHelp = shiny::reactive(r1$needHelp),
       DULN = shiny::reactive(r$DULN),

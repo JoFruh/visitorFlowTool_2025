@@ -257,24 +257,6 @@ vft_tileCacheDir <- file.path(tempdir(), "vft_maptiles_cache")
 dir.create(vft_tileCacheDir, showWarnings = FALSE, recursive = TRUE)
 
 
-#GLOBAL FUNCTIONS
-imageMap <- function(inputId, imgsrc, opts, i18n) {
-  areas <- lapply(names(opts), function(n)
-    shiny::tags$area(title=n, coords=opts[[n]],
-                     href="#", shape="poly"))
-  js <- paste0("$(document).on('click', 'map area', function(evt) {
-  evt.preventDefault();
-  var val = evt.target.title;
-  Shiny.onInputChange('", inputId, "', val);})")
-  list(
-    shiny::tags$img(height = 70,src=imgsrc, usemap=paste0("#", inputId),
-                    shiny::tags$head(tags$script(shiny::HTML(js)))),
-    shiny::tags$map(name=inputId, areas))
-
-  #deactivate imagemap temporarily (until it is more stable)
-  #to activate history bar, remove below return function for the function to return list above.
-  return(shiny::tags$img(height = 70,src= imgsrc))
-}
 
 
 

@@ -8,6 +8,12 @@ app_ui <- function(){
   #build tabs
   shinyjs::useShinyjs(),
 
+  #Included once, at app level, for the whole session: it stops leaflet's
+  #per-hover input messages at the client. See inst/app/www/vft-shim.js for what
+  #it drops and why the list must stay at two suffixes. `www` is registered as a
+  #resource path in .onLoad (R/zzz.R).
+  shiny::tags$script(src = "www/vft-shim.js"),
+
   shinyjs::hidden( shiny::downloadButton("downloadSave") ),
   # shinyjs::hidden( shiny::downloadButton("downloadSaveRaster") ),
 

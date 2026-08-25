@@ -21,9 +21,8 @@ vftDbg("UI1")
                                ),
 
                 shiny::column(4,align = "center",
-                        shiny::uiOutput(NS(id,"bannerUI"))
+                        vftBannerImg(id, "www/step1_wsl.png")
                        # shiny::h1("Schritt 1")
-                       # imageMap(NS(id, "banner"), "www/step1_wsl.png") , list() )
 
 
                 ),
@@ -68,7 +67,10 @@ background: url('infoIcon.png');  background-size: cover; background-position: c
                 shiny::column(4, align = "center",
                          shiny::h4(i18n$t("Klicken Sie mehrmals auf die Karte, um einen Bereich direkt zu zeichnen!") ),
                          shiny::h5(shiny::HTML(paste0(i18n$t("(Verwenden Sie das"), shiny::strong(i18n$t("Mausrad")), i18n$t("zum"), shiny::strong(i18n$t("Zoomen")), ".)"))),
-                         shiny::htmlOutput(shiny::NS(id, "zoomText"))
+                         #written from ten places in step1_server via shinyjs::html().
+                         #A plain div, so it is not a registered output and never enters
+                         #the per-message manageHiddenOutputs() sweep.
+                         shiny::tags$div(id = shiny::NS(id, "zoomText"))
               ),
               shiny::column(1, align = "center",
                             shiny::h4(i18n$t("ODER") )
