@@ -144,7 +144,17 @@ app_server <- function(input, output, session){
       #Cached because SM_pres only changes in step 2 (and on resume), so this is
       #built once and reused by every later checkpoint rather than recomputed on
       #the main thread each time.
-      if(is.null(r$SM_pres_packed)){
+      #
+      #A checkpoint taken before step 2 has been confirmed has no sensitivity
+      #matrix, and that is a legitimate save file: the restore path below already
+      #tests `!is.null(envBase_SM_pres)` and skips it. The WRITE side did not, and
+      #terra::wrap(NULL) does not return NULL - it aborts ("unable to find an
+      #inherited method for 'wrap' for signature x = \"NULL\""), out of a download
+      #handler, so the browser gets an error page instead of the file. Reachable
+      #since the nav bar started offering step 3 straight after step 1: nothing
+      #between there and the step-4 checkpoint needs SM_pres, so nothing stops a
+      #user routing around step 2 and reaching this line with it unset.
+      if(is.null(r$SM_pres_packed) && !is.null(r$SM_pres)){
         r$SM_pres_packed <- terra::wrap(r$SM_pres)
       }
       envBase_SM_pres <- r$SM_pres_packed
@@ -481,9 +491,23 @@ app_server <- function(input, output, session){
     #use shape information to clip, prepare and present SDM information
     vftDbgCat(paste0("DULN ALL 2: ", r$DULN_all))
 
-    step3return <- vftTime("module:step3", step3_server("step3", shape = r$shape,
-                                i18n = shiny::reactive(i18n), currentLang = r$currentLang,
-                                needHelp = r$needHelp, DULN_all = r$DULN_all
+    #FIRST-TOUCH SINGLETON (Stage 5). Built on the first visit and reused
+    #afterwards; vftGoToStep() calls its enter() on every return. Everything in
+    #this block - the module AND the two observers on its handle - runs exactly
+    #once per session, which is why neither observer is `once = TRUE` any more:
+    #that flag was there to stop a REBUILT module's handlers stacking on the live
+    #ones, and with one instantiation there is nothing to stack. Leaving it on
+    #would now mean step 3 could be confirmed once and never left again.
+    #
+    #The four inputs are REACTIVES. A plain value here is frozen for the life of
+    #the session, and this module is no longer rebuilt to unfreeze it.
+    vftModuleOnce(session, "step3", function(){
+    step3return <- vftTime("module:step3", step3_server("step3",
+                                shape       = shiny::reactive(r$shape),
+                                i18n        = shiny::reactive(i18n),
+                                currentLang = shiny::reactive(r$currentLang),
+                                needHelp    = shiny::reactive(r$needHelp),
+                                DULN_all    = shiny::reactive(r$DULN_all)
                                 ))
 
 
@@ -536,7 +560,7 @@ app_server <- function(input, output, session){
         vftGoBack(r, step3return$confirm(), from = "step3",
                   bannerId = "step3-banner", session = session)
       }
-    }, ignoreInit = TRUE, once = TRUE)
+    }, ignoreInit = TRUE)
 
     shiny::observeEvent(step3return$skip(), {
       if(step3return$isSkip() > 0 ){
@@ -554,9 +578,10 @@ app_server <- function(input, output, session){
 
         vftGoToStep(r, "step4", session)
       }
-    }, ignoreInit = TRUE, once = TRUE)
+    }, ignoreInit = TRUE)
 
-
+    step3return
+    })
   })
 
 
@@ -570,9 +595,21 @@ app_server <- function(input, output, session){
     #its body (st_transform of the perimeter, to clip the lakes), so that call
     #could only ever have errored - the skip path was broken. Whether the user
     #skipped is already carried by `skip = r$isSkip`, so one call does both.
-    step4return <- vftTime("module:step4", step4_server("step4", network = r$network, minThresh = r$minThresh, skip = r$isSkip,
-                                DULN = r$DULN, DULN_all = r$DULN_all, needHelp = r$needHelp,
-                                i18n = shiny::reactive(i18n), currentLang = r$currentLang, shape = r$shape))
+    #FIRST-TOUCH SINGLETON (Stage 5). Built once, re-entered through its enter()
+    #closure. This is the module the duplicate-instance defect was observed in:
+    #two live step 4s answering one confirm click, the older one writing the
+    #network it had frozen before the area of interest changed.
+    vftModuleOnce(session, "step4", function(){
+    step4return <- vftTime("module:step4", step4_server("step4",
+                                network       = shiny::reactive(r$network),
+                                minThresh     = shiny::reactive(r$minThresh),
+                                skip          = shiny::reactive(r$isSkip),
+                                DULN          = shiny::reactive(r$DULN),
+                                DULN_all      = shiny::reactive(r$DULN_all),
+                                needHelp      = shiny::reactive(r$needHelp),
+                                i18n          = shiny::reactive(i18n),
+                                currentLang   = shiny::reactive(r$currentLang),
+                                shape         = shiny::reactive(r$shape)))
 
 
 
@@ -615,7 +652,10 @@ app_server <- function(input, output, session){
         vftGoBack(r, step4return$confirm(), from = "step4",
                   bannerId = "step4-banner", session = session)
       }
-    }, ignoreInit = TRUE, once = TRUE)
+    }, ignoreInit = TRUE)
+
+    step4return
+    })
   })
 
   #STEP 5

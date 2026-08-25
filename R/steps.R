@@ -86,6 +86,7 @@ VFT_KEY_SOURCE <- c(
   species       = "step2",
   minCutThresh  = "step2",
   minThresh     = "step3",
+  isSkip        = "step3",
   networkList   = "step4",
   finalPolygons = "step4",
   versionsUI    = "step5"
@@ -113,7 +114,14 @@ VFT_KEY_SOURCE <- c(
 VFT_KEY_READY <- list(
   networkNodes = function(r){
     if(is.null(r$network)) return(FALSE)
-    all(c("Residents", "DULN_WALK_") %in% igraph::vertex_attr_names(r$network))
+    #tryCatch because this runs inside the nav bar's observe, on every change to
+    #`r`. igraph::vertex_attr_names() aborts outright on anything that is not a
+    #graph, and an abort there does not fail the TEST - it kills the observe and
+    #takes the whole session's navigation with it. A save file carrying something
+    #unexpected under envBase_network should mean "not ready", not "no nav bar".
+    isTRUE(tryCatch(
+      all(c("Residents", "DULN_WALK_") %in% igraph::vertex_attr_names(r$network)),
+      error = function(e) FALSE))
   },
   minThresh = function(r){
     if(!is.null(r$minThresh)) return(TRUE)
@@ -156,27 +164,34 @@ vftNavAllows <- function(step){
   step %in% vftNavSteps()
 }
 
-#' Which steps may be RE-entered, as opposed to entered once.
+#' Which steps have been CONVERTED to first-touch singletons.
 #'
-#' Empty until Stage 5 converts the modules. Entering a step calls its module
-#' server, and today that BUILDS ANOTHER ONE: the previous instance keeps its
-#' observers, its outputs and the plain values it captured at construction. Two
-#' instances of step 4 both answer the same confirm button, and the older one
-#' writes the network it froze before the user changed anything back into `r$` -
-#' observed as two "Original" scenarios in step 5, one simulated against the
-#' superseded area of interest.
+#' One name, three consequences, which is what makes the conversion safe to do
+#' one module at a time:
 #'
-#' So the nav bar is a forward instrument for now: it gates steps whose inputs do
-#' not exist and it skips ahead, but it will not return you to a step this
-#' session has already built. That is the plan's own sequencing - "keep VFT_NAV
-#' gating each step until its module is converted" - and this is the list that
-#' does the keeping. Add a step here when its module becomes a first-touch
-#' singleton with an enter() closure, and its button starts working both ways.
+#'   1. `vftModuleOnce()` (R/modules.R) reuses the module built on the first
+#'      visit instead of constructing another one beside it;
+#'   2. `vftGoToStep()` calls that module's `enter()` closure on every return;
+#'   3. the nav bar offers the step and vftGoToStep(check = TRUE) allows it.
 #'
-#' Note this restricts the NAV BAR only. The app's own transitions
-#' (`vftGoToStep(check = FALSE)`) are untouched, which is what lets step 5 and
-#' newVersions keep bouncing between each other.
-VFT_REENTRANT_STEPS <- character(0)
+#' A step NOT listed here keeps the old behaviour exactly: its module server is
+#' called again on every visit, so the nav bar refuses to send the user back to
+#' it. That is not a restriction for its own sake - re-entering an unconverted
+#' step builds a SECOND module beside the live one, and both then answer the same
+#' confirm button. The older instance holds the plain values it captured at
+#' construction, so it writes the network it froze BEFORE the user changed the
+#' area of interest back into `r$`: observed live as two "Original" scenarios in
+#' step 5, one simulated against an area that was no longer on screen.
+#'
+#' Conversion order is smallest first - step3, step4, step2, step5, newVersions,
+#' lastStep, step1 - so the mechanism is proved on 400 lines before it is applied
+#' to 3900.
+#'
+#' Note this restricts the NAV BAR and the module cache only. The app's own
+#' transitions (`vftGoToStep(check = FALSE)`) still reach any step, which is what
+#' lets step 5 and newVersions keep bouncing between each other while neither is
+#' converted.
+VFT_REENTRANT_STEPS <- c("step3", "step4")
 
 #' May the nav bar return to this step after it has been built once?
 vftStepReentrant <- function(step){

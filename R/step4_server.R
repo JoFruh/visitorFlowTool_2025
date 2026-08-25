@@ -5,8 +5,35 @@
 # source("polygonEraser.R", local = TRUE)
 
 # Define server logic
-step4_server <- function(id, network, minThresh, i18n, currentLang, skip = FALSE,
-                         needHelp = NULL, finalPolygons = NULL, DULN = NULL, DULN_all = NULL, shape = NULL){
+#' CONVERTED TO A FIRST-TOUCH SINGLETON (Stage 5, second module).
+#'
+#' Every argument except `id` and `i18n` is now a REACTIVE, and none of them is
+#' read directly by the body. enter() snapshots them into locals of the same
+#' names, so the ~1300 lines below are unchanged and still see plain values -
+#' which is what they want: a visit works against a fixed network and a fixed
+#' perimeter, and it is only BETWEEN visits that those may change.
+#'
+#' That distinction is the whole bug this conversion fixes. The module used to be
+#' rebuilt per visit, so the snapshot was taken by the constructor - and the
+#' PREVIOUS instance stayed alive holding its own, older snapshot, with its own
+#' live confirm observer. Both answered the same click; the older one wrote the
+#' network it had frozen before the user changed the area of interest back into
+#' r$, which is where step 5's two "Original" scenarios came from.
+#'
+#' The map-interaction observers were already per-visit - plotMap() creates them
+#' and the confirm handler destroys them. Two of them (banner, confirm) lived in
+#' plotMap()'s own frame and so were unreachable from outside it, which was fine
+#' while every visit got a fresh frame and is a leak now. They are on `r`
+#' alongside the other three, and enter() clears all five before plotMap() makes
+#' new ones - the user can leave this step by the nav bar without confirming, and
+#' then nothing would have destroyed them.
+step4_server <- function(id, network, minThresh, i18n, currentLang,
+                         skip = shiny::reactive(FALSE),
+                         needHelp = shiny::reactive(NULL),
+                         finalPolygons = shiny::reactive(NULL),
+                         DULN = shiny::reactive(NULL),
+                         DULN_all = shiny::reactive(NULL),
+                         shape = shiny::reactive(NULL)){
 
   #count this instantiation. A module server should be created once per
   #session; this app re-calls it from an observeEvent on a trigger, so any
@@ -16,47 +43,33 @@ step4_server <- function(id, network, minThresh, i18n, currentLang, skip = FALSE
   #prepare LETTERS that go beyond 26 (X, Y, Z, AA, AB etc..)
   LETTERS702 <- c(LETTERS, sapply(LETTERS, function(x) paste0(x, LETTERS)))
   #shape is the submitted shapefile, or shape produced by submitted coordinates
+  #The reactives, held under different names so that the locals below can shadow
+  #them. Everything after this point reads plain values.
+  .rx <- list(network = network, minThresh = minThresh, currentLang = currentLang,
+              skip = skip, needHelp = needHelp, finalPolygons = finalPolygons,
+              DULN = DULN, DULN_all = DULN_all, shape = shape)
+
   shiny::moduleServer(id, function(input, output, session) {
 
-    #render banner image from start
-    if(currentLang == "de"){
-      vftSetBanner(id, "www/step4_wsl.png")
-    }else if(currentLang == "fr"){
-      vftSetBanner(id, "www/step4_wsl_fr.png")
-    }
+    #per-visit snapshots. enter() refills these; the body and every closure in it
+    #resolve them lexically from here, so nothing else in this file changes.
+    network       <- NULL
+    minThresh     <- NULL
+    currentLang   <- NULL
+    skip          <- FALSE
+    needHelp      <- NULL
+    finalPolygons <- NULL
+    DULN          <- NULL
+    DULN_all      <- NULL
+    shape         <- NULL
 
     r <- shiny::reactiveValues()
-    r$DULN <- DULN
-    r$DULN_all <- DULN_all
-    r$needHelp <- needHelp
-    r$startingPolygons <- NULL
 
-    r$cutMarkerExists <- FALSE
-    r$shapeWasClicked <- FALSE
-
-    r$needHelp <- needHelp
-    r$currentLang <- currentLang
-
-    shiny.i18n::update_lang(r$currentLang)
-    shiny::updateSelectInput(inputId = "languageSelect_4", selected = currentLang)
-
-
-    #get lakes and add NAs in place of lakes
-    #before extracting values, remove lakes (make them NA)
-    wkt <- sf::st_as_text( sf::st_as_sfc(sf::st_transform(shape, "epsg:2056") ) )
-
-    lakes <- sf::st_read( vftData("maps/lakes.gdb"),
-                          query = 'SELECT * FROM "lakes"',
-                          wkt_filter = wkt)
-    lakes <- sf::st_transform(lakes[lakes$SHAPE_Area > 10000, ], "epsg:4326")
-
-    #remove lakes from DULN raster (save seperately)
-    r$DULN_na <- r$DULN$walkNat
-    r$DULN_na[terra::vect(lakes)] <- NA
-    #keep name
-    names(r$DULN_na) <- "walkNat"
-
-    r$promiseFinished <- NULL
+    #what the lakes cutout was last computed for. sf::st_read() of the lakes GDB
+    #is main-thread I/O, so it runs when the perimeter CHANGES, not once per
+    #visit - coming back to adjust a polygon must not re-read it.
+    cache <- new.env(parent = emptyenv())
+    cache$shape <- NULL
 
     # if(r$needHelp == TRUE){
     #
@@ -96,13 +109,9 @@ step4_server <- function(id, network, minThresh, i18n, currentLang, skip = FALSE
     # polygonsList <- new.env(parent = emptyenv())
 
 
-    r$finalPolygons <- finalPolygons
-    r$confirm <- NULL
-    # finalPolygons <<- NULL
-
-
-    r$newNetwork <- NULL
-    # finalPolygons2 <- NULL
+    # (r$finalPolygons, r$confirm and r$newNetwork are seeded by enter(), at the
+    #  bottom of this function, so that a return to this step starts from the
+    #  same state a first arrival does.)
 
     plotMap <- function(){
 
@@ -789,7 +798,7 @@ step4_server <- function(id, network, minThresh, i18n, currentLang, skip = FALSE
       }, ignoreInit = TRUE)
 
       #observe banner click (choosing to step back in history)
-      obsBanner <- observeEvent(input$banner,  {
+      r$obsBanner <- observeEvent(input$banner,  {
 
         shinyjs::disable(id = "banner")
 
@@ -799,11 +808,11 @@ step4_server <- function(id, network, minThresh, i18n, currentLang, skip = FALSE
 
 
 
-        obsConfirm$destroy()
+        r$obsConfirm$destroy()
         r$obsMapClick$destroy()
         r$obsMarkerClick$destroy()
         r$obsErase$destroy()
-        obsBanner$destroy()
+        r$obsBanner$destroy()
 
         r$finalPolygons <- NULL
 
@@ -817,7 +826,7 @@ step4_server <- function(id, network, minThresh, i18n, currentLang, skip = FALSE
       }, ignoreInit = TRUE)
 
 
-      obsConfirm <- shiny::observeEvent(input$confirmButton4, {
+      r$obsConfirm <- shiny::observeEvent(input$confirmButton4, {
         #disable buttons temporarily
         shinyjs::disable("confirmButton4")
         shinyjs::disable("resetButton")
@@ -1104,11 +1113,11 @@ step4_server <- function(id, network, minThresh, i18n, currentLang, skip = FALSE
           r$confirm <- input$confirmButton4
 
           #cleanup
-          obsConfirm$destroy()
+          r$obsConfirm$destroy()
           r$obsMapClick$destroy()
           r$obsMarkerClick$destroy()
           r$obsErase$destroy()
-          obsBanner$destroy()
+          r$obsBanner$destroy()
 
           #transfer network and parking back to local variables
           r$newNetwork <- newNetworkParkingFinalP$newNetworkParking$newNetwork
@@ -1201,9 +1210,101 @@ step4_server <- function(id, network, minThresh, i18n, currentLang, skip = FALSE
     outputOptions(output, "downloadAOI", suspendWhenHidden = FALSE)
 
 
+    #### enter(): everything that happens per VISIT rather than per session ####
+    #
+    # Called by vftGoToStep() on every return to this step, and once at the very
+    # bottom of this function so that construction and re-entry run the same code
+    # rather than two copies of it.
+    #
+    # vftModuleEnterFn() supplies what this body cannot state for itself: the
+    # module's session as the default reactive domain - without it the
+    # shinyjs::enable() calls in part 4 and the updateSelectInput() in part 3 send
+    # unnamespaced ids and do nothing at all - and isolate() around everything,
+    # because the provider observe() this is called from is not isolated and a
+    # bare .rx$network() read would make it re-enter step 4 forever. R/modules.R.
+    enter <- vftModuleEnterFn(session, function(){
+
+      #--- 1. refresh the snapshots the rest of this module reads
+      network       <<- .rx$network()
+      minThresh     <<- .rx$minThresh()
+      currentLang   <<- .rx$currentLang()
+      skip          <<- isTRUE(as.logical(.rx$skip()))
+      needHelp      <<- .rx$needHelp()
+      finalPolygons <<- .rx$finalPolygons()
+      DULN          <<- .rx$DULN()
+      DULN_all      <<- .rx$DULN_all()
+      shape         <<- .rx$shape()
+
+      #--- 2. tear down the previous visit's map interaction observers.
+      #The confirm and banner handlers destroy these on the way out, but leaving
+      #by the nav bar does not go through either of them - and plotMap() below is
+      #about to create a fresh set. Without this, a second visit would leave two
+      #marker-click handlers live and a single click would draw two polygons.
+      for(o in list(r$obsConfirm, r$obsBanner, r$obsMapClick,
+                    r$obsMarkerClick, r$obsErase)){
+        if(!is.null(o)) try(o$destroy(), silent = TRUE)
+      }
+      r$obsConfirm <- NULL; r$obsBanner <- NULL; r$obsMapClick <- NULL
+      r$obsMarkerClick <- NULL; r$obsErase <- NULL
+
+      #--- 3. banner and language
+      if(identical(currentLang, "de")){
+        vftSetBanner(id, "www/step4_wsl.png")
+      }else if(identical(currentLang, "fr")){
+        vftSetBanner(id, "www/step4_wsl_fr.png")
+      }
+      shiny.i18n::update_lang(currentLang)
+      shiny::updateSelectInput(inputId = "languageSelect_4", selected = currentLang)
+
+      #--- 4. this visit's state
+      r$DULN             <- DULN
+      r$DULN_all         <- DULN_all
+      r$needHelp         <- needHelp
+      r$currentLang      <- currentLang
+      r$startingPolygons <- NULL
+      r$cutMarkerExists  <- FALSE
+      r$shapeWasClicked  <- FALSE
+      r$promiseFinished  <- NULL
+      r$finalPolygons    <- finalPolygons
+      r$confirm          <- NULL
+      r$newNetwork       <- NULL
+
+      #the buttons the confirm handler disabled on the way out
+      shinyjs::enable("confirmButton4")
+      shinyjs::enable("resetButton")
+      shinyjs::enable(id = "banner")
+
+      #--- 5. the lakes cutout, only when the perimeter actually changed
+      if(!is.null(shape) && !is.null(DULN) && !identical(cache$shape, shape)){
+        #get lakes and add NAs in place of lakes
+        #before extracting values, remove lakes (make them NA)
+        wkt <- sf::st_as_text( sf::st_as_sfc(sf::st_transform(shape, "epsg:2056") ) )
+
+        lakes <- sf::st_read( vftData("maps/lakes.gdb"),
+                              query = 'SELECT * FROM "lakes"',
+                              wkt_filter = wkt)
+        lakes <- sf::st_transform(lakes[lakes$SHAPE_Area > 10000, ], "epsg:4326")
+
+        #remove lakes from DULN raster (save seperately)
+        DULN_na <- DULN$walkNat
+        DULN_na[terra::vect(lakes)] <- NA
+        #keep name
+        names(DULN_na) <- "walkNat"
+
+        cache$shape <- shape
+        cache$DULN_na <- DULN_na
+      }
+      r$DULN_na <- cache$DULN_na
+
+      #--- 6. draw the map, generating the areas of interest first if needed
+      .vftStep4Launch()
+      invisible(NULL)
+    })
+
     #generate observer that launches immediately at start
     #if saved polygons exist, do not generate new ones
-    if(is.null(r$finalPolygons ) ){
+    .vftStep4Launch <- function(){
+    if(is.null(shiny::isolate(r$finalPolygons)) ){
       if(skip == FALSE){
 
         #naturalAreas was always NULL - step 3 set it to NULL and never
@@ -1286,20 +1387,20 @@ step4_server <- function(id, network, minThresh, i18n, currentLang, skip = FALSE
       }
 
     }else{
-      r$startingPolygons <- r$finalPolygons
+      r$startingPolygons <- shiny::isolate(r$finalPolygons)
       plotMap()
       vftDbg("promise finished")
 
     }
+    invisible(NULL)
+    }
 
+    enter()
 
-
-
-    # finalPolygons2 <<- startingPolygons
-    r$confirm <- input$confirmButton4
     return(list(finalPolygons = shiny::reactive({r$finalPolygons}), network = shiny::reactive(r$newNetwork), confirm = shiny::reactive({r$confirm}), needHelp = shiny::reactive(r$needHelp),
                 parking = shiny::reactive(r$parking),
-                currentLang = shiny::reactive(i18n()$get_translation_language())) )
+                currentLang = shiny::reactive(i18n()$get_translation_language()),
+                enter = enter) )
 
   })
 }

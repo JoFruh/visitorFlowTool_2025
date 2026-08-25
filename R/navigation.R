@@ -212,10 +212,20 @@ vftGoToStep <- function(r, step, session = shiny::getDefaultReactiveDomain(),
   vftDbg(paste0("NAV -> ", step))
   shiny::updateTabsetPanel(session = session, inputId = "tabs", selected = spec$tab)
 
-  #bumping the counter is what makes the step's own observer run and build (or
-  #rebuild) its module server.
+  #bumping the counter is what makes the step's own observer run and build (or,
+  #for a step not yet converted to a singleton, rebuild) its module server.
   counter <- session$userData$vftNav[[step]]
   counter(shiny::isolate(counter()) + 1L)
+
+  #A converted module is built once and reused, so everything that has to happen
+  #per VISIT rather than per session - the banner, the language, re-enabling the
+  #confirm buttons, re-rendering against inputs that may have changed - lives in
+  #its enter() closure and is run here.
+  #
+  #Nothing happens on the first visit: the counter write above is deferred to the
+  #flush, so the module does not exist yet, and construction does this same work
+  #inline. See R/modules.R.
+  vftModuleEnter(session, step)
 
   invisible(step)
 }
@@ -235,6 +245,13 @@ vftBackTarget <- function(confirm, from){
 }
 
 #' Handle a step's `confirm` when it holds a banner letter.
+#' BEING RETIRED - the nav bar replaces it. Decided 2026-08-25, so do not tidy
+#' this: `check = FALSE` below means a banner letter bypasses the re-entry block
+#' the nav bar enforces, and clicking "A" or "B" rebuilds step 1 or step 2 (both
+#' still unconverted) and, for "A", invalidates the sensitivity matrix along with
+#' everything else derived from the perimeter. Gating it would be the wrong
+#' investment: it is going away.
+#'
 #'
 #' Returns TRUE if it did navigate, so a caller can tell "went back" from
 #' "not a letter". Clears the banner input first, for the reason in

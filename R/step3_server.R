@@ -1,7 +1,26 @@
 
 # Define server logic
+#
+# CONVERTED TO A FIRST-TOUCH SINGLETON (Stage 5, first module). Two things follow
+# from that and they are the whole shape of this file:
+#
+#   * `shape`, `currentLang`, `needHelp` and `DULN_all` are REACTIVES, not plain
+#     values. A value captured at construction is frozen for the life of the
+#     session, and this module is now built once - so a perimeter frozen on the
+#     first visit would still be the one being drawn on after the user went back
+#     and changed it.
+#   * everything that has to happen per VISIT rather than per session is in the
+#     enter() closure at the bottom, which vftGoToStep() calls on every return.
+#     The body calls it once itself, so construction and re-entry do the same
+#     work by the same code rather than by two copies of it.
+#
+# The observers no longer destroy themselves. They did that so a REBUILT module's
+# handlers would not stack on top of the live ones; there is one instantiation
+# now, and self-destruction would mean the step could be confirmed exactly once
+# per session and then never left again.
 step3_server <- function(id, shape, i18n, currentLang,
-                         needHelp = FALSE, DULN_all = NULL){
+                         needHelp = shiny::reactive(FALSE),
+                         DULN_all = shiny::reactive(NULL)){
 
   #count this instantiation. A module server should be created once per
   #session; this app re-calls it from an observeEvent on a trigger, so any
@@ -12,29 +31,9 @@ step3_server <- function(id, shape, i18n, currentLang,
   #shape is the submitted shapefile, or shape produced by submitted coordinates
   shiny::moduleServer(id, function(input, output, session) {
 
-    #render banner image from start
-    if(currentLang == "de"){
-      vftSetBanner(id, "www/step3_wsl.png")
-    }else if(currentLang == "fr"){
-      vftSetBanner(id, "www/step3_wsl_fr.png")
-    }else if(currentLang == "en"){
-      vftSetBanner(id, "www/step3_wsl_en.png")
-    }
-
     r <- shiny::reactiveValues()
-    r$needHelp <- needHelp
-
-    #handle language bar
-
-    r$needHelp <- needHelp
 
     vftDbgCat("TRUE_STEP_4_STARTED")
-
-    r$currentLang <- currentLang
-
-    shiny.i18n::update_lang(r$currentLang)
-    shiny::updateSelectInput(inputId = "languageSelect_3", selected = currentLang)
-
 
 
 #
@@ -69,29 +68,15 @@ step3_server <- function(id, shape, i18n, currentLang,
 #       } )
 #     }
 
-    #re-enable buttons (if disabled)
-    shinyjs::enable("confirmButton3")
-    shinyjs::enable("skipButton")
-
-    #Prepare polygon Data
-    AOI <- NULL
-
-    #remove saved polygons if present
-
-    if(!is.null(r$finalPolygons)){
-      r$finalPolygons <- NULL
-    }
-
-    r$x <- NULL
-    r$confirm <- NULL
-
-    r$isSkip <- 0
-
     plotUpdate <- reactiveVal(1)
 
-    basemap <- maptiles::get_tiles(shape, provider = "OpenStreetMap", cachedir = vft_tileCacheDir)
-    shape <- sf::st_transform(shape, 3857)
-    shape_wgs <- sf::st_transform(shape, 4326)
+    #What the basemap was last fetched for. maptiles::get_tiles() is a main-thread
+    #download-and-mosaic, so it must run when the perimeter CHANGES and not once
+    #per visit - a user going back to step 3 to nudge the slider would otherwise
+    #pay for a tile fetch to look at the same picture. Held outside `r` because
+    #nothing should take a reactive dependency on "which shape did we cache".
+    cache <- new.env(parent = emptyenv())
+    cache$shape <- NULL
 
     # r$DULN <- terra::rast(vftData("maps/attr/allAttrs_COG_final.tif") )
     # r$DULN <- terra::crop(r$DULN, shape_wgs)
@@ -103,13 +88,6 @@ step3_server <- function(id, shape, i18n, currentLang,
     # #Blur it to make it a smoother selection
     # r$DULN_all <- terra::focal(r$DULN_all, w=matrix(1, 5, 5), mean)
     # DULN <- terra::project(DULN, "epsg:4326")
-    basemap <- terra::project(basemap, "epsg:4326")
-
-    # Pre-crop the basemap once (vectExt is constant for this session)
-    vectShape_init <- terra::vect(shape_wgs)
-    vectExt_init   <- as.vector(terra::ext(terra::buffer(vectShape_init, 100)))
-    basemap_cropped <- terra::crop(basemap, vectExt_init)
-
     # Debounce the slider so renderPlot only fires 400ms after the user stops dragging
     debouncedSlider <- shiny::debounce(shiny::reactive(input$AOISlider), 400)
 
@@ -120,18 +98,22 @@ step3_server <- function(id, shape, i18n, currentLang,
 
       plotUpdate()
 
+        #the basemap and the perimeter come out of enter() now, through `r`, so
+        #this re-renders by itself when the user goes back and changes the area
+        shiny::req(r$basemapCropped, r$shapeWgs)
+        attr <- DULN_all()
+        shiny::req(attr)
+
         r$x <- as.numeric(debouncedSlider())
         AOIBreaks <- c(145, r$x, 0) #TODO: 11 for now, get maxVal automatically later
 
-        vectShape <- terra::vect(shape_wgs)
-        vectExt <- as.vector(terra::ext(terra::buffer(vectShape, 100)))
-        vftDbgCat(paste0("basemap: ", basemap_cropped, "\n") )
-        vftDbgCat(paste0("vectExt: ", vectExt_init, "\n") )
+        vectShape <- terra::vect(r$shapeWgs)
+        vftDbgCat(paste0("basemap: ", r$basemapCropped, "\n") )
 
-        terra::plotRGB(basemap_cropped, reset = FALSE)
+        terra::plotRGB(r$basemapCropped, reset = FALSE)
         # cat(file = stderr(), "PLOT1")
 
-        terra::plot(DULN_all, alpha = 0.3, col = c("white", "red3"),
+        terra::plot(attr, alpha = 0.3, col = c("white", "red3"),
                     legend = FALSE, breaks = AOIBreaks,  range = c(0,100), add = TRUE)
         terra::lines(vectShape, col = "black", lwd = 5)
         # cat(file = stderr(), "PLOT2")
@@ -249,26 +231,30 @@ step3_server <- function(id, shape, i18n, currentLang,
 
     }, ignoreInit = TRUE)
 
-    #observe banner click (choosing to step back in history)
+    #NOTE ON THE MISSING $destroy() CALLS AND THE MISSING return()s.
+    #
+    #Each of these three observers used to destroy itself and its siblings, and
+    #then return a handle. Neither did what it looks like: the return value of an
+    #observeEvent HANDLER goes nowhere - the module's handle is the one built at
+    #the bottom of this function - and the self-destruction existed only because
+    #a re-entered step used to build a SECOND set of these observers on top of
+    #the live ones. There is one set now, for the life of the session, so
+    #destroying it would mean step 3 could be confirmed once and then never left
+    #again. The guard against a double confirm is the disable() below, which
+    #enter() undoes on the way back in.
     obsBanner <- observeEvent(input$banner,  {
       vftDbg("MAPPED IMAGE CLICKED")
       #determine where to go back in history
       r$confirm <- input$banner
-
-      #cleanup
-      obsBanner$destroy()
-      obsConfirm$destroy()
-      obsSkip$destroy()
-
-
-      return(list(minThresh = shiny::reactive(r$x), confirm = shiny::reactive({r$confirm}), skip = shiny::reactive({input$skipButton}), isSkip = shiny::reactive({r$isSkip}),
-                  needHelp = shiny::reactive(r$needHelp),
-                  currentLang = shiny::reactive(i18n()$get_translation_language())) )
-
-      #trigger return to past (return with specific confirm value?)
     }, ignoreInit = TRUE)
 
     obsConfirm <- shiny::observeEvent(input$confirmButton3, {
+      #app_server flushes this input back to 0 on the way out (a runjs()
+      #onInputChange), and that write is itself a change, so this observer fires
+      #a second time with 0. It used to be invisible because the observer had
+      #already destroyed itself by then.
+      if(is.null(input$confirmButton3) || input$confirmButton3 == 0)
+        return(invisible(NULL))
 
       #disable buttons temporarily
       shinyjs::disable("confirmButton3")
@@ -276,12 +262,6 @@ step3_server <- function(id, shape, i18n, currentLang,
 
       r$confirm <- input$confirmButton3
 
-      obsConfirm$destroy()
-      obsSkip$destroy()
-      #flush input value as well as destroying button
-      # shinyjs::runjs("Shiny.setInputValue('confirmButton3', 0)")
-      shinyjs::reset("step3-confirmButton3")
-      # shinyjs::enable("confirmButton3")
 
       # if(input$naturalAreasCheck == FALSE){
       #   r$naturalAreas <- NULL
@@ -289,28 +269,23 @@ step3_server <- function(id, shape, i18n, currentLang,
 
       #if the threshold is above max value of DULN_all
       #(There is no AoI)
-      if(r$x > terra::minmax(DULN_all)[2]){
+      attr <- DULN_all()
+      if(!is.null(attr) && !is.null(r$x) && r$x > terra::minmax(attr)[2]){
         #return imitating the skip button being pressed (skip = 1)
         r$isSkip <- 1
       }
-
-      return(list(minThresh = shiny::reactive(r$x), confirm = shiny::reactive({r$confirm }), skip = shiny::reactive({input$skipButton}), isSkip = shiny::reactive({r$isSkip}),
-                  needHelp = shiny::reactive(r$needHelp),
-                  currentLang = shiny::reactive(i18n()$get_translation_language())) )
-
     }, ignoreInit = TRUE)
 
     obsSkip <- shiny::observeEvent(input$skipButton, {
+      if(is.null(input$skipButton) || input$skipButton == 0)
+        return(invisible(NULL))
+
       shinyjs::disable("confirmButton3")
       shinyjs::disable("skipButton")
 
       r$confirm <- input$confirmButton3
 
       r$isSkip <- 1
-
-      return(list(minThresh = shiny::reactive(r$x), confirm = shiny::reactive({r$confirm }), skip = shiny::reactive({input$skipButton}), isSkip = shiny::reactive({r$isSkip}),
-                  needHelp = shiny::reactive(r$needHelp)) )
-
     }, ignoreInit = TRUE)
 
     # #change DULN raster used, based on checkbox for natural areas
@@ -392,9 +367,80 @@ step3_server <- function(id, shape, i18n, currentLang,
     #   }
     # }, ignoreInit = TRUE)
 
-    r$confirm <- input$confirmButton3
+    #### enter(): everything that happens per VISIT rather than per session ####
+    #
+    # Called by vftGoToStep() on every return to this step, and once here at the
+    # end of construction so the first visit and the fifth run the same code.
+    #
+    # This is the refactor the whole singleton depends on. Before it, "what has to
+    # be true when the user arrives" was simply the module body, so the only way
+    # to arrive was to run the body again - which is what built a second set of
+    # observers every time.
+    # vftModuleEnterFn() supplies the two properties this body must have and
+    # neither of which is visible in it: the module's own session as the default
+    # reactive domain (or every shinyjs:: and update*Input() call below silently
+    # addresses an unnamespaced control that does not exist), and isolate() around
+    # the whole body (or the observers enter() is called from - including the
+    # provider observe(), which is not isolated - take a dependency on values
+    # enter() itself assigns). See R/modules.R.
+    enter <- vftModuleEnterFn(session, function(){
+      lang <- currentLang()
+      if(is.null(lang)) lang <- "de"
+
+      #banner
+      if(lang == "de"){
+        vftSetBanner(id, "www/step3_wsl.png")
+      }else if(lang == "fr"){
+        vftSetBanner(id, "www/step3_wsl_fr.png")
+      }else if(lang == "en"){
+        vftSetBanner(id, "www/step3_wsl_en.png")
+      }
+
+      #language bar
+      shiny.i18n::update_lang(lang)
+      shiny::updateSelectInput(inputId = "languageSelect_3", selected = lang)
+      r$currentLang <- lang
+      r$needHelp    <- needHelp()
+
+      #the buttons obsConfirm/obsSkip disabled on the way out
+      shinyjs::enable("confirmButton3")
+      shinyjs::enable("skipButton")
+
+      #this step's own answer, discarded so a return starts from a clean slate
+      #rather than from the threshold that is about to be replaced
+      r$x       <- NULL
+      r$confirm <- NULL
+      r$isSkip  <- 0
+
+      #The perimeter, and the basemap under it. Re-fetched only when the shape
+      #has actually changed: get_tiles() is a main-thread download, and coming
+      #back to move the slider must not pay for it. terra objects do not survive
+      #identical() reliably, but an sf perimeter does - and it is the same R
+      #object unless step 1 was re-confirmed.
+      shp <- shape()
+      if(!is.null(shp) && !identical(cache$shape, shp)){
+        basemap  <- maptiles::get_tiles(shp, provider = "OpenStreetMap",
+                                        cachedir = vft_tileCacheDir)
+        basemap  <- terra::project(basemap, "epsg:4326")
+
+        shapeWgs <- sf::st_transform(sf::st_transform(shp, 3857), 4326)
+        vectExt  <- as.vector(terra::ext(terra::buffer(terra::vect(shapeWgs), 100)))
+
+        cache$shape      <- shp
+        r$shapeWgs       <- shapeWgs
+        r$basemapCropped <- terra::crop(basemap, vectExt)
+      }
+
+      #the slider may not have moved, so nudge the plot explicitly
+      plotUpdate(plotUpdate() + 1L)
+      invisible(NULL)
+    })
+
+    enter()
+
     return(list(minThresh = shiny::reactive(r$x), confirm = shiny::reactive({r$confirm }), skip = shiny::reactive({input$skipButton}), isSkip = shiny::reactive({r$isSkip}),
                 needHelp = shiny::reactive(r$needHelp),
-                currentLang = shiny::reactive(i18n()$get_translation_language())) )
+                currentLang = shiny::reactive(i18n()$get_translation_language()),
+                enter = enter) )
   })
 }

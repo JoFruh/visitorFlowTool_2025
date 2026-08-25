@@ -373,6 +373,127 @@ Four things the singleton breaks, and the fix for each:
 1→5→1→5→newVersions→5 must leave **every module at exactly 1**. That is the acceptance test and
 it needs no new instrumentation.
 
+### As built (2026-08-25) — mechanism complete, 2 of 7 modules converted
+
+**The mechanism is `R/modules.R`** and it is done: `vftModuleOnce()`, `vftModuleHandle()`,
+`vftModuleEnter()`, plus one call in `vftGoToStep()` right after the visit counter is bumped.
+
+**`VFT_REENTRANT_STEPS` is the single switch** and now means three things at once — the module is
+reused rather than rebuilt, `vftGoToStep()` calls its `enter()`, and the nav bar offers it. Adding
+a name to that vector *is* the act of converting a module. A step not listed keeps the old
+rebuild-per-visit behaviour byte for byte, which is what makes the remaining conversions
+independent of each other.
+
+| module | lines | state |
+|---|---|---|
+| step3 | 400 | **converted** — inputs are reactives, `enter()` re-runs banner/language/buttons/state and re-fetches the basemap only when the perimeter changed |
+| step4 | 1305 | **converted** — `enter()` snapshots the reactives into locals of the same names, so the body is untouched; also destroys the previous visit's five map-interaction observers |
+| step2 | 2173 | not yet |
+| step5 | 2262 | not yet |
+| newVersions | 3904 | not yet |
+| lastStep | 441 | not yet |
+| step1 | 1217 | not yet |
+
+**Four things learned converting the first two:**
+
+0. **`enter()` must run with the MODULE's session as the default reactive domain.** Found in the
+   live app: returning to step 3 left "Bestätigen" disabled. `enter()` ran and
+   `shinyjs::enable("confirmButton3")` ran, but shinyjs and `update*Input()` namespace against
+   `getDefaultReactiveDomain()` — not the session in lexical scope — and shinyjs prefixes an id
+   only when that domain `inherits(., "session_proxy")`. During `vftGoToStep()` the domain is the
+   *app* session, which does not, so the message addressed a control called `confirmButton3` that
+   does not exist. No error, no warning. Every `update*Input()` in an `enter()` was missing the
+   same way. `enter()` is therefore built by **`vftModuleEnterFn(session, function(){ ... })`**,
+   which supplies this and (1) together so the five modules still to convert cannot omit either.
+
+1. **`enter()` must be wrapped in `isolate()` as a whole.** It is called from `vftGoToStep()`,
+   which is called from observers — including the provider `observe()`, which is *not* isolated.
+   A bare `network()` read there makes that observe depend on the network, and it also *assigns*
+   the network, so step 4 would re-enter itself forever.
+2. **Snapshot, don't reactive-ise, a large module.** step 4 reads its nine inputs in ~90 places
+   inside nested closures. `enter()` refills locals of the same names with `<<-`, so the 1300
+   lines below are unchanged and still see plain values — which is what they want: a visit works
+   against a fixed network, and only *between* visits may it change.
+3. **Observers trapped in a helper's frame leak on re-entry.** step 4's banner and confirm
+   observers lived in `plotMap()`'s frame and were unreachable from outside it — fine when every
+   visit got a fresh frame, a leak now. They are on `r` with the other three, and `enter()`
+   destroys all five before `plotMap()` makes new ones. **Leaving a step by the nav bar does not
+   go through the confirm or banner handler**, so nothing else would have.
+
+A `once = TRUE` observer created *inside* `enter()` as a deferred one-shot (step 4's AoI launch)
+is correct and stays. The flag only had to go from the app-level observers watching a module's
+return handle for the life of the session.
+
+### Live findings, 2026-08-25/26 — fixed since the table above
+
+Two defects the real app surfaced that no test here had caught, and one decision.
+
+**`enter()` was running in the wrong reactive domain.** Returning to step 3 left "Bestätigen"
+disabled. `enter()` ran, `shinyjs::enable("confirmButton3")` ran, nothing errored — but shinyjs
+and `update*Input()` namespace against `getDefaultReactiveDomain()`, not the session in lexical
+scope, and shinyjs prefixes an id **only** when that domain `inherits(., "session_proxy")`. Inside
+`vftGoToStep()` the domain is the *app* session, which does not, so the message addressed a
+control named `confirmButton3` that does not exist. Silent no-op. Every `update*Input()` in an
+`enter()` was missing the same way, and step 4's `confirmButton4`/`resetButton` had it waiting.
+Fixed by `vftModuleEnterFn(session, function(){ ... })` in `R/modules.R`, which supplies the module
+domain **and** the `isolate()` together — **every remaining conversion must build its `enter()`
+with it.** Regression test `stage5_enterdomain.R` asserts the id *on the wire*, and is verified to
+fail when the `withReactiveDomain()` is removed.
+
+**The step-4 autosave died with `terra::wrap(NULL)`.** `wrap()` aborts on NULL rather than
+returning it, inside a download handler, so the browser got an error page instead of the file. The
+real fault was an asymmetry: `downloadSave`'s read path has always accepted a save file with no
+sensitivity matrix and skipped it; the write path aborted rather than producing one. Guarded at
+`app_server.R:157`. `r$SM_pres` can legitimately be NULL there by two routes both opened by Stages
+3–4 — a user routing around step 2 entirely (the nav bar offers step 3 as soon as step 1 is
+confirmed, and neither step 3 nor step 4 needs `SM_pres`), or going back to step 1, which discards
+it as a dependent of `shape`. Going back to step **2** does not: `vftDependents()` excludes its own
+seed keys, so only the packed copy goes. Test: `stage5_savepath.R`.
+
+**The banner is being retired — do not gate it.** `vftGoBack()` calls
+`vftGoToStep(check = FALSE)`, so a banner letter bypasses the re-entry block the nav bar enforces:
+"A" or "B" rebuilds step 1 or step 2, and "A" also clears the sensitivity matrix. Decided
+2026-08-26 that the nav bar replaces the banner outright, so this is left alone deliberately and
+noted at `vftGoBack()` in `R/navigation.R`. Spend no effort on banner paths in the remaining
+conversions.
+
+### Next session — start here
+
+**State:** Stage 4 is committed (`3ecb590`). Stage 5 is uncommitted: modified `PLAN.md`,
+`R/app_server.R`, `R/navigation.R`, `R/step3_server.R`, `R/step4_server.R`, `R/steps.R`, plus
+untracked `R/modules.R`. 299 assertions green across 14 suites in the session scratchpad; the
+package installs clean to a temp library.
+
+**Blocked on:** a live re-test of step 3 and step 4 with the two fixes above, before more of the
+app moves underneath them. Ask for the result before converting anything else. What to look for:
+"Bestätigen" and the language selector live again on a return to step 3; step 4's confirm and reset
+buttons likewise; a single click on the step-4 map drawing exactly **one** polygon on a second
+visit (two means the observer teardown in `enter()` is not holding); and the step-4 checkpoint
+downloading a file instead of an error page.
+
+**Then, one module per increment, in this order** — the plan's size order, except that step5 may be
+worth pulling forward because it is the module behind the two-`Original`-scenarios symptom the user
+actually sees:
+
+| next | lines | what it needs beyond the standard four steps |
+|---|---|---|
+| step2 | 2173 | large, but plain; going back to it clears `SM_pres_packed` and step 2 overwrites `SM_pres` on confirm, so the save path stays consistent |
+| step5 | 2262 | `removeUI`/`insertUI` of `placeholder_step5` driven from `enter()`, or every visit re-inserts the version cards |
+| newVersions | 3904 | same `placeholder_step5` handling; shares step5's rank in `VFT_STEP_RANK`, so step5 ↔ newVersions is a side trip, not a back-step |
+| lastStep | 441 | small |
+| step1 | 1217 | the welcome modal (`step1_server.R:30-46`) is a per-visit side effect |
+
+The standard four steps per module: reactive (or snapshot) inputs → an `enter()` built with
+`vftModuleEnterFn()` → remove the `$destroy()` lists and the app-level `once = TRUE` → add the name
+to `VFT_REENTRANT_STEPS`. For a module with many read sites, snapshot rather than reactive-ise:
+step 4 keeps ~90 reads unchanged by shadowing the reactives with locals of the same names that
+`enter()` refills with `<<-`.
+
+**Acceptance test, unchanged and still requiring the live app:** `vftPerfInit()` is called from
+`inst/app/global.R`, not `app_server()`, so a bare `testServer(app_server)` has
+`session$userData$.vftModules` NULL and proves nothing about the tally. Walk
+1→5→1→5→newVersions→5 and read `vftReport()`: every converted module must be exactly 1.
+
 ---
 
 ## Stage 6 — Restore path and save compatibility
