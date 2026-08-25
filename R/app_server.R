@@ -36,6 +36,12 @@ app_server <- function(input, output, session){
   #(which r$ keys each step needs) is in R/steps.R.
   vftNavBarServer(r, input, session)
 
+  #the lazy data layer: one observe that derives whatever a step is about to
+  #need, and completes a navigation that was waiting for it. Nothing is computed
+  #because of where the user has been, only because something is about to read
+  #it. Registry and reasoning in R/providers.R.
+  vftProviderServer(r, session)
+
   #accompanying non reactive (nr) variables, to allow for back and forth access between step5 and newVersions
   r$triggerNewVersions_nr <- 1
   r$triggerStep5_nr <- 1
@@ -246,11 +252,21 @@ app_server <- function(input, output, session){
 
 
         vftDbg("PRE-TRIGGER STEP 2")
+        #Step 1 now hands over the perimeter and nothing else. `network`, `DULN`
+        #and `DULN_all` used to be read here because step 1 built all three
+        #eagerly, inside one future, before the user had done anything but draw a
+        #shape - and step 2 reads none of them. They are providers now
+        #(R/providers.R) and are derived when a step that actually reads them is
+        #entered. step1_server still returns them for call-site compatibility;
+        #reading them here would only put NULLs into `r` and make every one of
+        #them look "not derivable but present".
         r$shape <- step1return$ffshape()
-        r$network <- step1return$network()
+        #the 1 km buffered perimeter every crop and the path query are cut
+        #against. step 1 computes it because the shapefile and drawing branches
+        #normalise the shape differently; a provider derives it from `shape` alone
+        #on the restore path, where no save file has ever carried it.
+        r$shapeLarger <- step1return$shapeLarger()
         r$needHelp <- step1return$needHelp()
-        r$DULN <- step1return$DULN()
-        r$DULN_all <- step1return$DULN_all()
         r$currentLang <- step1return$currentLang()
         # r$parking <- step1return$parking()
         #activate download
@@ -313,19 +329,17 @@ app_server <- function(input, output, session){
         if(exists("envBase_minCutThresh")){r$minCutThresh <- envBase_minCutThresh}
 
 
-        #get r$DULN — use global session cache (populated by sf_to_tidygraph or on first restore)
-        if (!exists(".vft_DULN_full", envir = .GlobalEnv)) {
-          .GlobalEnv$.vft_DULN_full     <- terra::rast(vftData("maps/attr/allAttrs_COG_final.tif"))
-          .GlobalEnv$.vft_DULN_all_full <- terra::rast(vftData("maps/DULN/DULN_nat_majMaxMeanAGGBlur.tif"))
-        }
-        r$DULN <- terra::crop(.GlobalEnv$.vft_DULN_full, terra::project(terra::vect(r$shape), "EPSG:4326"))
-        names(r$DULN) <- c("jog", "dogNat", "ebikeNat", "walkNat","dogProx","walkSoc","bikerSport")
-        r$DULN_all <- terra::crop(.GlobalEnv$.vft_DULN_all_full, sf::st_transform(r$shape, "epsg:4326"))
-
+        #The two national COGs used to be opened and cropped right here, on the
+        #main thread, for every restore - including restores to steps that read
+        #neither of them. They are providers now, so vftGoToStep() below derives
+        #whatever the restored step actually needs, in a daemon, and holds the
+        #navigation until it lands. Save files have never carried the rasters, so
+        #nothing is lost and nothing about the format changes.
+        #
+        #envBase_network arrives with its node columns already attached, so
+        #VFT_KEY_READY's column test marks `networkNodes` done and no restore ever
+        #rebuilds the network.
         r$currentLang <- step1return$currentLang()
-
-
-vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
 
         #Load the saved sensitivity matrix. terra::rast() has methods for both
         #shapes this can arrive in - a PackedSpatRaster from a current save file,

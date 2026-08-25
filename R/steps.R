@@ -69,8 +69,14 @@ VFT_STEPS <- list(
 #' Only used to write the nav bar tooltips ("... benoetigt: 3 Interessengebiete"),
 #' which is why it can be a flat static map: it answers "what would I have to go
 #' and do first", not "where did this value come from this time".
+#' Also read backwards, by vftStepProduces() in R/providers.R: re-doing a step
+#' overwrites everything this map attributes to it, so this is what the "you are
+#' about to discard..." warning starts from. `shapeLarger` is listed for that
+#' second reading only - it is in no step's `needs`, because nothing but a
+#' provider ever reads it.
 VFT_KEY_SOURCE <- c(
   shape         = "step1",
+  shapeLarger   = "step1",
   network       = "step1",
   networkNodes  = "step1",
   DULN          = "step1",
@@ -207,6 +213,41 @@ vftStepMissing <- function(r, step){
 #' light up on its own when a step's last missing input arrives.
 vftStepAvailable <- function(r, step){
   length(vftStepMissing(r, step)) == 0
+}
+
+#' Can this step be REACHED - now, or after something has been derived?
+#'
+#' The distinction Stage 4 introduces, and the one the nav bar asks about. A step
+#' whose last missing input has a provider is reachable but not yet available:
+#' the button is live, clicking it starts the derivation, and vftGoToStep() holds
+#' the navigation until the value lands. A step missing something no provider can
+#' make - `minThresh`, which is a slider a human has to move - is neither, and
+#' its button stays dark with a tooltip naming the step that produces it.
+#'
+#' vftKeyDerivable() lives in R/providers.R, which is where the answer to "or can
+#' it be derived" is defined; this is only the per-step form of it.
+vftStepReachable <- function(r, step){
+  missing <- vftStepMissing(r, step)
+  if(length(missing) == 0) return(TRUE)
+  all(vapply(missing, function(k) vftKeyDerivable(r, k), logical(1)))
+}
+
+#' How far through the walk a step sits.
+#'
+#' Only used to tell "going back" from "going on", which is the question that
+#' decides whether a move can invalidate downstream results. newVersions shares
+#' step 5's rank because it is a side trip off it in both directions, and moving
+#' between the two must never count as going back.
+VFT_STEP_RANK <- c(step1 = 1L, step2 = 2L, step3 = 3L, step4 = 4L,
+                   step5 = 5L, newVersions = 5L, finalStep = 6L)
+
+#' Is `to` behind `from`?
+vftStepIsBack <- function(from, to){
+  if(length(from) != 1L || length(to) != 1L) return(FALSE)
+  #[[ ]] on a name this vector does not carry is an error, not NA
+  if(!(from %in% names(VFT_STEP_RANK)) || !(to %in% names(VFT_STEP_RANK)))
+    return(FALSE)
+  VFT_STEP_RANK[[to]] < VFT_STEP_RANK[[from]]
 }
 
 #' The steps that have to be done before this one, as labels.

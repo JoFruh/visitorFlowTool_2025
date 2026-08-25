@@ -309,6 +309,36 @@ step 3 and confirm exactly one `async:send` for `DULN_all`; walk to step 4 and c
 the network group. `vftReport()` should show the step-1 stall gone and a smaller one at step 3/4.
 Then load an **old** `.RData` at each of `r$step` 2..5 and confirm no provider re-runs.
 
+### As built (2026-08-25) — five deviations, all deliberate
+
+1. **`shapeLarger` is a fifth provider.** Every crop and the path query are cut against the 1 km
+   buffered perimeter, not `shape`, and step 1's two confirm branches normalise the drawn and the
+   uploaded shape differently before buffering. So step 1 keeps producing it (two `sf` calls, on
+   the main thread, on one polygon) and a **synchronous** provider derives it from `shape` alone
+   for the restore path, which no save file has ever carried it on.
+2. **`vftStepAvailable()` was not widened; `vftStepReachable()` was added beside it.** Modules
+   still capture plain values at construction, so entering a step whose data is merely *derivable*
+   would build it against NULLs. Reachable gates the **button**; available gates the **entry**.
+   The gap between them is handled by deferral: `vftGoToStep()` calls `vftEnsure()`, records
+   `session$userData$vftPending`, and returns without changing tab; the provider observe performs
+   the navigation when the last key lands. This applies to **every** caller, not just checked ones
+   — step 3's confirm button reaches step 4 with `check = FALSE` and has the same wait to do.
+3. **The in-flight markers are not in `r`.** Dispatch happens inside the provider observe, so a
+   reactive marker would invalidate the observe that just set it and dispatch again. They are a
+   plain environment in `session$userData`, read only from inside that observe.
+4. **The Stage 3 busy guard was NOT deleted.** Per-key markers stop a *provider* being dispatched
+   twice; they say nothing about the futures step 2, 4 and 5 dispatch from their own module
+   bodies. With the daemon death of 2026-08-25 still unexplained, a cheap generic guard was kept
+   rather than removed on schedule. Delete it in Stage 5, once module bodies stop re-running.
+5. **A failed provider is recorded and not retried.** Without it the observe is a spin loop: the
+   key is still missing, its needs are still ready, nothing is in flight — so it dispatches again
+   every flush, forever. `vftInvalidate()` clears the failures, so changing the inputs earns the
+   retry.
+
+The invalidation graph is complete and correct but **dormant**: it fires on backward navigation,
+which `VFT_REENTRANT_STEPS` still blocks. That is the intended order — the edges exist before the
+navigation that needs them, rather than after.
+
 ---
 
 ## Stage 5 — Module lifecycle: first-touch singleton

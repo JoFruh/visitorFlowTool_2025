@@ -143,11 +143,59 @@ vftGoToStep <- function(r, step, session = shiny::getDefaultReactiveDomain(),
         type = "message", duration = 4, session = session), silent = TRUE)
       return(invisible(NULL))
     }
-    if(!vftStepAvailable(r, step)){
+    #Reachable, not available: a step whose last missing input has a provider is
+    #a step the user is allowed to ask for, and asking is what starts the
+    #derivation. The deferral is handled below, for every caller rather than only
+    #this branch - step 3's confirm button reaches step 4 with check = FALSE and
+    #has exactly the same wait to do.
+    if(!vftStepReachable(r, step)){
       vftDbg(paste0("NAV BLOCKED -> ", step, " (missing: ",
                     paste(vftStepMissing(r, step), collapse = ", "), ")"))
       return(invisible(NULL))
     }
+  }
+
+  #### going back discards what was computed from what is about to change ####
+  #
+  #Re-doing a step overwrites the keys it produces, so everything downstream of
+  #them is about to describe inputs that are no longer on screen. That is the
+  #silent-wrong-map risk, and it is caught here rather than in vftInvalidate()
+  #because "what will be lost" has to be answerable while it still exists.
+  #
+  #Only backwards, and only when something would actually be lost: a warning
+  #about results the user has not produced yet is a warning they learn to click
+  #through. The modal navigates itself on confirm.
+  if(vftStepIsBack(shiny::isolate(r$navStep), step)){
+    atRisk <- vftInvalidationPreview(r, vftStepProduces(step))
+    if(length(atRisk)){
+      vftConfirmInvalidation(r, step, atRisk, session)
+      return(invisible(NULL))
+    }
+  }
+
+  #### hold the move until the step's data exists ####
+  #
+  #Nothing is awaited: vftEnsure() dispatches and returns, and the provider
+  #observe performs this navigation when the last key lands. The user stays where
+  #they are meanwhile, with the progress bar the provider opened - entering a tab
+  #whose module would be built against NULLs is the failure this replaces.
+  #
+  #Keys that are missing and NOT derivable fall through: a checked caller was
+  #already refused above, and an unchecked one is the app moving itself forward
+  #out of a confirm handler that has just set them - step 3's skip path hands
+  #step 4 a deliberately unset minThresh.
+  missing   <- vftStepMissing(r, step)
+  derivable <- missing[vapply(missing, function(k) vftKeyDerivable(r, k), logical(1))]
+  if(length(derivable)){
+    vftDbg(paste0("NAV DEFERRED -> ", step, " (deriving: ",
+                  paste(derivable, collapse = ", "), ")"))
+    if(isTRUE(vftEnsure(r, derivable, session))){
+      vftSetPendingStep(session, step)
+      return(invisible(NULL))
+    }
+    #no provider server on this session (tests, or a build without it): fall
+    #through and behave exactly as before Stage 4 rather than stranding the user.
+    vftDbg("NAV DEFERRED -> no provider server; proceeding unlazily")
   }
 
   spec <- VFT_STEPS[[step]]
@@ -198,6 +246,51 @@ vftGoBack <- function(r, confirm, from, bannerId, session = shiny::getDefaultRea
   shinyjs::runjs(sprintf("Shiny.setInputValue('%s', 'O');", bannerId))
   vftGoToStep(r, target, session)
   TRUE
+}
+
+#' Ask before discarding results, then go.
+#'
+#' The decision this stage records is "auto-invalidate, with a cancellable
+#' warning" - never display a result computed from mixed inputs, but never throw
+#' work away behind the user's back either. So: name what will be lost, default
+#' to Cancel, and only on an explicit confirm call vftInvalidate() and complete
+#' the move.
+#'
+#' `check = FALSE` on the way back in, deliberately. The gate has already been
+#' passed by the caller that raised this modal; re-running it here would re-ask
+#' the re-entry question and refuse the very move the user has just confirmed.
+#'
+#' The observer is `once = TRUE` so a second modal does not accumulate handlers,
+#' and `ignoreInit = TRUE` because the button's input value survives the modal
+#' being removed - without it the next modal would fire the moment it opened.
+#'
+#' @param atRisk character vector of human-readable things about to be discarded,
+#'   from vftInvalidationPreview().
+vftConfirmInvalidation <- function(r, step, atRisk,
+                                   session = shiny::getDefaultReactiveDomain()){
+  okId <- "vftInvalidateOk"
+
+  shiny::showModal(shiny::modalDialog(
+    title = "Ergebnisse verwerfen?",
+    shiny::tags$p(paste0(
+      "Wenn Sie zu '", VFT_STEPS[[step]]$label,
+      "' zurückgehen, werden die darauf aufbauenden Ergebnisse verworfen:")),
+    shiny::tags$ul(lapply(atRisk, shiny::tags$li)),
+    shiny::tags$p("Sie können sie danach neu berechnen lassen."),
+    footer = shiny::tagList(
+      shiny::modalButton("Abbrechen"),
+      shiny::actionButton(okId, "Verwerfen und zurück", class = "btn-danger")
+    ),
+    easyClose = TRUE
+  ), session = session)
+
+  shiny::observeEvent(session$input[[okId]], {
+    shiny::removeModal(session = session)
+    vftInvalidate(r, vftStepProduces(step), session)
+    vftGoToStep(r, step, session, check = FALSE)
+  }, once = TRUE, ignoreInit = TRUE)
+
+  invisible(NULL)
 }
 
 
@@ -281,14 +374,19 @@ vftNavBarServer <- function(r, input, session = shiny::getDefaultReactiveDomain(
     if(busy) shiny::invalidateLater(5000, session)
 
     for(s in steps){
-      #availability is evaluated FIRST and unconditionally, not short-circuited
-      #behind !busy: it is what takes the dependency on each step's `needs`, and
-      #skipping it while busy would drop those dependencies.
+      #REACHABLE, not available: a step whose last missing input has a provider
+      #lights up, and clicking it starts the derivation. That is the whole point
+      #of the provider layer from the user's side - step 3 is offered as soon as
+      #the perimeter exists, rather than after a network build it does not use.
+      #
+      #Evaluated FIRST and unconditionally, not short-circuited behind !busy: it
+      #is what takes the dependency on each step's `needs`, and skipping it while
+      #busy would drop those dependencies.
       #
       #A step already built this session greys out permanently (until Stage 5
       #makes it re-entrant), so the bar shows what it will actually do rather
       #than inviting a click it is going to refuse.
-      ok <- vftStepAvailable(r, s) && !busy &&
+      ok <- vftStepReachable(r, s) && !busy &&
             (vftStepReentrant(s) || !vftStepEntered(s, session))
       if(!identical(ok, sent[[s]])){
         shinyjs::toggleState(id = vftNavInputId(s), condition = ok)

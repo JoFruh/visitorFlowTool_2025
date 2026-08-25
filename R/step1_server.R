@@ -119,6 +119,10 @@ step1_server <- function(id, i18n){
 
     r1$shape <- NULL
     r1$finalShape <- NULL
+    #the 1 km buffered perimeter, produced by whichever confirm branch runs and
+    #handed to app_server as r$shapeLarger. Every provider crop and the path
+    #query are cut against it. See R/providers.R.
+    r1$shapeLarger <- NULL
 
     r1$network <- NULL
 
@@ -1076,6 +1080,7 @@ step1_server <- function(id, i18n){
 
       return(
         list(ffshape = shiny::reactive(r1$finalShape),
+             shapeLarger = shiny::reactive(r1$shapeLarger),
              confirm = shiny::reactive(r1$confirm),
              network = shiny::reactive(r1$pathNetwork),
              needHelp = shiny::reactive(r1$needHelp),
@@ -1117,73 +1122,22 @@ step1_server <- function(id, i18n){
 
         finalShape <- r1$finalShape
 
-        #vftProgress, not ipc::AsyncProgress: the latter carries the Shiny session
-        #into the worker (25 MB from this site alone). See R/async_helpers.R.
-        progress <- vftProgress(message = i18n()$t('Laden von relevanten Daten...'),
-                                detail = i18n()$t("Dies sollte weniger als 30 Sekunden dauern." ) ,
-                                queue = ipc::shinyQueue(),
-                                millis = 1000 )
-
-        #launch job in parallel
-        vftFuture({
-
-        #format shape for later use
-        #transform to web Mercator
+        #This used to be a 30-second future: read the national paths GDB, build
+        #the tbl_graph, crop three COGs and extract eight bands onto every node -
+        #all of it before the user had done anything but name an area, and none
+        #of it read by step 2. It is a provider now (R/providers.R), derived when
+        #a step that reads it is entered. What is left here is the part only step
+        #1 can do: turn this branch's shape into the buffered perimeter, which is
+        #two sf calls on one polygon.
+        #
+        #Kept in EPSG:3857 exactly as before - every consumer transforms it to
+        #4326 itself, and sf_to_tidygraph3() has always been handed this form.
         finalShape <- sf::st_transform(finalShape, crs = "EPSG:3857")
+        r1$shapeLarger <- sf::st_as_sfc(sf::st_buffer(finalShape, dist = 1000))
 
-        #place buffer around polygon for some margin
-        shape_larger <- sf::st_as_sfc(sf::st_buffer(finalShape, dist = 1000))
-
-        #use shape to prepare spatial filter as wkt (well-known text), grow slightly for buffer
-        wkt <- sf::st_as_text( sf::st_transform(shape_larger, "epsg:4326") )
-
-        progress$inc(1/3)
-
-        #extract relevant foot paths
-        loadedPaths <- sf::st_read(vftData("maps/paths/paths_11_24_final_4.gdb"),
-                                   query = 'SELECT * FROM "paths_11_24_final_4"',
-                                   wkt_filter = wkt,
-                                   promote_to_multi = FALSE, type = 2
-        )
-        progress$inc(1/3)
-
-        #use function to prepare node-edge table
-        sfTidyGraphResults <- sf_to_tidygraph3(loadedPaths, shape_larger, directed = FALSE)
-
-        progress$inc(1/3)
-        progress$close()
-
-        sfTidyGraphResults
-      }, seed = TRUE) %...>%(function(sfTidyGraphResults){
-
-        r1$pathNetwork <- sfTidyGraphResults[[1]][[1]]
-        r$DULN <- terra::unwrap(sfTidyGraphResults[[2]][[1]])#, parkingPolygons = r1$parkingShapes
-        r$DULN_all <- terra::unwrap(sfTidyGraphResults[[3]][[1]])
-        #cleanup
-        #remove observers of marker and map clicks from PolygonCreator
-        # envBase$obsMapClick$destroy()
-        # envBase$obsMarkerClick$destroy()
-        # envBase$obsErase$destroy()
-        # obsConfirmBtn2$destroy()
-        # obsConfirmBtn1$destroy()
-
+        #nothing was awaited, so nothing can still be outstanding
         r$promiseFinished <- TRUE
-
-        # progress$inc(1/4, detail = "finalizing...")
         r1$confirm <- 1
-        return(
-          list(ffshape = shiny::reactive(r1$finalShape),
-               confirm = shiny::reactive(r1$confirm),
-               network = shiny::reactive(r1$pathNetwork),
-               needHelp = shiny::reactive(r1$needHelp),
-               DULN = shiny::reactive(r$DULN),
-               DULN_all = shiny::reactive(r$DULN_all),
-               datapath = shiny::reactive(r$datapath),
-               currentLang = shiny::reactive(i18n()$get_translation_language())
-
-          )
-        )
-      })%...!%(vftAsyncError(progress, "Path network", NULL))
 
 
       }else{
@@ -1213,76 +1167,29 @@ step1_server <- function(id, i18n){
 
         finalShape <- r1$finalShape
 
-        #start progress bar
-        #vftProgress: see the note at the sibling site above.
-        progress <- vftProgress(message = i18n()$t('Laden von relevanten Daten...'),
-                                detail = i18n()$t("Dies sollte weniger als 30 Sekunden dauern.") ,
-                                queue = ipc::shinyQueue() ,
-                                millis = 1000)
-
-        #launch job in parallel
-        vftFuture({
-
-        #format shape for later use
+        #See the sibling site above: the path network has moved out into a
+        #provider and what is left is this branch's shape normalisation. The
+        #drawing branch combines and re-casts the drawn polygons before buffering,
+        #which the shapefile branch does not - that difference is exactly why the
+        #buffered perimeter is produced here rather than derived from `shape`.
         shp <- sf::st_as_sf(finalShape, coords = c("long", "lat"), crs = sf::st_crs(4326))
         shp <- sf::st_combine(shp)
         shp <- sf::st_cast(shp, "POLYGON")
 
-        #transform to web Mercator
-        finalShape <- sf::st_transform(shp, crs = "EPSG:3857")
+        #transform to web Mercator, so the buffer is in metres
+        shp <- sf::st_transform(shp, crs = "EPSG:3857")
 
         #place buffer around polygon for some margin
-        shape_larger <- sf::st_buffer(finalShape, dist = 1000)
-        shape_larger <- sf::st_transform(shape_larger, "epsg:4326" )
-
-        #use shape to prepare spatial filter as wkt (well-known text), grow slightly for buffer
-        wkt <- sf::st_as_text(sf::st_transform(shape_larger, "epsg:4326") )
-
-        progress$inc(1/3)
-
-        #extract relevant foot paths
-        loadedPaths <- sf::st_read(vftData("maps/paths/paths_11_24_final_4.gdb"),
-                                   query = 'SELECT * FROM "paths_11_24_final_4"',
-                                   wkt_filter = wkt,
-                                   promote_to_multi = FALSE, type = 2
-        )
-
-        progress$inc(1/3)
-
-        #use function to prepare node-edge table
-        sfTidyGraphResults <- sf_to_tidygraph3(loadedPaths, shape_larger, directed = FALSE)
-
-        progress$inc(1/3)
-        progress$close()
-
-        sfTidyGraphResults
-
-        }, seed = TRUE) %...>%(function(sfTidyGraphResults){
-
-        r1$pathNetwork <- sfTidyGraphResults[[1]][[1]]
-        r$DULN <- terra::unwrap(sfTidyGraphResults[[2]][[1]])#, parkingPolygons = r1$parkingShapes
-        r$DULN_all <- terra::unwrap(sfTidyGraphResults[[3]][[1]])
+        shape_larger <- sf::st_buffer(shp, dist = 1000)
+        r1$shapeLarger <- sf::st_transform(shape_larger, "epsg:4326" )
 
         #
         r$markerWasClicked <- FALSE
 
         r1$confirm <- 1
 
+        #nothing was awaited, so nothing can still be outstanding
         r$promiseFinished <- TRUE
-
-        return(
-          list(ffshape = shiny::reactive(r1$finalShape),
-               confirm = shiny::reactive(r1$confirm),
-               network = shiny::reactive(r1$pathNetwork),
-               needHelp = shiny::reactive(r1$needHelp),
-               DULN = shiny::reactive(r$DULN),
-               DULN_all = shiny::reactive(r$DULN_all),
-               datapath = shiny::reactive(r$datapath),
-               currentLang = shiny::reactive(i18n()$get_translation_language())
-
-          )
-        )
-        })%...!%(vftAsyncError(progress, "Path network", NULL))
 
       }else{
         shiny::showNotification(i18n()$t("ERROR: cannot determine shapefile"),
@@ -1293,6 +1200,7 @@ step1_server <- function(id, i18n){
     #return temporary NULL as shape is being determined
     return(list(
       ffshape = shiny::reactive(r1$finalShape),
+      shapeLarger = shiny::reactive(r1$shapeLarger),
       confirm = shiny::reactive(r1$confirm),
       network = shiny::reactive(r1$pathNetwork),
       needHelp = shiny::reactive(r1$needHelp),
