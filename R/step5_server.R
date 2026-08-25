@@ -1,7 +1,7 @@
 
 
 # Define server logic
-step5_server <- function(id, networkList, SM_pres, SMcolors, shape, confirm, i18n, currentLang, isFirstRun_stp6, finalPolygons = NULL, versionsUI = list(), triggerStp6 = 0,
+step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, currentLang, isFirstRun_stp6, finalPolygons = NULL, versionsUI = list(), triggerStp6 = 0,
                          needHelp = FALSE, species = NULL, minCutThresh = NULL){
 
   #count this instantiation. A module server should be created once per

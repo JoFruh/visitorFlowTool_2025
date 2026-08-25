@@ -5,7 +5,7 @@
 # source("polygonEraser.R", local = TRUE)
 
 # Define server logic
-step4_server <- function(id, network, minThresh, confirm, i18n, currentLang, skip = FALSE,
+step4_server <- function(id, network, minThresh, i18n, currentLang, skip = FALSE,
                          needHelp = NULL, finalPolygons = NULL, DULN = NULL, DULN_all = NULL, shape = NULL){
 
   #count this instantiation. A module server should be created once per

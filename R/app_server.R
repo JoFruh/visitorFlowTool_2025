@@ -26,15 +26,10 @@ app_server <- function(input, output, session){
     "Shiny.setInputValue('lastStep-banner', 'O');"
   ))
 
-  #initialise triggers
-  restartSteps <- shiny::reactiveVal()
-  triggerStep1 <- shiny::reactiveVal()
-  triggerStep2 <- shiny::reactiveVal()
-  triggerStep3 <- shiny::reactiveVal()
-  triggerStep4 <- shiny::reactiveVal()
-  triggerStep5 <- shiny::reactiveVal()
-  triggerFinalStep <- shiny::reactiveVal()
-  triggerNewVersions <- shiny::reactiveVal()
+  #one visit counter per step, in session$userData. Everything that moves the
+  #user between steps goes through vftGoToStep() in R/navigation.R, which is
+  #also the only caller of updateTabsetPanel() in the app.
+  vftNavInit(session)
 
   #accompanying non reactive (nr) variables, to allow for back and forth access between step5 and newVersions
   r$triggerNewVersions_nr <- 1
@@ -219,12 +214,12 @@ app_server <- function(input, output, session){
 
   # step1return <- step1_server("step1")
 
-  shiny::observeEvent(restartSteps(), {
-    vftDbg("RE-TRIGGER STEP 1")
-    if(!is.null(restartSteps() ) ){
-      # r$step1Refreshing <- TRUE
-      shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step1" )
-    }
+  #ignoreInit = FALSE: this one fires once at session start to build step 1,
+  #which is the tab the page already opens on - so no navigation happens and
+  #r$step stays unset until step 1 is confirmed. Later visits arrive through
+  #vftGoToStep(r, "step1", session).
+  shiny::observeEvent(vftStepTrigger(session, "step1"), {
+    vftDbg("BUILD STEP 1")
     step1return <- vftTime("module:step1", step1_server("step1", i18n = shiny::reactive(i18n)))#, lang = reactive(input$lang_pick)
 
 
@@ -254,7 +249,6 @@ app_server <- function(input, output, session){
         r$currentLang <- step1return$currentLang()
         # r$parking <- step1return$parking()
         #activate download
-        r$step <- 2
         #autosave dropped here, on leaving step 1 (shape + path network). downloadSave
         #materialises the raster and save()s the whole session state on the
         #shared main thread, and it used to fire at all eight step transitions.
@@ -262,12 +256,7 @@ app_server <- function(input, output, session){
         #expensive: the sensitivity matrix, the confirmed network + parking,
         #and the finished simulation. Restore with:
         #  shinyjs::click("downloadSave", asis = FALSE)
-        #change reactiveVal
-        if(is.null(triggerStep2()) ){
-          triggerStep2(1)
-        }else{
-          triggerStep2(triggerStep2()+1)
-        }
+        vftGoToStep(r, "step2", session)
 
       }else if(step1return$confirm() == -1){
 
@@ -358,17 +347,20 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
           }
         }
 
-        #trigger the correct step
+        #trigger the correct step. r$step == 1 used to bump a reactiveVal that
+        #nothing observed; it routes for free now that every step is reached the
+        #same way. There is still no branch for r$step == 6 (a save taken after
+        #the simulation) - that is Stage 6's job, along with this ladder.
         if(r$step == 1){
-          triggerStep1(1)
+          vftGoToStep(r, "step1", session)
         }else if(r$step == 2){
-          triggerStep2(1)
+          vftGoToStep(r, "step2", session)
         }else if(r$step == 3){
-          triggerStep3(1)
+          vftGoToStep(r, "step3", session)
         }else if(r$step == 4){
-          triggerStep4(1)
+          vftGoToStep(r, "step4", session)
         }else if(r$step == 5){
-          triggerStep5(1)
+          vftGoToStep(r, "step5", session)
         }
       }
     }, ignoreInit = TRUE, once = TRUE)
@@ -379,18 +371,12 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
   #determine SDM selection, generate sensitivity matrix
 
   #When confirmation button clicked
-  shiny::observeEvent(triggerStep2(), {
-    vftDbg("TRIGGERSTEP2()")
-    if(triggerStep2() > 0){
-
-      #change tabs
-      #use shape information to clip, prepare and present SDM information
-      step2return <- vftTime("module:step2", step2_server("step2", fshape = r$shape, confirm = step1return$confirm(),
-                                  needHelp = r$needHelp, filterList = r$filterList, checkboxSave = r$checkboxSave,
-                                  i18n = shiny::reactive(i18n), currentLang = r$currentLang))
-      #Update UI
-      shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step2" )
-    }
+  shiny::observeEvent(vftStepTrigger(session, "step2"), {
+    vftDbg("BUILD STEP 2")
+    #use shape information to clip, prepare and present SDM information
+    step2return <- vftTime("module:step2", step2_server("step2", fshape = r$shape,
+                                needHelp = r$needHelp, filterList = r$filterList, checkboxSave = r$checkboxSave,
+                                i18n = shiny::reactive(i18n), currentLang = r$currentLang))
 
 
     shiny::observeEvent(step2return$confirm(), {
@@ -438,73 +424,39 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
         vftDbgCat("STEP 3_3")
 
 
-        #activate download
-        r$step <- 3
+        #activate download. vftGoToStep sets r$step, which downloadSave reads to
+        #name the file, so it has to come before the click.
+        vftGoToStep(r, "step3", session)
         shinyjs::click("downloadSave", asis = FALSE)
         # shinyjs::click("downloadSaveRaster", asis = FALSE)
 
         vftDbg(input$`step2-confirmButton2`)
-        #change reactiveVal
-        if(is.null(triggerStep3()) ){
-          triggerStep3(1)
-        }else{
-          triggerStep3(triggerStep3()+1)
-        }
-
         vftDbgCat("STEP 3_3")
 
 
-      }else if(step2return$confirm() == "A"){
-        #send app to step 1
-        r$step <- 1
-        # step1return$confirm <- reactive(0) #reset confirm
-        #reset all inputs
-        # reset banner value
-        shinyjs::runjs("Shiny.onInputChange('step2-banner', 'O');")
-
-        #Update UI (go to step 1)
-        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step1" )
-        # shinyjs::reset(id = "step2-banner", asis = TRUE)
-        vftDbg("RESTART STEP 1")
-        if(is.null(restartSteps())){
-          restartSteps(1)
-        }else{
-          restartSteps(restartSteps() + 1)
-        }
+      }else{
+        #a banner letter, meaning "go back to an earlier step"; anything else is
+        #left alone. See vftGoBack() in R/navigation.R.
+        vftGoBack(r, step2return$confirm(), from = "step2",
+                  bannerId = "step2-banner", session = session)
       }
     },ignoreInit = TRUE, once = TRUE)
   })
 
   #STEP 3:
   #determine Areas of Interest
-  shiny::observeEvent(triggerStep3(), {
-    vftDbg("TRIGGERSTEP3()")
+  shiny::observeEvent(vftStepTrigger(session, "step3"), {
+    vftDbg("BUILD STEP 3")
     vftDbg(r$toSelectSpAfter)
-    vftDbg(r$network)
     vftDbg(r$shape)
 
-    vftDbgCat("STEP 3_4")
+    #use shape information to clip, prepare and present SDM information
+    vftDbgCat(paste0("DULN ALL 2: ", r$DULN_all))
 
-    if(triggerStep3() > 0){
-      #change tabs
-
-      # cat(file = stderr(), paste0("DULN_all: ", r$DULN_all) )
-
-      vftDbgCat("STEP 3_5")
-
-      #use shape information to clip, prepare and present SDM information
-      vftDbgCat(paste0("DULN ALL 2: ", r$DULN_all))
-
-      step3return <- vftTime("module:step3", step3_server("step3", shape = r$shape, confirm = r$confirm,
-                                  i18n = shiny::reactive(i18n), currentLang = r$currentLang,
-                                  needHelp = r$needHelp, DULN_all = r$DULN_all
-                                  ))
-      #Update UI
-      shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step3" )
-
-      vftDbgCat("STEP 3_6")
-
-    }
+    step3return <- vftTime("module:step3", step3_server("step3", shape = r$shape,
+                                i18n = shiny::reactive(i18n), currentLang = r$currentLang,
+                                needHelp = r$needHelp, DULN_all = r$DULN_all
+                                ))
 
 
     shiny::observeEvent(step3return$confirm(), {
@@ -524,10 +476,7 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
         r$needHelp <- step3return$needHelp()
         r$currentLang <- step3return$currentLang()
 
-        #change reactiveVal
-
         #activate download
-        r$step <- 4
         #autosave dropped here, on leaving step 3 (threshold choice). downloadSave
         #materialises the raster and save()s the whole session state on the
         #shared main thread, and it used to fire at all eight step transitions.
@@ -538,53 +487,12 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
 
         vftDbg(input$`step3-confirmButton3`)
 
-        #change reactiveVal
-        if(is.null(triggerStep4()) ){
-          triggerStep4(1)
-        }else{
-          triggerStep4(triggerStep4()+1)
-        }
-      }else if(step3return$confirm() == "A"){
-        r$step <- 1
-        # step1return$confirm <- reactive(0) #reset confirm
-        #reset all inputs
-        shinyjs::runjs("Shiny.onInputChange('step3-banner', 'O');")
-
-        # shinyjs::reset()
-        #Update UI
-        vftDbg("RESTART STEP 1")
-        if(is.null(restartSteps())){
-          restartSteps(1)
-        }else{
-          restartSteps(restartSteps() + 1)
-        }
-        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step1" )
-        #
-        # polygonCreator("areaSelectMap",  input = input, startingPolygons = NULL, numberOfPolygons = "single") #requires "polygons" global variable
-        # polygonEraser("areaSelectMap", input = input, startingPolygons = NULL, numberOfPolygons = "single")
-
-        # restartSteps(restartSteps() + 1)
-      }else if(step3return$confirm() == "B"){
-        r$step <- 2
-        # step1return$confirm <- reactive(0) #reset confirm
-        #reset all inputs
-        # shinyjs::reset()
-        shinyjs::runjs("Shiny.onInputChange('step3-banner', 'O');")
-
-        #Update UI
-        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step2" )
-        if(is.null(triggerStep2())){
-          triggerStep2(1)
-        }else{
-          triggerStep2(triggerStep2() + 1)
-        }
-        # restartSteps(restartSteps() + 1)
+        vftGoToStep(r, "step4", session)
       }else if(step3return$isSkip() == TRUE ){
         r$currentLang <- step3return$currentLang()
 
         #activate download
         r$isSkip <- step3return$isSkip()
-        r$step <- 4
         #autosave dropped here, on leaving step 3 via the skip path. downloadSave
         #materialises the raster and save()s the whole session state on the
         #shared main thread, and it used to fire at all eight step transitions.
@@ -593,7 +501,12 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
         #and the finished simulation. Restore with:
         #  shinyjs::click("downloadSave", asis = FALSE)
 
-        triggerStep4(-1)
+        vftGoToStep(r, "step4", session)
+      }else{
+        #a banner letter, meaning "go back to an earlier step". See
+        #vftGoBack() in R/navigation.R.
+        vftGoBack(r, step3return$confirm(), from = "step3",
+                  bannerId = "step3-banner", session = session)
       }
     }, ignoreInit = TRUE, once = TRUE)
 
@@ -603,7 +516,6 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
 
         #activate download
         r$isSkip <- step3return$isSkip()
-        r$step <- 4
         #autosave dropped here, on leaving step 3 via the skip button. downloadSave
         #materialises the raster and save()s the whole session state on the
         #shared main thread, and it used to fire at all eight step transitions.
@@ -612,7 +524,7 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
         #and the finished simulation. Restore with:
         #  shinyjs::click("downloadSave", asis = FALSE)
 
-        triggerStep4(-1)
+        vftGoToStep(r, "step4", session)
       }
     }, ignoreInit = TRUE, once = TRUE)
 
@@ -622,27 +534,17 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
 
   #STEP 4
 
-  shiny::observeEvent(triggerStep4(), {
-    vftDbg("TRIGGERSTEP4()")
-    if(triggerStep4() > 0){
-      # r$isSkip <- 0
-      #Skip polygon generation = FALSE
-      step4return <- vftTime("module:step4", step4_server("step4", network = r$network, minThresh = r$minThresh, confirm = r$confirm, skip = r$isSkip,
-                                  DULN = r$DULN, DULN_all = r$DULN_all, needHelp = r$needHelp,
-                                  i18n = shiny::reactive(i18n), currentLang = r$currentLang, shape = r$shape))
-      #Update UI
-      shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step4" )
-    }else if (triggerStep4() == -1){
-      #Skip polygon generation = TRUE
-      #change tabs
-
-      # r$isSkip <- 1
-      step4return <- vftTime("module:step4", step4_server("step4", network = r$network, minThresh = r$minThresh, confirm = r$confirm, skip = r$isSkip,
-                                  DULN = r$DULN, DULN_all = r$DULN_all, needHelp = r$needHelp,
-                                  i18n = shiny::reactive(i18n), currentLang = r$currentLang))
-      #Update UI
-      shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step4" )
-    }
+  shiny::observeEvent(vftStepTrigger(session, "step4"), {
+    vftDbg("BUILD STEP 4")
+    #There used to be a second call here for the skip-step-3 path, reached by
+    #setting the trigger to -1, and it differed from this one in exactly one
+    #way: it did not pass `shape`. step4_server reads `shape` unconditionally in
+    #its body (st_transform of the perimeter, to clip the lakes), so that call
+    #could only ever have errored - the skip path was broken. Whether the user
+    #skipped is already carried by `skip = r$isSkip`, so one call does both.
+    step4return <- vftTime("module:step4", step4_server("step4", network = r$network, minThresh = r$minThresh, skip = r$isSkip,
+                                DULN = r$DULN, DULN_all = r$DULN_all, needHelp = r$needHelp,
+                                i18n = shiny::reactive(i18n), currentLang = r$currentLang, shape = r$shape))
 
 
 
@@ -673,90 +575,30 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
         r$step6FirstRun <- TRUE
         r$newVersionsFirstRun <- TRUE
 
-        #activate download
-        r$step <- 5
+        #activate download. vftGoToStep sets r$step, which downloadSave reads to
+        #name the file, so it has to come before the click.
+        vftGoToStep(r, "step5", session)
         shinyjs::click("downloadSave", asis = FALSE)
 
-        #change reactiveVal
-        #change reactiveVal
-        if(is.null(triggerStep5()) ){
-          triggerStep5(1)
-        }else{
-          triggerStep5(triggerStep5()+1)
-        }
         r$triggerStep5_nr <- 1
-      }else if(step4return$confirm() == "A"){
-        r$step <- 1
-        # step1return$confirm <- reactive(0) #reset confirm
-        #reset all inputs
-        # shinyjs::reset()
-        shinyjs::runjs("Shiny.onInputChange('step4-banner', 'O');")
-
-        #Update UI
-        vftDbg("RESTART STEP 1")
-        if(is.null(restartSteps())){
-          restartSteps(1)
-        }else{
-          restartSteps(restartSteps() + 1)
-        }
-        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step1" )
-
-        # restartSteps(restartSteps() + 1)
-      }else if(step4return$confirm() == "B"){
-        r$step <- 2
-        # step1return$confirm <- reactive(0) #reset confirm
-        #reset all inputs
-        # shinyjs::reset()
-        shinyjs::runjs("Shiny.onInputChange('step4-banner', 'O');")
-
-        #Update UI
-        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step2" )
-        if(is.null(triggerStep2())){
-          triggerStep2(1)
-        }else{
-          triggerStep2(triggerStep2() + 1)
-        }
-
-        # restartSteps(restartSteps() + 1)
-      }else if(step4return$confirm() == "C"){
-        r$step <- 3
-        # step1return$confirm <- reactive(0) #reset confirm
-        #reset all inputs
-        # shinyjs::reset()
-        shinyjs::runjs("Shiny.onInputChange('step4-banner', 'O');")
-
-        #Update UI
-        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step3" )
-        vftDbg("RESTART STEP 3")
-        if(is.null(triggerStep3())){
-          triggerStep3(1)
-        }else{
-          triggerStep3(triggerStep3() + 1)
-        }
-
-
-        # restartSteps(restartSteps() + 1)
+      }else{
+        #a banner letter, meaning "go back to an earlier step". See
+        #vftGoBack() in R/navigation.R.
+        vftGoBack(r, step4return$confirm(), from = "step4",
+                  bannerId = "step4-banner", session = session)
       }
     }, ignoreInit = TRUE, once = TRUE)
   })
 
   #STEP 5
 
-  shiny::observeEvent(triggerStep5(), {
-    vftDbg("TRIGGERSTEP5()")
-    if(triggerStep5() > 0 ){
-      vftDbgCat("TEST7")
-      vftDbg("triggerStep5() > 0 ")
-      #Update UI
-      shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step5" )
-      #change tabs
-      vftDbgCat("TEST8\n")
-      # cat(file = stderr(), paste0("contents of envBase: ", ls(envBase)))
-      step5return <- vftTime("module:step5", step5_server("step5", networkList = r$networkList, SM_pres = r$SM_pres, SMcolors = r$SMcolors, shape = r$shape, confirm = r$confirm, finalPolygons = r$finalPolygons, versionsUI = r$versionsUI, isFirstRun_stp6 = r$step6FirstRun,
-                                  needHelp = r$needHelp, species = r$species,
-                                  i18n = shiny::reactive(i18n), currentLang = r$currentLang, minCutThresh = r$minCutThresh))
-      r$step6FirstRun <- FALSE
-    }
+  shiny::observeEvent(vftStepTrigger(session, "step5"), {
+    vftDbg("BUILD STEP 5")
+    # cat(file = stderr(), paste0("contents of envBase: ", ls(envBase)))
+    step5return <- vftTime("module:step5", step5_server("step5", networkList = r$networkList, SM_pres = r$SM_pres, SMcolors = r$SMcolors, shape = r$shape, finalPolygons = r$finalPolygons, versionsUI = r$versionsUI, isFirstRun_stp6 = r$step6FirstRun,
+                                needHelp = r$needHelp, species = r$species,
+                                i18n = shiny::reactive(i18n), currentLang = r$currentLang, minCutThresh = r$minCutThresh))
+    r$step6FirstRun <- FALSE
 
     #From step 5, go to New Versions
     shiny::observeEvent(step5return$newVersions(), {
@@ -789,17 +631,11 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
 
         r$triggerNewVersions_nr <- 1
 
+        vftGoToStep(r, "newVersions", session)
 
-        if(length(triggerNewVersions()) > 0){
-          triggerNewVersions(triggerNewVersions()+1)
-        }else{
-          triggerNewVersions(1)
-        }
-
-
-        r$triggerStep5_nr <- 0 #alter triggerStep5 indirectly without triggering reaction (avoids chain reaction)
-
-        # isolate(triggerStep5(0)) #reset value without trigger
+        #guards the step5 <-> newVersions handlers against firing each other;
+        #nothing to do with navigation, which is vftGoToStep()'s job now.
+        r$triggerStep5_nr <- 0
 
       }
     }, ignoreInit = TRUE, once = TRUE)
@@ -825,76 +661,16 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
         r$versionsUI <- step5return$versionsUI()
         r$networkList <- step5return$networkList()
         r$shp_PA <- step5return$shp_PA()
-        r$step <- 6
+        #vftGoToStep sets r$step, which downloadSave reads to name the file, so
+        #it has to come before the click.
+        vftGoToStep(r, "finalStep", session)
         shinyjs::click("downloadSave", asis = FALSE)
 
-        triggerFinalStep(1)
-
-      }else if(step5return$confirm() == "A"){
-        r$step <- 1
-        # step1return$confirm <- reactive(0) #reset confirm
-        #reset all inputs
-        # shinyjs::reset()
-        shinyjs::runjs("Shiny.onInputChange('step5-banner', 'O');")
-
-        #Update UI
-        vftDbg("RESTART STEP 1")
-        if(is.null(restartSteps())){
-          restartSteps(1)
-        }else{
-          restartSteps(restartSteps() + 1)
-        }
-        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step1" )
-
-        # restartSteps(restartSteps() + 1)
-      }else if(step5return$confirm() == "B"){
-        r$step <- 2
-        # step1return$confirm <- reactive(0) #reset confirm
-        #reset all inputs
-        # shinyjs::reset()
-        shinyjs::runjs("Shiny.onInputChange('step5-banner', 'O');")
-
-        #Update UI
-        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step2" )
-        if(is.null(triggerStep2())){
-          triggerStep2(1)
-        }else{
-          triggerStep2(triggerStep2() + 1)
-        }
-
-        # restartSteps(restartSteps() + 1)
-      }else if(step5return$confirm() == "C"){
-        r$step <- 3
-        # step1return$confirm <- reactive(0) #reset confirm
-        #reset all inputs
-        # shinyjs::reset()
-        shinyjs::runjs("Shiny.onInputChange('step5-banner', 'O');")
-
-        #Update UI
-        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step3" )
-        vftDbg("RESTART STEP 3")
-        if(is.null(triggerStep3())){
-          triggerStep3(1)
-        }else{
-          triggerStep3(triggerStep3() + 1)
-        }
-        # restartSteps(restartSteps() + 1)
-      }else if(step5return$confirm() == "D"){
-        r$step <- 4
-        # step1return$confirm <- reactive(0) #reset confirm
-        #reset all inputs
-        # shinyjs::reset()
-        shinyjs::runjs("Shiny.onInputChange('step5-banner', 'O');")
-
-        #Update UI
-        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step4" )
-        vftDbg("RESTART STEP 4")
-        if(is.null(triggerStep4())){
-          triggerStep4(1)
-        }else{
-          triggerStep4(triggerStep4() + 1)
-        }
-        # restartSteps(restartSteps() + 1)
+      }else{
+        #a banner letter, meaning "go back to an earlier step". See
+        #vftGoBack() in R/navigation.R.
+        vftGoBack(r, step5return$confirm(), from = "step5",
+                  bannerId = "step5-banner", session = session)
       }
     }, ignoreInit = TRUE, once = TRUE)
 
@@ -902,28 +678,17 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
 
 
   #NEW VERSIONS PAGE
-  shiny::observeEvent(triggerNewVersions(), {
+  shiny::observeEvent(vftStepTrigger(session, "newVersions"), {
+    vftDbg("BUILD NEW VERSIONS")
+    newVersionsReturn <- newVersions_server("newVersions", networkList = r$networkList, SM_pres = r$SM_pres,  SMcolors =  r$SMcolors, shp_PA = r$shp_PA,
+                                            finalPolygons = r$finalPolygons, versionsUI = r$versionsUI, isFirstRun = r$newVersionsFirstRun,
+                                            DULN = r$DULN,
+                                            #the step-1 perimeter, for cropping the land cover under the
+                                            #paint. step5_server and lastStep_server already take it this way
+                                            shape = r$shape,
+                                            i18n = shiny::reactive(i18n), currentLang = r$currentLang)
 
-    vftDbg("TRIGGERNEWVERSIONS()")
-
-
-    if(triggerNewVersions() > 0 ){
-
-      vftDbg("newVersions_server")
-      newVersionsReturn <- newVersions_server("newVersions", networkList = r$networkList, SM_pres = r$SM_pres,  SMcolors =  r$SMcolors, shp_PA = r$shp_PA,
-                                              finalPolygons = r$finalPolygons, confirm = r$confirm, versionsUI = r$versionsUI, isFirstRun = r$newVersionsFirstRun,
-                                              DULN = r$DULN,
-                                              #the step-1 perimeter, for cropping the land cover under the
-                                              #paint. step5_server and lastStep_server already take it this way
-                                              shape = r$shape,
-                                              i18n = shiny::reactive(i18n), currentLang = r$currentLang)
-
-      r$newVersionsFirstRun <- FALSE
-
-      #Update UI
-      shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_newVersions" )
-
-    }
+    r$newVersionsFirstRun <- FALSE
 
     shiny::observeEvent(newVersionsReturn$confirm(), {
 
@@ -958,7 +723,6 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
         # }
 
         #activate download
-        r$step <- 5
         #autosave dropped here, on returning from newVersions. downloadSave
         #materialises the raster and save()s the whole session state on the
         #shared main thread, and it used to fire at all eight step transitions.
@@ -967,12 +731,7 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
         #and the finished simulation. Restore with:
         #  shinyjs::click("downloadSave", asis = FALSE)
 
-        #change reactiveVal
-        if(length(triggerStep5()) > 0){
-          triggerStep5(triggerStep5()+1)
-        }else{
-          triggerStep5(1)
-        }
+        vftGoToStep(r, "step5", session)
         vftDbgCat("TESTFc")
 
         r$triggerNewVersions_nr <- 0
@@ -988,118 +747,24 @@ vftDbgCat(paste0("DULN ALL: ", r$DULN_all))
   #GO TO FINAL STEP ####
 
 
-  shiny::observeEvent(triggerFinalStep(), {
-    vftDbg("TRIGGERFINALSTEP()")
-    if(triggerFinalStep() > 0){
-
-      #Update UI
-      shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_finalStep" )
-
-      #Skip polygon generation = FALSE
-      finalStepReturn <- lastStep_server("finalStep", networkList = r$networkList, versionsUI = r$versionsUI,
-                                         SM_pres = r$SM_pres, shape = r$shape,
-                                         finalPolygons = r$finalPolygons)
-
-
-    }
+  shiny::observeEvent(vftStepTrigger(session, "finalStep"), {
+    vftDbg("BUILD FINAL STEP")
+    finalStepReturn <- lastStep_server("finalStep", networkList = r$networkList, versionsUI = r$versionsUI,
+                                       SM_pres = r$SM_pres, shape = r$shape,
+                                       finalPolygons = r$finalPolygons)
 
 
     shiny::observeEvent( finalStepReturn$confirm() , {
       vftDbg("REACTIVE::: STEP5RETURN$CONFIRM")
       #button indirectly triggers step 2, to allow for program intervention
       if(is.integer(finalStepReturn$confirm()) & finalStepReturn$confirm() > 0){
+        #the last step has nowhere forward to go; its confirm button does nothing.
 
-
-        #change reactiveVal
-        #change reactiveVal
-        # if(is.null(triggerStep5()) ){
-        #   triggerStep5(1)
-        # }else{
-        #   triggerStep5(triggerStep5()+1)
-        # }
-        #
-
-      }else if(finalStepReturn$confirm() == "A"){
-        r$step <- 1
-        # step1return$confirm <- reactive(0) #reset confirm
-        #reset all inputs
-        # shinyjs::reset()
-        shinyjs::runjs("Shiny.onInputChange('lastStep-banner', 'O');")
-
-        #Update UI
-        vftDbg("RESTART STEP 1")
-        if(is.null(restartSteps())){
-          restartSteps(1)
-        }else{
-          restartSteps(restartSteps() + 1)
-        }
-        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step1" )
-
-        # restartSteps(restartSteps() + 1)
-      }else if(finalStepReturn$confirm() == "B"){
-        r$step <- 2
-        # step1return$confirm <- reactive(0) #reset confirm
-        #reset all inputs
-        # shinyjs::reset()
-        shinyjs::runjs("Shiny.onInputChange('lastStep-banner', 'O');")
-
-        #Update UI
-        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step2" )
-        if(is.null(triggerStep2())){
-          triggerStep2(1)
-        }else{
-          triggerStep2(triggerStep2() + 1)
-        }
-
-        # restartSteps(restartSteps() + 1)
-      }else if(finalStepReturn$confirm() == "C"){
-        r$step <- 3
-        # step1return$confirm <- reactive(0) #reset confirm
-        #reset all inputs
-        # shinyjs::reset()
-        shinyjs::runjs("Shiny.onInputChange('lastStep-banner', 'O');")
-
-        #Update UI
-        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step3" )
-        vftDbg("RESTART STEP 3")
-        if(is.null(triggerStep3())){
-          triggerStep3(1)
-        }else{
-          triggerStep3(triggerStep3() + 1)
-        }
-        # restartSteps(restartSteps() + 1)
-      }else if(finalStepReturn$confirm() == "D"){
-        r$step <- 4
-        # step1return$confirm <- reactive(0) #reset confirm
-        #reset all inputs
-        # shinyjs::reset()
-        shinyjs::runjs("Shiny.onInputChange('lastStep-banner', 'O');")
-
-        #Update UI
-        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step4" )
-        vftDbg("RESTART STEP 4")
-        if(is.null(triggerStep4())){
-          triggerStep4(1)
-        }else{
-          triggerStep4(triggerStep4() + 1)
-        }
-        # restartSteps(restartSteps() + 1)
-      }else if(finalStepReturn$confirm() == "E"){
-        r$step <- 5
-        # step1return$confirm <- reactive(0) #reset confirm
-        #reset all inputs
-        # shinyjs::reset()
-        shinyjs::runjs("Shiny.onInputChange('lastStep-banner', 'O');")
-
-        #Update UI
-        # shiny::updateTabsetPanel(inputId = "tabs", selected = "tab_step4" )
-        vftDbg("RESTART STEP 5")
-        if(is.null(triggerStep5())){
-          triggerStep5(1)
-        }else{
-          triggerStep5(triggerStep5() + 1)
-        }
-        # restartSteps(restartSteps() + 1)
+      }else{
+        #a banner letter, meaning "go back to an earlier step". See
+        #vftGoBack() in R/navigation.R.
+        vftGoBack(r, finalStepReturn$confirm(), from = "finalStep",
+                  bannerId = "lastStep-banner", session = session)
       }
     }, ignoreInit = TRUE, once = TRUE)
   })

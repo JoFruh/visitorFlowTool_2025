@@ -1,6 +1,6 @@
 
 # Define server logic
-step3_server <- function(id, shape, confirm, i18n, currentLang,
+step3_server <- function(id, shape, i18n, currentLang,
                          needHelp = FALSE, DULN_all = NULL){
 
   #count this instantiation. A module server should be created once per

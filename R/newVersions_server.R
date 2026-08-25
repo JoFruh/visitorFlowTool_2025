@@ -13,7 +13,7 @@
 #'   rather than read off `r`: this module makes its own reactiveValues, so the
 #'   `r` in here is module-local and its `polygonsList` is the AoI polygons, not
 #'   the perimeter. step5_server and lastStep_server take `shape` the same way.
-newVersions_server <- function(id, networkList, confirm, i18n, currentLang, isFirstRun, SM_pres, SMcolors, shp_PA, finalPolygons = NULL, versionsUI = list(), trigger = 0,
+newVersions_server <- function(id, networkList, i18n, currentLang, isFirstRun, SM_pres, SMcolors, shp_PA, finalPolygons = NULL, versionsUI = list(), trigger = 0,
                                DULN = NULL, shape = NULL){
 
   #count this instantiation. A module server should be created once per

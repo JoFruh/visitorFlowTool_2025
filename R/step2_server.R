@@ -4,7 +4,7 @@
 #' @importFrom promises %...!%
 #'
 # df_spInfo_old = NULL,
-step2_server <- function(id, fshape, confirm, i18n, currentLang, needHelp = TRUE,
+step2_server <- function(id, fshape, i18n, currentLang, needHelp = TRUE,
                          filterList = NULL, checkboxSave = NULL){
 
   #count this instantiation. A module server should be created once per
