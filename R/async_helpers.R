@@ -727,6 +727,98 @@ vftAsyncError <- function(progress = NULL, what = "background job", enable = NUL
 #' negligible and, importantly, is NOT what the 33s was - detection and
 #' serialisation together measured 0.05s. The blocking was the wait, not the work.
 #'
+#### How much async work a session has outstanding ####
+
+# One counter per session, incremented when vftFuture() dispatches and
+# decremented when the promise settles either way. It exists because the step nav
+# bar made a new mistake cheap: leave a step while its job is in flight, come
+# back, and the module is rebuilt and dispatches the SAME job again. With
+# VFT_WORKERS=1 the second one queues behind the first, and a user clicking
+# through four steps can have four heavy raster crops outstanding against one
+# daemon before the first has finished.
+#
+# The counter is a reactiveVal so the bar can grey itself out while work is in
+# flight, rather than only refusing the click after the fact. It is created
+# lazily on first dispatch, so a session that never runs a job never has one, and
+# nothing here is conditional on the nav bar being switched on.
+#
+# This is a stop-gap. Stage 4 replaces it with per-key in-flight markers
+# (r$.vftInflight[[key]]) that also make the second dispatch unnecessary rather
+# than merely unreachable, because the result is memoised into r$.
+
+#' How long a session may be held "busy" before the guard lets go, in seconds.
+#'
+#' A safety valve, NOT a timeout: nothing is cancelled and no job is abandoned.
+#' It bounds the damage of a promise that never settles - the dead-daemon case
+#' .vftEnsureDaemons() exists for, where jobs queue forever without erroring.
+#' Without it, one such job would disable the nav bar for the rest of the
+#' session, and since the revival only happens on the NEXT dispatch, blocking
+#' navigation would be exactly what stops that dispatch from ever being made.
+VFT_BUSY_MAX_S <- 120
+
+#' The userData environment holding this session's job counter, creating it on
+#' first use. NULL when there is no session (tests, or a job dispatched outside
+#' one) - every caller here treats that as "not busy".
+#'
+#' `session$userData` is shared with the root session by module proxies, so a job
+#' dispatched from inside step2_server counts against the same session the nav
+#' bar reads.
+.vftBusyStore <- function(session){
+  if(is.null(session)) return(NULL)
+  ud <- tryCatch(session$userData, error = function(e) NULL)
+  if(is.null(ud)) return(NULL)
+  if(is.null(ud$vftBusy)){
+    ud$vftBusy      <- shiny::reactiveVal(0L)
+    ud$vftBusySince <- NULL
+  }
+  ud
+}
+
+#' Count one job out. Records when the session went from idle to busy, which is
+#' what VFT_BUSY_MAX_S is measured from.
+.vftJobStart <- function(session){
+  ud <- .vftBusyStore(session)
+  if(is.null(ud)) return(invisible(0L))
+  n <- shiny::isolate(ud$vftBusy()) + 1L
+  if(n == 1L) ud$vftBusySince <- Sys.time()
+  ud$vftBusy(n)
+  invisible(n)
+}
+
+#' Count one job back in, however it ended.
+.vftJobEnd <- function(session){
+  ud <- .vftBusyStore(session)
+  if(is.null(ud)) return(invisible(0L))
+  n <- max(0L, shiny::isolate(ud$vftBusy()) - 1L)
+  if(n == 0L) ud$vftBusySince <- NULL
+  ud$vftBusy(n)
+  invisible(n)
+}
+
+#' Does this session have async work outstanding?
+#'
+#' A REACTIVE read: called inside an observe() it re-runs that observe when the
+#' count changes, which is how the nav bar greys and un-greys itself. Call it
+#' inside isolate() from anywhere that must not take that dependency.
+vftSessionBusy <- function(session = shiny::getDefaultReactiveDomain()){
+  #.vftBusyStore(), not a bare read of ud$vftBusy: the counter is created on
+  #first use, and the nav bar's observe runs long BEFORE the first job is
+  #dispatched. Reading a counter that does not exist yet returns FALSE without
+  #registering a dependency on anything, so the observe would never re-run when
+  #the first job started and the bar would not grey out until something else
+  #happened to invalidate it. Creating it here makes the dependency exist from
+  #the first read, whichever side gets there first.
+  ud <- .vftBusyStore(session)
+  if(is.null(ud)) return(FALSE)
+
+  n <- ud$vftBusy()
+  if(!length(n) || is.na(n) || n <= 0L) return(FALSE)
+
+  since <- ud$vftBusySince
+  if(is.null(since)) return(TRUE)
+  as.numeric(difftime(Sys.time(), since, units = "secs")) < VFT_BUSY_MAX_S
+}
+
 #' Drop-in for future::future(): same expression, same `seed = TRUE`, and the
 #' result chains with %...>% and %...!% exactly as before.
 #' @param expr the expression to evaluate remotely, as for future::future()
@@ -741,7 +833,12 @@ vftFuture <- function(expr, ..., envir = parent.frame()){
   force(envir)
   useSeed <- isTRUE(args$seed)
 
-  promises::promise(function(resolve, reject){
+  #captured HERE, not inside the promise body: the body runs immediately but the
+  #settle handlers do not, and getDefaultReactiveDomain() is not reliable by then.
+  jobSession <- shiny::getDefaultReactiveDomain()
+  .vftJobStart(jobSession)
+
+  p <- promises::promise(function(resolve, reject){
     tryCatch({
       #dev / load_all: global.R installs a sequential plan and never starts
       #daemons. Run inline so developing against the package keeps working, and
@@ -839,4 +936,10 @@ vftFuture <- function(expr, ..., envir = parent.frame()){
                      onFulfilled = resolve, onRejected = reject)
     }, error = function(e) reject(e))
   })
+
+  #finally(), not then(): the count has to come back down on a FAILED job too,
+  #and the "19 | Connection reset" that prompted this guard is a rejection. The
+  #returned promise settles exactly as `p` does, so every existing %...>% /
+  #%...!% call site is unaffected.
+  promises::finally(p, function() .vftJobEnd(jobSession))
 }

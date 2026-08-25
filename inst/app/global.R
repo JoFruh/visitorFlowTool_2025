@@ -117,6 +117,26 @@ visitorFlowTool:::vftPerfInit()
 # then visitorFlowTool:::vftRprofReport().
 visitorFlowTool:::vftRprofStart()
 
+#STEP NAV BAR ####
+# Say out loud whether the nav bar is on, and what the flag actually read as in
+# THIS process. Without this line the two ways it can be off - the flag never
+# reached the app, or it reached it and resolved to no steps - look identical
+# from the browser: no buttons, no error, nothing in the console.
+#
+# The env var is read where R was STARTED, not where the app lives. The app runs
+# the installed package (runVisitorFlowTool() -> system.file("app")), but this
+# file is sourced by that same R process, so what counts is the .Renviron in the
+# directory R started in, or a Sys.setenv() done in the console BEFORE launching.
+# Setting it in a different R session, or after the app process was started, does
+# nothing.
+local({
+  raw   <- Sys.getenv("VFT_NAV", "<unset>")
+  steps <- visitorFlowTool:::vftNavSteps()
+  message("visitorFlowTool: VFT_NAV=", raw, " -> nav bar ",
+          if (length(steps)) paste0("ON for ", paste(steps, collapse = ", "))
+          else "OFF (confirm buttons only)")
+})
+
 #PREPARE WORKERS ####
 # Async backend selection.
 #

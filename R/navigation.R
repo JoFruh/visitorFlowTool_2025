@@ -17,23 +17,11 @@
 # session) instead of a closure over eight variables, and session$userData is
 # per-session and non-reactive, so reading it costs no dependency.
 
-#' The steps, in the order the user walks them.
-#'
-#' `tab` is the tabPanel value in the hidden tabsetPanel built by `app_ui()`.
-#'
-#' `code` is what gets written to `r$step`, which is the number the save file
-#' records and the restore path switches on. It is NOT the position in this
-#' list: `newVersions` is a side trip off step 5 and deliberately leaves
-#' `r$step` alone, so that a save taken there restores to step 5.
-VFT_STEPS <- list(
-  step1       = list(tab = "tab_step1",       code = 1L),
-  step2       = list(tab = "tab_step2",       code = 2L),
-  step3       = list(tab = "tab_step3",       code = 3L),
-  step4       = list(tab = "tab_step4",       code = 4L),
-  step5       = list(tab = "tab_step5",       code = 5L),
-  newVersions = list(tab = "tab_newVersions", code = NA_integer_),
-  finalStep   = list(tab = "tab_finalStep",   code = 6L)
-)
+#' The step registry - `VFT_STEPS`, and everything that reads it - lives in
+#' R/steps.R. It moved there when it grew the `needs` field, because "what does
+#' this step require" is answered in several places (the nav bar, the
+#' availability check below, Stage 4's providers) while "how do I get there" is
+#' answered only here.
 
 #' Where each banner letter goes back to.
 #'
@@ -87,15 +75,57 @@ vftStepTrigger <- function(session, step){
 #' @param r the app-level `reactiveValues`.
 #' @param step one of `names(VFT_STEPS)`.
 #' @param session the app-level session (not a module's namespaced proxy).
-vftGoToStep <- function(r, step, session = shiny::getDefaultReactiveDomain()){
+#' @param check re-test the step's prerequisites and refuse the move if they are
+#'   not met. TRUE for anything a user can ask for - which today is exactly the
+#'   nav bar, whose `shinyjs::disable()` is cosmetic: the input can be fired from
+#'   the browser console, so the gate has to exist on this side too. FALSE (the
+#'   default) for the app moving itself forward out of a confirm handler, which
+#'   has just set that step's inputs in the same tick and is trusted; step 3's
+#'   skip path in particular hands step 4 a deliberately unset `minThresh`.
+vftGoToStep <- function(r, step, session = shiny::getDefaultReactiveDomain(),
+                        check = FALSE){
   if(!step %in% names(VFT_STEPS))
     stop("vftGoToStep(): unknown step '", step, "'")
+
+  if(isTRUE(check)){
+    if(!vftNavAllows(step)){
+      vftDbg(paste0("NAV BLOCKED -> ", step, " (not in VFT_NAV)"))
+      return(invisible(NULL))
+    }
+    #Entering a step builds its module, and building a module dispatches its jobs
+    #- so navigating while work is in flight is how one session ends up with
+    #several heavy raster crops queued against a single daemon. The bar greys
+    #itself out while this is true, but the input can still be fired from the
+    #console, so the refusal has to live here too. isolate(): this must never
+    #take a reactive dependency on the counter.
+    #
+    #Deliberately NOT applied to the app's own forward transitions (check =
+    #FALSE): a confirm handler runs after the work it depends on has resolved,
+    #and blocking it would strand the user on a step they have finished.
+    if(shiny::isolate(vftSessionBusy(session))){
+      vftDbg(paste0("NAV BLOCKED -> ", step, " (async job in flight)"))
+      try(shiny::showNotification(
+        "Bitte warten - eine Berechnung läuft noch.",
+        type = "message", duration = 4, session = session), silent = TRUE)
+      return(invisible(NULL))
+    }
+    if(!vftStepAvailable(r, step)){
+      vftDbg(paste0("NAV BLOCKED -> ", step, " (missing: ",
+                    paste(vftStepMissing(r, step), collapse = ", "), ")"))
+      return(invisible(NULL))
+    }
+  }
 
   spec <- VFT_STEPS[[step]]
 
   #r$step is the save file's idea of where the user is. newVersions has no code
   #of its own on purpose - see VFT_STEPS.
   if(!is.na(spec$code)) r$step <- spec$code
+
+  #where the user IS, as opposed to what the save file calls it: newVersions has
+  #no `code`, and the nav bar still has to highlight it. Reactive on purpose -
+  #it is what makes the bar follow navigation it did not itself initiate.
+  r$navStep <- step
 
   vftDbg(paste0("NAV -> ", step))
   shiny::updateTabsetPanel(session = session, inputId = "tabs", selected = spec$tab)
@@ -134,4 +164,107 @@ vftGoBack <- function(r, confirm, from, bannerId, session = shiny::getDefaultRea
   shinyjs::runjs(sprintf("Shiny.setInputValue('%s', 'O');", bannerId))
   vftGoToStep(r, target, session)
   TRUE
+}
+
+
+#### The nav bar ####
+
+#' Wire up the step nav bar built by `vftStepNav()`.
+#'
+#' Called once from `app_server()`, after `vftNavInit()`. Does nothing at all
+#' unless `VFT_NAV=1`, including registering no observers - so with the flag off
+#' this stage adds exactly one function call to a session.
+#'
+#' Two pieces:
+#'
+#' 1. one click observer per button. They all land in `vftGoToStep(check = TRUE)`,
+#'    which re-tests the prerequisites server-side; the disabled state of the
+#'    button is a hint to the user, not a security boundary, because the input
+#'    can be fired from the browser console.
+#'
+#' 2. ONE `observe()` for the state of the whole bar. It reads the `needs` of all
+#'    seven steps, so it re-runs whenever any of those keys changes - but it only
+#'    sends a message to the client for the buttons whose state actually moved.
+#'    Without that filter a single change to `r` would push seven toggleState
+#'    calls plus two class changes down the socket, and every message batch the
+#'    client answers costs another full manageHiddenOutputs() sweep, which is the
+#'    overhead Stage 1 just spent itself removing.
+#'
+#' The bar itself is static markup and is NOT an output - that is the whole
+#' design constraint here. See vftStepNav() in R/app_ui.R.
+#'
+#' @param r the app-level `reactiveValues`.
+#' @param input the app-level `input`.
+#' @param session the app-level session.
+vftNavBarServer <- function(r, input, session = shiny::getDefaultReactiveDomain()){
+  if(!vftNavEnabled()) return(invisible(NULL))
+
+  #only the steps this build lets the bar reach - see vftNavSteps(). The others
+  #keep the disabled button vftStepNav() shipped and never get a click observer,
+  #so a half-converted build cannot be talked into entering them.
+  steps <- vftNavSteps()
+
+  #the app opens on step 1 without anyone calling vftGoToStep(), so the marker
+  #has to be seeded here or the bar would highlight nothing until the first move.
+  #
+  #isolate() is NOT optional and NOT cosmetic: this runs in the body of
+  #app_server(), which is not a reactive consumer, and READING a reactiveValues
+  #there is an error ("Can't access reactive value 'navStep' outside of reactive
+  #consumer") that kills the session before any step is built. Writing is fine;
+  #it is the is.null() test that needs the isolate. shiny::testServer() does not
+  #catch this - it runs the server body inside a mock reactive context, so the
+  #bare read is legal under test and fatal in the app.
+  if(is.null(shiny::isolate(r$navStep))) r$navStep <- "step1"
+
+  for(s in steps){
+    local({
+      step <- s
+      shiny::observeEvent(input[[vftNavInputId(step)]], {
+        #clicking the step you are already on would rebuild that module server -
+        #a fresh observer set on top of the live one, until Stage 5 makes the
+        #modules singletons. Nothing to do, so do nothing.
+        if(identical(r$navStep, step)) return(invisible(NULL))
+        vftGoToStep(r, step, session, check = TRUE)
+      }, ignoreInit = TRUE)
+    })
+  }
+
+  #last state pushed to the client, so the observe below can send only changes.
+  #A list rather than a vector: the entries start NULL, which is not identical()
+  #to TRUE or FALSE, so the first run always sends.
+  sent    <- stats::setNames(vector("list", length(steps)), steps)
+  current <- NULL
+
+  shiny::observe({
+    #greyed while this session has async work outstanding, so "wait" is something
+    #the user can see rather than something they discover by clicking. Reactive:
+    #this observe re-runs when the count moves in either direction.
+    busy <- vftSessionBusy(session)
+
+    #VFT_BUSY_MAX_S is wall-clock, and nothing invalidates when it expires, so
+    #without a tick a promise that never settles would leave the bar dead for the
+    #session. Only while busy, so an idle session pays nothing.
+    if(busy) shiny::invalidateLater(5000, session)
+
+    for(s in steps){
+      #availability is evaluated FIRST and unconditionally, not short-circuited
+      #behind !busy: it is what takes the dependency on each step's `needs`, and
+      #skipping it while busy would drop those dependencies.
+      ok <- vftStepAvailable(r, s) && !busy
+      if(!identical(ok, sent[[s]])){
+        shinyjs::toggleState(id = vftNavInputId(s), condition = ok)
+        sent[[s]] <<- ok
+      }
+    }
+
+    now <- r$navStep
+    if(!is.null(now) && !identical(now, current)){
+      if(!is.null(current))
+        shinyjs::removeClass(id = vftNavInputId(current), class = "vft-nav-current")
+      shinyjs::addClass(id = vftNavInputId(now), class = "vft-nav-current")
+      current <<- now
+    }
+  })
+
+  invisible(NULL)
 }

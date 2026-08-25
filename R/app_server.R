@@ -31,6 +31,11 @@ app_server <- function(input, output, session){
   #also the only caller of updateTabsetPanel() in the app.
   vftNavInit(session)
 
+  #the step nav bar: which steps are reachable, and the click handlers that
+  #reach them. Registers nothing unless VFT_NAV=1. The step registry it gates on
+  #(which r$ keys each step needs) is in R/steps.R.
+  vftNavBarServer(r, input, session)
+
   #accompanying non reactive (nr) variables, to allow for back and forth access between step5 and newVersions
   r$triggerNewVersions_nr <- 1
   r$triggerStep5_nr <- 1
