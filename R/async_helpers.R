@@ -247,91 +247,6 @@ vftPayloadReport <- function(file = NULL, dir = Sys.getenv("VFT_PERF_DIR", "")){
 #' @param args exactly what was handed to mirai(), not a re-derivation of it
 #' @param sendSecs how long mirai() itself took
 #' @param globalsSecs how long globals detection took, for comparison
-#' Serialise the outgoing message cold, before mirai sees it
-#'
-#' Every serialisation figure recorded before this existed was taken AFTER the
-#' send returned, which means it measured a second pass over objects mirai had
-#' already forced and materialised. That is warm, and warm is cheap. Whatever
-#' first-touch costs -- an ALTREP vector materialising, a file-backed
-#' SpatRaster reading cells off disk, a promise forced through a long closure
-#' chain -- was billed to the send and then invisible to the probe.
-#'
-#' This runs first, so it pays and reports that cost per object. Cheap when the
-#' objects are already in memory (~0.02s on a 5 MB message), and when it is not
-#' cheap that is precisely the finding.
-#' @keywords internal
-#' @noRd
-#' Move the big captures out of the mirai message and onto disk
-#'
-#' Six reproductions failed to make mirai::mirai() slow -- real tbl_graph and
-#' PackedSpatRaster objects, saturated pools, 16 MB payloads, large returns --
-#' while the app blocks for seconds on the same call, scaling with the bytes
-#' captured. This stops trying to explain that and simply removes the bytes:
-#' every capture at or above VFT_SPILL_MB is written to a temp .rds and replaced
-#' by its path. The worker reads it back (see the restore loop in the wrapped
-#' expression) so the job is unchanged.
-#'
-#' Uncompressed on purpose: the point is to spend as little main-thread time as
-#' possible, and compression would trade the bytes we are trying to avoid for
-#' CPU we cannot spare.
-#'
-#' If the freeze follows the payload out of the message, the transport was the
-#' cause. If it does not, the payload is definitively innocent and the cost is
-#' somewhere neither timing nor size can see. Either outcome ends the guessing.
-#' @keywords internal
-#' @noRd
-.vftSpillArgs <- function(args){
-  out <- list(args = args, names = character(0), files = character(0))
-  thr <- suppressWarnings(as.numeric(Sys.getenv("VFT_SPILL_MB", "0.5")))
-  if(!isTRUE(is.finite(thr)) || thr <= 0) return(out)
-  lim <- thr * 1024^2
-  nms <- names(args)
-  if(is.null(nms)) return(out)
-  for(i in seq_along(args)){
-    nm <- nms[i]
-    #the seed is ours and tiny; never round-trip it through disk
-    if(!nzchar(nm) || nm %in% c("..vftSeed..", "..vftLibs..")) next
-    v <- args[[i]]
-    #a path is only cheaper than the object if the object is actually big, and
-    #object.size is far cheaper than serialising to find out
-    big <- tryCatch(isTRUE(utils::object.size(v) > lim),
-                    error = function(e) FALSE)
-    if(!big) next
-    ok <- tryCatch({
-      p <- tempfile(pattern = "vftspill_", fileext = ".rds")
-      saveRDS(v, p, compress = FALSE)
-      out$args[[i]]  <- p
-      out$names      <- c(out$names, nm)
-      out$files      <- c(out$files, p)
-      TRUE
-    }, error = function(e) FALSE)
-    #a spill that fails must leave the original in place, not a broken path
-    if(!ok) out$args[[i]] <- v
-  }
-  out
-}
-
-.vftColdProbe <- function(wrapped, args){
-  tryCatch({
-    nms <- names(args)
-    if(is.null(nms)) nms <- rep("", length(args))
-    s <- vapply(seq_along(args), function(i){
-      t <- as.numeric(Sys.time())
-      tryCatch(length(serialize(args[[i]], NULL)), error = function(e) NA_real_)
-      as.numeric(Sys.time()) - t
-    }, numeric(1))
-    tw <- as.numeric(Sys.time())
-    tryCatch(length(serialize(wrapped, NULL)), error = function(e) NA_real_)
-    ws <- as.numeric(Sys.time()) - tw
-    tA <- as.numeric(Sys.time())
-    ab <- tryCatch(length(serialize(c(list(wrapped), args), NULL)),
-                   error = function(e) NA_real_)
-    list(per      = stats::setNames(c(s, ws), c(nms, "<expression>")),
-         whole_s  = as.numeric(Sys.time()) - tA,
-         whole_MB = ab/1024^2,
-         total_s  = sum(s, na.rm = TRUE) + ws)
-  }, error = function(e) NULL)
-}
 
 #' The configured worker count, parsed once and defended in one place.
 #'
@@ -517,63 +432,13 @@ vftPayloadReport <- function(file = NULL, dir = Sys.getenv("VFT_PERF_DIR", "")){
   stats::setNames(out, nms)
 }
 
-#' Time two control dispatches immediately before the real one.
-#'
-#' The empty ping (a single integer) separates "the transport or daemon layer is
-#' slow" from "our message is slow". Production answered that: ping 0.000s beside
-#' a 7.8s send, microseconds apart, same process, same load. So it is the message.
-#'
-#' But "the message" is two things, and they need separating too: how many BYTES
-#' it is, and WHAT is in it. The sized ping carries a raw vector of exactly the
-#' real message's length -- same bytes, no structure, no closures, no
-#' environments, nothing to walk. Comparing the three:
-#'
-#'   empty ~0, sized ~0, real slow   -> the CONTENT: something in the message
-#'                                      costs far more than its size (an
-#'                                      environment chain, a reference object)
-#'   empty ~0, sized SLOW, real slow -> the SIZE: allocating and moving that many
-#'                                      bytes is what costs, regardless of what
-#'                                      they are. On a memory-tight host that
-#'                                      points at allocation, not serialisation.
-#'
-#' Ten reproductions on a spare machine could not make mirai::mirai() slow -- not
-#' with production's exact call shape, not with a saturated pool, not with this
-#' ping in front of it. So the cause is something about the production process
-#' that a fresh R session does not have, and size is the one axis still untested.
-#'
-#' Only the mirai() calls are timed, never their results: the send returns as soon
-#' as the message is queued, so a backed-up queue cannot inflate these.
-.vftPing <- function(bytes = NA_real_){
-  one <- function(expr){
-    tryCatch({
-      t <- as.numeric(Sys.time())
-      p <- expr()
-      s <- as.numeric(Sys.time()) - t
-      #cancel rather than leave it queued: a control must not take a worker slot
-      #ahead of the real job it is measured against.
-      try(mirai::stop_mirai(p), silent = TRUE)
-      s
-    }, error = function(e) NA_real_)
-  }
-  empty <- one(function() mirai::mirai(1L))
-  sized <- if(is.finite(bytes) && bytes > 0)
-             one(function() mirai::mirai(1L, .args = list(..vftBlob.. = raw(bytes))))
-           else NA_real_
-  c(empty = empty, sized = sized)
-}
-
 .vftDispatchDiag <- function(ex, args, wrapped, sendSecs, globalsSecs, gcSecs,
-                             cold = NULL, pingSecs = c(empty = NA_real_,
-                                                       sized = NA_real_),
                              mprobe = NULL,
                              sprobe = c(expr = NA_real_, args = NA_real_),
                              cprobe = NULL){
-  #self-targeting, but it must trigger on EITHER half. If the cold probe
-  #absorbs the first-touch cost then send_s goes small and a send-only trigger
-  #would log nothing at all -- losing exactly the evidence we added it for.
-  coldTot <- if(is.null(cold)) 0 else cold$total_s
-  slow    <- (is.finite(sendSecs) && sendSecs >= 1) ||
-             (is.finite(coldTot)  && coldTot  >= 1)
+  #the cold/ping half of this trigger went with the probes it measured; the send
+  #is the only half left that can be slow.
+  slow <- is.finite(sendSecs) && sendSecs >= 1
   if(!slow) return(invisible(NULL))
   tryCatch({
     dir <- Sys.getenv("VFT_PERF_DIR", "")
@@ -607,17 +472,7 @@ vftPayloadReport <- function(file = NULL, dir = Sys.getenv("VFT_PERF_DIR", "")){
     d$whole_MB    <- round(ab/1024^2, 2)
     d$whole_ser_s <- round(as.numeric(Sys.time()) - tA, 3)
     d$gc_s        <- round(gcSecs, 3)
-    #cold columns: what the first serialisation actually cost, per object and
-    #for the whole message. These are the honest ones.
-    d$cold_s      <- if(is.null(cold)) NA_real_ else
-                       round(unname(cold$per[match(d$global, names(cold$per))]), 3)
-    d$cold_tot_s  <- if(is.null(cold)) NA_real_ else round(cold$total_s, 3)
-    d$cold_whl_s  <- if(is.null(cold)) NA_real_ else round(cold$whole_s, 3)
-    d$cold_MB     <- if(is.null(cold)) NA_real_ else round(cold$whole_MB, 2)
-    #the empty-payload send taken in the same second as the real one.
-    d$ping_s      <- round(unname(pingSecs["empty"]), 3)
-    d$pingbig_s   <- round(unname(pingSecs["sized"]), 3)
-    #per-object mirai send time, aligned to the same rows as ser_s and cold_s
+    #per-object mirai send time, aligned to the same rows as ser_s
     d$cum_s       <- if(is.null(cprobe)) NA_real_ else
                        round(unname(cprobe[match(d$global, names(cprobe))]), 3)
     d$mexpr_s     <- round(unname(sprobe["expr"]), 3)
@@ -635,7 +490,7 @@ vftPayloadReport <- function(file = NULL, dir = Sys.getenv("VFT_PERF_DIR", "")){
     utils::write.table(
       d[, c("time","site","global","class","bytes","ser_s",
             "send_s","globals_s","gc_s","whole_MB","whole_ser_s",
-            "cold_s","cold_tot_s","cold_whl_s","cold_MB","ping_s","pingbig_s","mirai_s","cum_s","mexpr_s","margs_s","awaiting","executing")],
+            "mirai_s","cum_s","mexpr_s","margs_s","awaiting","executing")],
       file = f, sep = ",", row.names = FALSE,
       col.names = !file.exists(f), append = file.exists(f))
   }, error = function(e) NULL)
@@ -928,21 +783,20 @@ vftFuture <- function(expr, ..., envir = parent.frame()){
                 list(..vftSeed.. = if(useSeed) .vftNextSeed() else NULL,
                      ..vftLibs.. = .libPaths()))
 
-      #SPILL. Six reproductions could not make mirai slow: a 9 MB tbl_graph
-      #sends in 6 ms here, busy pool or idle, and 16 MB through a saturated pool
-      #costs 13 ms. Yet in the app the same call blocks for seconds, and the
-      #block scales with the bytes captured. Rather than keep hunting the
-      #mechanism, take the bytes out of the message: anything large is written
-      #to disk and replaced by its path, which the worker reads back. saveRDS of
-      #6 MB is tens of milliseconds and is itself timed, so whatever happens
-      #next is attributable. Set VFT_SPILL_MB=0 to switch this off.
-      sp   <- vftTime("async:spill", .vftSpillArgs(argl))
-      argl <- sp$args
-
-      #the worker attaches the packages the expression needs, restores anything
-      #that was spilled to disk, seeds itself from the substream we were given,
-      #then runs the original expression spliced in verbatim. Helper names are
-      #deliberately ugly so they cannot collide with a captured global.
+      #The SPILL that used to sit here is gone, and so are the cold/ping probes
+      #below it. All three existed to explain why this dispatch blocked for
+      #seconds on a 0.1 MB message, on the theory that it was the bytes. The
+      #2026-08-25 profile answered it: of 525 samples taken with vftFuture on
+      #the stack, 92% were in `mirai::mirai -> do_mirai -> request` - mirai's own
+      #compiled transport - while saveRDS took 0.08s and serialize 0.18s across
+      #the whole run. The cost was never the message we build, so removing bytes
+      #from it could not have helped, and the disk round trip was pure overhead.
+      #See vftSendStacks() in perf_helpers.R, which is what read this.
+      #
+      #the worker attaches the packages the expression needs, seeds itself from
+      #the substream we were given, then runs the original expression spliced in
+      #verbatim. Helper names are deliberately ugly so they cannot collide with a
+      #captured global.
       wrapped <- bquote({
         #daemons are spawned as bare Rscript and do NOT necessarily inherit the
         #app process library path - under Shiny Server they frequently do not.
@@ -962,28 +816,12 @@ vftFuture <- function(expr, ..., envir = parent.frame()){
                paste(..vftMissing.., collapse = ", "),
                " -- worker .libPaths(): ",
                paste(.libPaths(), collapse = " ; "), call. = FALSE)
-        for(..vftSpill.. in .(sp$names))
-          assign(..vftSpill.., readRDS(get(..vftSpill..)))
         if(!is.null(..vftSeed..))
           assign(".Random.seed", ..vftSeed.., envir = globalenv())
         .(ex)
       })
 
-      #COLD probe. Everything .vftDispatchDiag measured before ran AFTER the
-      #send, so it timed a second pass over objects mirai had already forced.
-      #If the cost is first-touch (ALTREP materialisation, a file-backed
-      #SpatRaster read from disk, a promise forced deep in a captured closure)
-      #that measurement reads warm and lies. Serialise here, cold, and record
-      #per-object times; then send. If send_s collapses while cold_s carries the
-      #seconds, first-touch is the answer and the object name is in cold_s.
-      cold <- .vftColdProbe(wrapped, argl)
-
-      #ping FIRST, so it samples the process immediately before the real send
-      #rather than after it has already paid whatever the real send costs.
-      #size the control from the cold probe, which has already measured the real
-      #message in bytes. Same length, trivial content.
-      pingS <- .vftPing(if(is.null(cold)) NA_real_ else cold$whole_MB * 1024^2)
-      #opt-in, and after the ping so it cannot perturb the controls
+      #opt-in, all of them: VFT_MIRAI_PROBE=1
       mprobe <- .vftMiraiProbe(argl)
       #and the two halves of the real message: expression alone, args alone
       sprobe <- .vftSplitProbe(wrapped, argl)
@@ -994,14 +832,11 @@ vftFuture <- function(expr, ..., envir = parent.frame()){
       m  <- vftTime("async:send", mirai::mirai(wrapped, .args = argl,
                                               .timeout = .vftTimeoutMs()))
       .vftDispatchDiag(ex, argl, wrapped, as.numeric(Sys.time()) - tS,
-                       tS - tG, sum(gc.time()[1:2]) - gc0, cold, pingS, mprobe,
-                       sprobe, cprobe)
+                       tS - tG, sum(gc.time()[1:2]) - gc0, mprobe = mprobe,
+                       sprobe = sprobe, cprobe = cprobe)
 
-      #the worker has read them by the time it answers; drop them either way
-      #so a long session cannot silently fill the temp directory.
-      done <- function(fn) function(x){ unlink(sp$files); fn(x) }
       promises::then(promises::as.promise(m),
-                     onFulfilled = done(resolve), onRejected = done(reject))
+                     onFulfilled = resolve, onRejected = reject)
     }, error = function(e) reject(e))
   })
 }

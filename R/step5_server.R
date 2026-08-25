@@ -482,6 +482,28 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
       r$passageTable
     }
 
+    # Same idea for the agents' starting points, and for the same reason: it is a
+    # pure function of r$result (the node table and dayPop$startV), it was spelled
+    # out at three separate sites, and one of them is obsAgentStart - so every
+    # toggle of the starting-points checkbox rescanned the WHOLE vertex table.
+    #
+    # The scan is `vertexTable[vertexTable$nodeID %in% dayPop$startV , ]`, which
+    # is a `%in%` over every node followed by a data.frame row subset. In the
+    # 2026-08-25 line profile `[.data.frame` was 8.72s self / 28.80s total and
+    # `%in%` another 3.60s - together the largest pure-R cost in the app, ahead
+    # of everything spatial.
+    #
+    # Returns the sf object; callers take st_coordinates() or st_geometry() from
+    # it as they did before. Invalidated (r$startingPointsSf <- NULL) at the same
+    # three places as r$passageTable, which are where r$result is reassigned.
+    getStartingPoints <- function(){
+      if(is.null(r$startingPointsSf)){
+        vertexTable <- dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(nodes) )
+        r$startingPointsSf <- sf::st_as_sf( vertexTable[vertexTable$nodeID %in% r$result$dayPop$startV , ])
+      }
+      r$startingPointsSf
+    }
+
     plotPathUsage <- function(){
 
 
@@ -501,8 +523,9 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
           #make current result that of selected version
           shiny::isolate(r$result$pathUsage <- r$networkList[[selectedNetwork_position]]$pathUsage)
           shiny::isolate(r$result$dayPop <- r$networkList[[selectedNetwork_position]]$dayPop)
-          #selected version changed: invalidate the cached passageTable so it rebuilds below
+          #selected version changed: invalidate the cached tables so they rebuild below
           shiny::isolate(r$passageTable <- NULL)
+          shiny::isolate(r$startingPointsSf <- NULL)
 
           #reactiveVal to manually trigger plotting
           vftDbg("PLOTRESULTS()")
@@ -511,8 +534,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
           # pathUsageColor <- c("white", "white")
           passageTable <- getPassageTable()
 
-          vertexTable <- dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(nodes) )
-          startingPoints <- sf::st_coordinates(sf::st_as_sf( vertexTable[vertexTable$nodeID %in% r$result$dayPop$startV , ]) )
+          startingPoints <- sf::st_coordinates(getStartingPoints())
 
 
 
@@ -1200,8 +1222,9 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
         ## TREAT PROMISE RESULT ####
 
         r$result <- results
-        #fresh simulation result: invalidate cached passageTable
+        #fresh simulation result: invalidate cached passageTable + starting points
         r$passageTable <- NULL
+        r$startingPointsSf <- NULL
 
         # gc()
         vftDbg("RESULTS DONE")
@@ -1499,8 +1522,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
 
       #observe agent starting points ####
       obsAgentStart <- shiny::observeEvent(input$startingCheckbox, {
-        vertexTable <- dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(nodes) )
-        startingPoints <- sf::st_coordinates(sf::st_as_sf( vertexTable[vertexTable$nodeID %in% r$result$dayPop$startV , ]) )
+        startingPoints <- sf::st_coordinates(getStartingPoints())
 
         if(input$startingCheckbox == TRUE){
           proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet"
@@ -1672,8 +1694,7 @@ step5_server <- function(id, networkList, SM_pres, SM_noPres, SMcolors, shape, c
         vftDbgCat("starting\n")
 
         if(input$startingCheckbox){
-          vertexTable <- dplyr::as_tibble(r$result$pathUsage |> tidygraph::activate(nodes) )
-          startingPoints <- sf::st_as_sf( vertexTable[vertexTable$nodeID %in% r$result$dayPop$startV , ])
+          startingPoints <- getStartingPoints()
 
           terra::plot(x = sf::st_geometry(startingPoints), add = TRUE, col = "red")
         }
@@ -2241,8 +2262,9 @@ vftDbgCat("FINISHED TIFF\n")
       #select original network
       r$selectedNetwork_r( list(r$networkList[[1]]$network) )
       r$result$pathUsage <- r$networkList[[1]]$pathUsage
-      #pathUsage (re)assigned: invalidate cached passageTable
+      #pathUsage (re)assigned: invalidate cached passageTable + starting points
       r$passageTable <- NULL
+      r$startingPointsSf <- NULL
 
       plotPathUsage()
 
