@@ -204,9 +204,16 @@ vftNavAllows <- function(step){
 #' area of interest back into `r$`: observed live as two "Original" scenarios in
 #' step 5, one simulated against an area that was no longer on screen.
 #'
-#' Conversion order is smallest first - step3, step4, step2, step5, newVersions,
-#' lastStep, step1 - so the mechanism is proved on 400 lines before it is applied
-#' to 3900. Done as of 2026-08-26: step2, step3, step4, step5.
+#' Conversion order is smallest first - step3, step4, step2, step5, step1,
+#' newVersions, lastStep - so the mechanism is proved on 400 lines before it is
+#' applied to 3900. Done as of 2026-08-26: step1, step2, step3, step4, step5.
+#'
+#' step1 was taken out of turn because the user asked for the return, and it is
+#' the odd one: its module is built at SESSION START by its own
+#' `ignoreNULL = FALSE` observer rather than by a navigation, so it is the only
+#' step whose module exists before its visit counter has ever moved. That is why
+#' vftStepEntered() special-cases it - and why, before this, the nav bar greyed
+#' step 1 out from the first flush onwards.
 #'
 #' Note this restricts the NAV BAR and the module cache only. The app's own
 #' transitions (`vftGoToStep(check = FALSE)`) still reach any step, which is what
@@ -214,7 +221,7 @@ vftNavAllows <- function(step){
 #' converted. step 5 is a singleton now and newVersions is not, so that bounce is
 #' currently one reused module and one rebuilt one - which is exactly what the
 #' per-step switch is for.
-VFT_REENTRANT_STEPS <- c("step2", "step3", "step4", "step5")
+VFT_REENTRANT_STEPS <- c("step1", "step2", "step3", "step4", "step5")
 
 #' May the nav bar return to this step after it has been built once?
 vftStepReentrant <- function(step){

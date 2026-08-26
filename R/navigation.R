@@ -240,11 +240,12 @@ vftBackTarget <- function(confirm, from){
 
 #' Handle a step's `confirm` when it holds a banner letter.
 #' BEING RETIRED - the nav bar replaces it. Decided 2026-08-25, so do not tidy
-#' this: `check = FALSE` below means a banner letter bypasses the re-entry block
-#' the nav bar enforces, and clicking "A" rebuilds step 1, which is still
-#' unconverted. It no longer discards anything on the way - nothing does, except
-#' the write that supersedes it - so the second half of this warning is gone.
-#' Gating what is left would be the wrong investment: it is going away.
+#' this: `check = FALSE` below means a banner letter bypasses the checks the nav
+#' bar enforces (VFT_NAV, the busy guard, the prerequisites). What it can no
+#' longer do is build a second module on top of a live one - every step a letter
+#' can name is a singleton now, step 1 included - and it discards nothing on the
+#' way, because nothing does except the write that supersedes it. Gating what is
+#' left would be the wrong investment: it is going away.
 #'
 #'
 #' Returns TRUE if it did navigate, so a caller can tell "went back" from

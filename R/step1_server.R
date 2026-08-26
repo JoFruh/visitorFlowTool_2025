@@ -1,6 +1,29 @@
 
 # Define server logic
-step1_server <- function(id, i18n){
+
+#' Step 1 - choose the area of interest.
+#'
+#' FIRST-TOUCH SINGLETON (Stage 5). Built once, at session start, and reused for
+#' every return; `vftGoToStep()` runs the `enter()` closure this returns on each
+#' visit after the first. Two consequences worth knowing before editing anything
+#' below:
+#'
+#'   * nothing in this body runs again. The welcome modal, the empty map and the
+#'     button resets are construction, not arrival - which is exactly why the
+#'     welcome dialog no longer greets a user who only came back to look.
+#'   * `r1$confirm` is deduped like every reactiveValues field, and step 1
+#'     answers with a constant rather than a click count, so writing 1 over a 1
+#'     would make the SECOND confirmation of this step silent. enter() clears it,
+#'     and reportConfirm() clears it again on the way out - see both.
+#'
+#' @param shape,shapeLarger what the app currently holds for this step, as
+#'   reactives. Read only by `enter()`, which puts them back on screen: a return
+#'   visit shows the perimeter that is actually in force, not whatever the module
+#'   was left mid-drawing with. Defaulted so the older call sites and the test
+#'   harnesses keep working.
+step1_server <- function(id, i18n,
+                         shape       = shiny::reactive(NULL),
+                         shapeLarger = shiny::reactive(NULL)){
 
   #count this instantiation. A module server should be created once per
   #session; this app re-calls it from an observeEvent on a trigger, so any
@@ -123,6 +146,14 @@ step1_server <- function(id, i18n){
     #handed to app_server as r$shapeLarger. Every provider crop and the path
     #query are cut against it. See R/providers.R.
     r1$shapeLarger <- NULL
+
+    #Has an outline been FINALISED on this visit - a file uploaded, coordinates
+    #typed, or a polygon closed on the map? That is the whole difference between
+    #"came back to look" and "made a new area of interest", and only the second
+    #may replace what step 1 has already handed the app. Set at the three places
+    #a new outline can appear, cleared by enter(), read by the two confirm
+    #handlers at the bottom of this file.
+    r1$isNewShape <- FALSE
 
     r1$network <- NULL
 
@@ -369,6 +400,15 @@ step1_server <- function(id, i18n){
             r$polygonsList <- NULL
             r1$shape <- NULL
 
+            #and the outline the map is drawing, which is now r1$finalShape and
+            #may be one enter() put back. Clearing it keeps the map and the
+            #confirm handlers telling the same story - without this, a stray
+            #click on a return visit blanked the map while a confirm would still
+            #have passed the old perimeter on as if it were on screen. It
+            #discards nothing: `r$shape` at app level is untouched, and coming
+            #back here again re-seeds this from it.
+            r1$finalShape <- NULL
+
             button1Visible(FALSE)
             button2Visible(FALSE)
 
@@ -425,11 +465,30 @@ step1_server <- function(id, i18n){
       #main-thread time here, re-setting an unchanged global option on every
       #render of every session.
 
-      #if a shape exists already, draw it and zoom to it
-      if(shiny::isolate(!is.null(r1$shape)) ){
+      #### the outline this step has settled on ####
+      #
+      #This output is SUSPENDED while its tab is hidden and re-executed when the
+      #tab is shown again, so it runs on every return to step 1 - which makes it
+      #the thing that has to know what the perimeter currently is. It used to ask
+      #only `r1$shape`, the uploaded file: a perimeter the user had DRAWN lives in
+      #r1$finalShape and never in r1$shape, so coming back to step 1 after drawing
+      #one showed an empty map of Switzerland with the area silently still in
+      #force. finalShape first (what was handed to the app, and what enter() puts
+      #back), then an upload that has not been confirmed yet.
+      #
+      #Fully isolated, and the local is no longer called `shape` - that is the
+      #module's `shape` argument now. Isolating the read as well as the test is
+      #the point: the perimeter is drawn onto the live map by leafletProxy at the
+      #moment it changes (see ADD SHAPE, and enter()), so a dependency here would
+      #only race a full re-render against that proxy call.
+      outline <- shiny::isolate(r1$finalShape)
+      if(is.null(outline)) outline <- shiny::isolate(r1$shape)
 
-        shape <- sf::st_as_sf(sf::st_transform(r1$shape, "epsg:4326"))
-        bb <- sf::st_bbox(shape)
+      #if a shape exists already, draw it and zoom to it
+      if(!is.null(outline) ){
+
+        outline <- sf::st_as_sf(sf::st_transform(outline, "epsg:4326"))
+        bb <- sf::st_bbox(outline)
         #map with saved shape
         tmap::tmap_leaflet(
           tmap::tm_shape(countryshape) +
@@ -442,7 +501,7 @@ step1_server <- function(id, i18n){
           in.shiny = TRUE) |>
           leaflet::addMapPane("layer1", zIndex = 410)|> leaflet::addMapPane("layer2", zIndex = 420)|> leaflet::addMapPane("layer3", zIndex = 450) |>
           leaflet::clearGroup("eraseable")|>
-          leaflet::addGeoJSON(geojson = geojsonsf::sf_geojson( shape ),
+          leaflet::addGeoJSON(geojson = geojsonsf::sf_geojson( outline ),
                               stroke = TRUE,
                               weight = 5,
                               color = "black",
@@ -762,6 +821,10 @@ step1_server <- function(id, i18n){
       # r1$finalShape <- sf::st_as_sf(r1$shape, coords = c("long", "lat"), crs = sf::st_crs(4326)) |> sf::st_combine() |> sf::st_cast( "POLYGON") |> sf::st_sf()
       r1$finalShape <- sf::st_as_sfc(r1$shape, coords = c("long", "lat"), crs = sf::st_crs(4326)) |> sf::st_combine() |> sf::st_cast( "POLYGON") |> sf::st_sf()
 
+      #an uploaded file or a pair of typed coordinates: a NEW outline, so
+      #confirming this step is now allowed to replace what came before it
+      r1$isNewShape <- TRUE
+
 
       bb <- sf::st_bbox(r1$finalShape)
       #update plot
@@ -843,6 +906,9 @@ step1_server <- function(id, i18n){
       if(!is.null(r$polygonsList)){
       #determine type of shape
       r1$shapeType <- "drawing"
+
+      #a polygon was closed on the map: a NEW outline. See r1$isNewShape.
+      r1$isNewShape <- TRUE
 
       button2Visible(TRUE)
       button1Visible(FALSE)
@@ -1076,7 +1142,7 @@ step1_server <- function(id, i18n){
       # load(input$data$datapath[1])
       r$datapath <- input$data$datapath[1]
 
-      r1$confirm <- -1
+      reportConfirm(-1)
 
       return(
         list(ffshape = shiny::reactive(r1$finalShape),
@@ -1106,9 +1172,52 @@ step1_server <- function(id, i18n){
 
     }
 
+    #### reporting an answer to app_server ####
+    #
+    #Clears the field first, ALWAYS. Step 1 is the one step whose `confirm` is a
+    #constant - 1 for "go on", -1 for "a save file was loaded" - rather than a
+    #click count that rises on every press, and reactiveValues dedupe: writing 1
+    #over a 1 invalidates nothing, app_server's observer never wakes, and the
+    #button does nothing at all.
+    #
+    #enter() clears it on every return, which covers leaving and coming back.
+    #This covers what enter() cannot see: a confirm the user CANCELLED in the
+    #discard modal and then gave again without leaving the step. Both writes land
+    #in one reactive tick, so the observer still runs exactly once, reading the
+    #value - the NULL is an invalidation, not an event.
+    reportConfirm <- function(value){
+      r1$confirm <- NULL
+      r1$confirm <- value
+    }
+
+    #### confirming a visit on which nothing new was made ####
+    #
+    #"It is not access to a step that removes linked data, but the creation of a
+    #new dataset." A visit to step 1 that finalises no outline has created
+    #nothing, so its confirm hands the app back the very objects the app already
+    #holds: vftCommit() compares them identical(), finds nothing changed, asks
+    #nothing, discards nothing, and walks on to step 2.
+    #
+    #Without this the drawing branch below would re-combine and re-buffer the
+    #perimeter on the way out. The result is equal to the stored one and not
+    #identical() to it, so every re-confirmation of an unchanged area would have
+    #offered to throw the whole simulation away.
+    #
+    #Returns TRUE if it dealt with the confirm. Called from an observeEvent
+    #handler, so the reads are already isolated.
+    reconfirmUnchanged <- function(){
+      if(isTRUE(r1$isNewShape))  return(FALSE)
+      if(is.null(r1$finalShape)) return(FALSE)
+      vftDbg("STEP1 CONFIRM: no new outline - the perimeter is unchanged")
+      reportConfirm(1)
+      TRUE
+    }
+
     #model confirm of first help window
     obsSavedHelp1 <- observeEvent(input$gotSavedHelp1, {
       shiny::removeModal()
+
+      if(reconfirmUnchanged()) return(invisible(NULL))
 
       #generate a final shapefile using shapefile or coordinates
       if(r1$shapeType == "shapefile" | r1$shapeType == "coordinates"){
@@ -1137,7 +1246,7 @@ step1_server <- function(id, i18n){
 
         #nothing was awaited, so nothing can still be outstanding
         r$promiseFinished <- TRUE
-        r1$confirm <- 1
+        reportConfirm(1)
 
 
       }else{
@@ -1151,6 +1260,8 @@ step1_server <- function(id, i18n){
     #observe confirm of second help window
     obsSavedHelp2 <- observeEvent(input$gotSavedHelp2, {
       shiny::removeModal()
+
+      if(reconfirmUnchanged()) return(invisible(NULL))
 
       #generate a final shapefile using shapefile or coordinates
       if(r1$shapeType == "drawing"){
@@ -1186,7 +1297,7 @@ step1_server <- function(id, i18n){
         #
         r$markerWasClicked <- FALSE
 
-        r1$confirm <- 1
+        reportConfirm(1)
 
         #nothing was awaited, so nothing can still be outstanding
         r$promiseFinished <- TRUE
@@ -1197,6 +1308,111 @@ step1_server <- function(id, i18n){
       }
 
     })
+
+    #### PER-VISIT: enter() ####
+    #
+    #Everything that has to happen on a RETURN to step 1 rather than once per
+    #session. vftGoToStep() calls it on every visit after the first; the first
+    #visit is the construction above, which does this work inline - which is why
+    #this is not called at the end of the body the way the other converted
+    #modules call theirs. Calling it there would re-send the banner and push
+    #leaflet messages at a map that has not been rendered yet, to arrive at the
+    #empty state the body already builds.
+    #
+    #Wrapped in vftModuleEnterFn() and not written by hand: it runs from
+    #vftGoToStep(), whose reactive domain is the APP session, and shinyjs and
+    #update*Input() namespace against the domain rather than against the session
+    #their caller can see. See R/modules.R.
+    #
+    #NOTHING HERE DESTROYS ANYTHING. It puts the perimeter that is in force back
+    #on screen and resets what belongs to a visit (a half-finished drawing, the
+    #answer this step gave last time). `r$shape` and `r$shapeLarger` at app level
+    #are the source it reads, and only the confirm handlers above ever replace
+    #them.
+    enter <- vftModuleEnterFn(session, function(){
+      lang <- tryCatch(i18n()$get_translation_language(), error = function(e) NULL)
+      if(is.null(lang) || !nzchar(lang)) lang <- "de"
+
+      #banner, in whatever language the walk is being done in now - it may have
+      #been changed from a later step while we were away
+      if(identical(lang, "fr")){
+        vftSetBanner(id, "www/step1_wsl_fr.png")
+      }else if(identical(lang, "en")){
+        vftSetBanner(id, "www/step1_wsl_en.png")
+      }else{
+        vftSetBanner(id, "www/step1_wsl.png")
+      }
+
+      #the language selector on this page. Guarded: writing the value it already
+      #holds would fire langChangeObs for nothing.
+      if(!identical(input$languageSelect_1, lang))
+        shiny::updateSelectInput(inputId = "languageSelect_1", selected = lang)
+      r$currentLang <- lang
+
+      #A VISIT IS NOT A CONFIRMATION - and this one is load-bearing rather than
+      #tidy. reactiveValues dedupe: `r1$confirm` left at 1 from the last
+      #confirmation (or at -1 from a restore) means the NEXT confirmation writes
+      #the same value, invalidates nothing, and app_server's observer never runs.
+      #The user would press "Weiter zu Schritt 2." and stay where they were.
+      r1$confirm <- NULL
+
+      #### the perimeter in force, back on screen ####
+      shp <- shape()
+      r1$finalShape  <- shp
+      r1$shapeLarger <- shapeLarger()
+
+      #a return has created nothing. Only an upload, typed coordinates or a
+      #polygon closed on the map set this, and only it lets a confirm replace
+      #what the app holds - see reconfirmUnchanged().
+      r1$isNewShape <- FALSE
+
+      #the drawing state, which belongs to a visit and not to a session
+      r$polygonsList     <- NULL
+      r$mapPoints        <- sf::st_sfc(crs = 4326)
+      r$polyFinished     <- FALSE
+      r$markerWasClicked <- FALSE
+
+      #The map output is suspended while this tab is hidden and re-executes when
+      #the tab is shown again, so it redraws the outline on its own - but only
+      #after a client round trip. Drawing it here as well costs one message and
+      #puts the area on screen at once.
+      proxy <- leaflet::leafletProxy(leafletMapID, session = session) |>
+        leaflet::clearGroup("first") |>
+        leaflet::clearGroup("after") |>
+        leaflet::clearGroup("eraseable")
+
+      if(!is.null(shp)){
+        outline <- sf::st_as_sf(sf::st_transform(shp, "epsg:4326"))
+        bb      <- sf::st_bbox(outline)
+        proxy |>
+          leaflet::addGeoJSON(geojson = geojsonsf::sf_geojson(outline),
+                              stroke = TRUE,
+                              weight = 5,
+                              color = "black",
+                              fill = TRUE,
+                              fillColor = "green",
+                              opacity = 1,
+                              group = "eraseable",
+                              options = leaflet::pathOptions(pane = "layer2")) |>
+          leaflet::fitBounds(lng1 = bb[[1]], lat1 = bb[[2]],
+                             lng2 = bb[[3]], lat2 = bb[[4]])
+
+        #and the button that leaves the step. There is an area of interest, so
+        #the user may go on with it whether or not they touch anything here.
+        if(identical(r1$shapeType, "drawing")){
+          button1Visible(FALSE)
+          button2Visible(TRUE)
+        }else{
+          #"" means the perimeter came out of a save file rather than out of this
+          #module, so there is no shapeType to go by. Button 1 is the branch that
+          #passes a shape straight through.
+          if(!nzchar(r1$shapeType)) r1$shapeType <- "shapefile"
+          button2Visible(FALSE)
+          button1Visible(TRUE)
+        }
+      }
+    })
+
     #return temporary NULL as shape is being determined
     return(list(
       ffshape = shiny::reactive(r1$finalShape),
@@ -1207,7 +1423,8 @@ step1_server <- function(id, i18n){
       DULN = shiny::reactive(r$DULN),
       DULN_all = shiny::reactive(r$DULN_all),
       datapath = shiny::reactive(r$datapath),
-      currentLang = shiny::reactive(i18n()$get_translation_language())
+      currentLang = shiny::reactive(i18n()$get_translation_language()),
+      enter = enter
 
     )
     )

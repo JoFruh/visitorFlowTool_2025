@@ -447,13 +447,13 @@ the main thread at session start.
 
 **Convert one module per increment, smallest first:** step3 (435 lines) → step4 → step2 → step5 →
 newVersions → lastStep → step1. Keep `VFT_NAV` gating each step until its module is converted.
+*(step1 was taken out of this order on 2026-08-26, on request — see below.)*
 
 Four things the singleton breaks, and the fix for each:
 
 1. **Modules capture plain values at construction** — `step2_server(fshape = r$shape)` freezes the
    perimeter. Pass reactives (`shiny::reactive(r$shape)`) or pass `r` itself.
-2. **Body side effects that must re-run per visit** — the welcome modal
-   (`step1_server.R:30-46`), `shiny.i18n::update_lang` + `updateSelectInput`
+2. **Body side effects that must re-run per visit** — `shiny.i18n::update_lang` + `updateSelectInput`
    (`step5_server.R:39-40`), `shinyjs::reset` of confirm buttons, map re-initialisation. Extract
    into an `enter()` closure returned by each module: `stepN_server()` returns
    `list(..., enter = function() ...)`, called by `vftGoToStep()`. **This is the most important
@@ -469,7 +469,7 @@ Four things the singleton breaks, and the fix for each:
 1→5→1→5→newVersions→5 must leave **every module at exactly 1**. That is the acceptance test and
 it needs no new instrumentation.
 
-### As built (2026-08-25/26) — mechanism complete, 4 of 7 modules converted
+### As built (2026-08-25/26) — mechanism complete, 5 of 7 modules converted
 
 **The mechanism is `R/modules.R`** and it is done: `vftModuleOnce()`, `vftModuleHandle()`,
 `vftModuleEnter()`, plus one call in `vftGoToStep()` right after the visit counter is bumped.
@@ -486,9 +486,9 @@ independent of each other.
 | step4 | 1305 | **converted** — `enter()` snapshots the reactives into locals of the same names, so the body is untouched; also destroys the previous visit's five map-interaction observers |
 | step2 | 2205 | **converted** — the perimeter, its three projections, the basemap and the species scan are one snapshot `enter()` refills only when the shape changed; the twelve-observer teardown lists are gone |
 | step5 | 2384 | **converted** — snapshot inputs like step 4; `enter()` also empties `#placeholder_step5` and destroys the previous visit's per-version observers before re-inserting the cards |
+| step1 | 1217 | **converted** — out of turn, because the user asked for the return. `enter()` puts the perimeter in force back on the map, clears the drawing state and the step's own answer; the welcome modal stays where it was, in the body, and so greets nobody twice |
 | newVersions | 3904 | not yet |
 | lastStep | 441 | not yet |
-| step1 | 1217 | not yet |
 
 **Four things learned converting the first two:**
 
@@ -616,16 +616,53 @@ commented out at what is now `step5_server.R:2193`. `r$confirm` is only ever a b
 so `app_server`'s step5 → finalStep branch has always been unreachable. Left alone: it is Stage 6's
 question, and the nav bar reaches `finalStep` anyway.
 
+### step 1, converted 2026-08-26 — what was specific to it
+
+Asked for directly: *"Make it possible to also go back to step 1. Like other steps now, going back
+to step 1 should not change anything, and the current shape outline should be shown. Only
+finalizing a new outline in step 1 should replace the old one."* Taken out of the conversion order
+for that reason. Four things are step 1's own:
+
+* **It is the only module built at session start.** Its observer is `ignoreNULL = FALSE`, so it
+  fires before any counter moves — "first touch" for step 1 is the page opening, not a navigation.
+  Consequences: the module store is not empty at t=0 (it holds `step1` and nothing else, which is
+  still the whole of "not eager"), `vftStepEntered()` keeps its special case, and the nav bar's
+  step-1 button — which had been dark since the first flush, because step 1 was *entered* and
+  unconverted — lights up.
+* **Its `confirm` is a constant, not a click count.** Every other step answers with a rising button
+  count, so each confirmation invalidates by itself. Step 1 answers `1` (or `-1` for a loaded save
+  file), and `reactiveValues` dedupe: writing 1 over a 1 wakes nobody, and the second confirmation
+  of the session would do nothing at all. Cleared in two places, and both are needed —
+  `enter()` for "left and came back", `reportConfirm()` for "cancelled the discard modal and
+  pressed again without leaving". The `once = TRUE` on app_server's confirm observer had to go with
+  the rebuild it existed for.
+* **The map has to draw the outline that is in force.** The render asked `r1$shape`, the *uploaded
+  file* — a perimeter the user drew lives in `r1$finalShape` and never in `r1$shape` — so a return
+  visit after a drawing showed an empty map of Switzerland with the area silently still in effect.
+  It reads `finalShape` first now, fully isolated: the output is suspended while the tab is hidden
+  and re-executes when it is shown, which is what redraws it, and `enter()` also pushes it through
+  `leafletProxy` so it is there without waiting for a client round trip.
+* **"Only finalising a new outline replaces the old one" is a flag, not a comparison.**
+  `r1$isNewShape` is set at the three places an outline can be made (upload, coordinates, a polygon
+  closed on the map) and cleared by `enter()`. Without it the drawing branch re-combines and
+  re-buffers the perimeter on the way out, producing a `shapeLarger` equal to the stored one but
+  not `identical()` to it — so every re-confirmation of an unchanged area would have offered to
+  throw the whole walk away. With it, `reconfirmUnchanged()` hands the same two objects straight
+  back and `vftCommit()` finds nothing changed.
+
+Test: `step1_return.R` (44 assertions), which drives the real `step1_server` under `testServer` —
+including drawing a triangle through `areaSelectMap_click` and closing it on the first vertex, which
+is the whole "a new outline DOES replace" path — plus a control on the dedupe itself.
+
 ### Next session — start here
 
-**State:** Stage 4 is committed (`3ecb590`) and the first Stage 5 increment as `2e288dc`. The step 2
-and step 5 conversions are uncommitted, as is the move of invalidation from navigation onto the
-write: modified `PLAN.md`, `R/app_server.R`, `R/modules.R`, `R/navigation.R`, `R/providers.R`,
-`R/step2_server.R`, `R/step4_server.R`, `R/step5_server.R`, `R/steps.R`. 524 assertions green
-across 23 suites in the
-session scratchpad (the 24th, `stage3_nocontext_unfixed.R`, is the negative control and must fail);
-the package installs clean to a temp library and `testServer(app_server)` boots with an empty
-module store.
+**State:** Stage 4 is committed (`3ecb590`), the first Stage 5 increment as `2e288dc`, and the
+step 2 / step 5 conversions with the move of invalidation onto the write as `784bb5a`. The **step 1
+conversion is uncommitted**: modified `PLAN.md`, `R/app_server.R`, `R/navigation.R`,
+`R/step1_server.R`, `R/steps.R`. 568 assertions green across 24 suites in the session scratchpad
+(the 25th, `stage3_nocontext_unfixed.R`, is the negative control and must fail); the package
+installs clean to a temp library and `testServer(app_server)` boots with `step1` — and only
+`step1` — in the module store.
 
 **Live test wanted for the commit change** (`commit_on_create.R` covers the layer, not the
 modules): 5 → 2 → confirm → 3 must leave the scenarios alone and leave step 5 offered; confirming a
@@ -650,13 +687,19 @@ handler. **Verified to fail** when the teardown is removed from `enter()`.
 appears on the return, and the simulation can still be launched after two round trips (it used to be
 destroyed by the *go to new versions* handler).
 
+**Live test wanted for step 1:** confirm an area, walk on to step 3 or 5, then take the nav bar back
+to step 1 — the map must show the area that is in force (drawn areas included, which is the case
+that was broken) and the welcome dialog must not reappear; pressing "Bestätigen" through must go on
+to step 2 with **no** discard modal and nothing lost; drawing a new area and confirming it **must**
+raise the modal naming everything downstream, and Cancel there must leave the walk intact and the
+button still working when pressed again.
+
 **Then, one module per increment, in this order:**
 
 | next | lines | what it needs beyond the standard four steps |
 |---|---|---|
-| newVersions | 3904 | same `placeholder_step5` handling as step 5; shares step5's rank in `VFT_STEP_RANK`, so step5 ↔ newVersions is a side trip, not a back-step. Converting it closes the last rebuild on the busiest path in the app |
+| newVersions | 3904 | same `placeholder_step5` handling as step 5; shares step5's rank in `VFT_STEP_RANK`, so step5 ↔ newVersions is a side trip, not a back-step. Converting it closes the last rebuild on the busiest path in the app. **It also needs `vftMirror()`** — it writes results into the app's `r` from its own exit handlers, which is the step-5 defect exactly |
 | lastStep | 441 | small |
-| step1 | 1217 | the welcome modal (`step1_server.R:30-46`) is a per-visit side effect |
 
 The standard four steps per module: reactive (or snapshot) inputs → an `enter()` built with
 `vftModuleEnterFn()` → remove the `$destroy()` lists and the app-level `once = TRUE` → add the name

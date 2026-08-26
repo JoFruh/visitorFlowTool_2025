@@ -245,14 +245,35 @@ app_server <- function(input, output, session){
   #ignoreInit = FALSE: this one fires once at session start to build step 1,
   #which is the tab the page already opens on - so no navigation happens and
   #r$step stays unset until step 1 is confirmed. Later visits arrive through
-  #vftGoToStep(r, "step1", session).
+  #vftGoToStep(r, "step1", session), which bumps the counter and re-runs this
+  #observer - and finds the module already built.
   shiny::observeEvent(vftStepTrigger(session, "step1"), {
     vftDbg("BUILD STEP 1")
-    step1return <- vftTime("module:step1", step1_server("step1", i18n = shiny::reactive(i18n)))#, lang = reactive(input$lang_pick)
+
+    #FIRST-TOUCH SINGLETON (Stage 5). Step 1 is the one step whose module is
+    #built at SESSION START rather than by a navigation, so "first touch" here is
+    #the page opening; every later visit reuses it and runs its enter().
+    #
+    #`shape` and `shapeLarger` are passed in because a converted module has to be
+    #able to put the state that is in force back on screen: coming back to step 1
+    #shows the perimeter the app currently holds. They are REACTIVES - a plain
+    #value would be frozen for the life of the session, and this module is no
+    #longer rebuilt to unfreeze it.
+    vftModuleOnce(session, "step1", function(){
+    step1return <- vftTime("module:step1", step1_server("step1",
+                                i18n        = shiny::reactive(i18n),
+                                shape       = shiny::reactive(r$shape),
+                                shapeLarger = shiny::reactive(r$shapeLarger)))#, lang = reactive(input$lang_pick)
 
 
     #REACTIVES
 
+    #`once = TRUE` is gone with the rebuild it existed for: it stopped a REBUILT
+    #module's handlers stacking on the live ones, and there is now exactly one of
+    #each per session. Leaving it on would mean step 1 could be confirmed once
+    #and never left again - which is the whole of what returning to it is for.
+    #See also enter(), which clears r1$confirm so the second confirmation is not
+    #deduped into silence.
     shiny::observeEvent( step1return$confirm(), {
       # isolate({
       #   shinyjs::runjs("Shiny.onInputChange('step1-confirmButton1', 0);")
@@ -283,10 +304,12 @@ app_server <- function(input, output, session){
 
         #A new perimeter is the most expensive write in the app: everything
         #further on was cut from it. vftCommit() names what that costs and asks
-        #before doing it - which today it never has to, because step 1 cannot be
-        #returned to (it is not in VFT_REENTRANT_STEPS), so nothing downstream
-        #exists the first and only time this runs. It is written this way so that
-        #converting step 1 in Stage 5 does not also have to remember this.
+        #before doing it - which, now that step 1 can be returned to, it does:
+        #this is the one confirm in the app whose modal can name the entire rest
+        #of the walk. And it asks ONLY for a new outline. Come back to step 1 to
+        #look at the area, press on through, and step1_server hands the same two
+        #objects straight back; vftCommit() finds nothing changed and nothing is
+        #discarded. See reconfirmUnchanged() in R/step1_server.R.
         #
         #shapeLarger: the 1 km buffered perimeter every crop and the path query
         #are cut against. step 1 computes it because the shapefile and drawing
@@ -409,7 +432,10 @@ app_server <- function(input, output, session){
           vftGoToStep(r, "step5", session)
         }
       }
-    }, ignoreInit = TRUE, once = TRUE)
+    }, ignoreInit = TRUE)
+
+    step1return
+    })
   }, ignoreInit = FALSE, ignoreNULL = FALSE)
   #
   #
