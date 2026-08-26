@@ -17,11 +17,44 @@
 #' @param weightInputs,weightNames the per-species weight fields, for the same
 #'   reason: the block writes them back with `1:length(weightInputs)`, which is
 #'   `c(1, 0)` when that is NULL.
-step2_server <- function(id, fshape, i18n, currentLang, needHelp = TRUE,
-                         filterList = NULL, checkboxSave = NULL,
-                         groupSave_all = NULL, groupSave_sens = NULL,
-                         groupSave_type = NULL, groupSave_class = NULL,
-                         weightInputs = NULL, weightNames = NULL){
+#'
+#' CONVERTED TO A FIRST-TOUCH SINGLETON (Stage 5, third module). Built on the
+#' first visit and reused on every later one; vftGoToStep() calls the enter()
+#' closure at the bottom of this file instead of calling this function again.
+#' Three things follow, and they are the whole shape of the change:
+#'
+#'   * every parameter is a REACTIVE. A value captured at construction is frozen
+#'     for the life of the session, and nothing rebuilds this module to unfreeze
+#'     it - so a perimeter frozen on the first visit would still be the one the
+#'     species list was cut against after the user went back and redrew it.
+#'   * the perimeter and everything derived from it - the three projections, the
+#'     basemap, and the 30-second async species scan - are SNAPSHOTS held in
+#'     locals that enter() refills with `<<-`, so the 2000 lines below still read
+#'     plain values and are untouched. They are recomputed only when the shape
+#'     has actually CHANGED, not once per visit: get_tiles() is a main-thread
+#'     download and the species scan is the most expensive thing in the app.
+#'   * what is per-visit rather than per-session - the banner, the language, the
+#'     confirm answer, the three ignore switches - is in enter().
+#'
+#' The six save-state parameters (checkboxSave, the three groupSaves, the two
+#' weight lists) are read ONCE, at construction, and deliberately not refreshed
+#' by enter(): they exist to restore a confirmed selection into empty
+#' checkboxes, and on a return visit the checkboxes still hold that selection
+#' live. Re-arming them would let the delayed restore block hijack the user's
+#' next filter change and put the old selection back. The restore-from-file path
+#' populates `r` before step 2 is ever built (app_server.R), so it still gets
+#' them.
+step2_server <- function(id, fshape, i18n,
+                         currentLang = shiny::reactive("de"),
+                         needHelp = shiny::reactive(TRUE),
+                         filterList = shiny::reactive(NULL),
+                         checkboxSave = shiny::reactive(NULL),
+                         groupSave_all = shiny::reactive(NULL),
+                         groupSave_sens = shiny::reactive(NULL),
+                         groupSave_type = shiny::reactive(NULL),
+                         groupSave_class = shiny::reactive(NULL),
+                         weightInputs = shiny::reactive(NULL),
+                         weightNames = shiny::reactive(NULL)){
 
   #count this instantiation. A module server should be created once per
   #session; this app re-calls it from an observeEvent on a trigger, so any
@@ -33,16 +66,7 @@ step2_server <- function(id, fshape, i18n, currentLang, needHelp = TRUE,
   shiny::moduleServer(id, function(input, output, session) {
 
 
-    #render banner image from start
-    if(currentLang == "de"){
-      vftSetBanner(id, "www/step2_wsl.png")
-    }else if(currentLang == "fr"){
-      vftSetBanner(id, "www/step2_wsl_fr.png")
-    }else if(currentLang == "en"){
-      vftSetBanner(id, "www/step2_wsl_en.png")
-    }
-
-
+    #the banner and the language bar are per-VISIT, so they live in enter() now.
 
     #prepare promises and futures
     # future::plan(future::multicore, workers = 1)
@@ -50,24 +74,28 @@ step2_server <- function(id, fshape, i18n, currentLang, needHelp = TRUE,
     r <- shiny::reactiveValues()
 
     r$df_spInfo <- NULL #df_spInfo_old
-    r$needHelp <- needHelp
-    r$filterList <- filterList
-    r$checkboxSave <- checkboxSave
-    r$currentLang <- currentLang
 
-    #the rest of the confirmed selection, restored alongside checkboxSave. All
-    #six travel together: the delayed restore block below is switched on by
-    #checkboxSave and reads every one of them.
-    r$groupSave_all   <- groupSave_all
-    r$groupSave_sens  <- groupSave_sens
-    r$groupSave_type  <- groupSave_type
-    r$groupSave_class <- groupSave_class
-    r$weightInputs    <- weightInputs
-    r$weightNames     <- weightNames
+    #The confirmed selection as it was last saved. Read once, here, and NOT
+    #refreshed by enter() - see the note on this function. isolate() because this
+    #body runs inside the step's build observer: a bare read would make that
+    #observer depend on six values app_server writes at the moment step 2
+    #confirms, and re-fire it.
+    shiny::isolate({
+      r$needHelp     <- needHelp()
+      r$filterList   <- filterList()
+      r$checkboxSave <- checkboxSave()
+      r$currentLang  <- currentLang()
 
-    shiny.i18n::update_lang(r$currentLang)
-    shiny::updateSelectInput(inputId = "languageSelect_2", selected = currentLang)
-
+      #the rest of the confirmed selection, restored alongside checkboxSave. All
+      #six travel together: the delayed restore block below is switched on by
+      #checkboxSave and reads every one of them.
+      r$groupSave_all   <- groupSave_all()
+      r$groupSave_sens  <- groupSave_sens()
+      r$groupSave_type  <- groupSave_type()
+      r$groupSave_class <- groupSave_class()
+      r$weightInputs    <- weightInputs()
+      r$weightNames     <- weightNames()
+    })
 
     #no need to save next to reactive values
     r$spChc <- NULL
@@ -79,23 +107,38 @@ step2_server <- function(id, fshape, i18n, currentLang, needHelp = TRUE,
     #INITIALIZE VARIABLES ####
     SMUpdate <- shiny::reactiveVal(0)
     triggerUpdate <- shiny::reactiveVal()
+    #bumped by enter(): the map is drawn from plain locals (the perimeter, the
+    #basemap), so a return visit has nothing reactive to re-render it.
+    mapRedraw <- shiny::reactiveVal(0)
     SM <- NULL
     r$SMcolors <- NULL
     r$SM_pres <- NULL
     toSelectSpAfter <- FALSE
-    shp <- sf::st_transform(fshape, 2056)
-    shp_otherWGS <- sf::st_transform(fshape, 3395)
-    shp_WGS84 <- sf::st_transform(fshape, 4326)
-    shapeBB <- sf::st_bbox(shp)
+
+    #THE PERIMETER SNAPSHOT. These seven were computed here, at construction,
+    #from a perimeter frozen at the same moment. They are filled by enter()
+    #instead - with `<<-`, into locals of the same names - so every read of them
+    #further down is unchanged and still sees a plain value, which is what a
+    #visit wants: a fixed area, changing only BETWEEN visits.
+    #
+    #NOTHING above enter() may read them: at this point in the body they are all
+    #NULL, and enter() is called at the very bottom.
+    shp <- NULL
+    shp_otherWGS <- NULL
+    shp_WGS84 <- NULL
+    shapeBB <- NULL
+    basemap <- NULL
+    basemapWhite <- NULL
+    alphaMap <- NULL
+
+    #What the snapshot was last taken for. Held outside `r` so that nothing takes
+    #a reactive dependency on "which shape did we cache". get_tiles() is a
+    #main-thread download and the species scan below is a ~30s future, so both
+    #must run when the perimeter CHANGES - not once per visit.
+    cache <- new.env(parent = emptyenv())
+    cache$shape <- NULL
 
     obsWeights <- NULL
-    basemap <- maptiles::get_tiles(shp_WGS84, provider = "OpenStreetMap", cachedir = vft_tileCacheDir)
-    basemap <- terra::crop(basemap, shp_WGS84)
-    basemap <- terra::subset(basemap, 1)
-    basemapWhite <- basemap
-    basemapWhite[basemapWhite < 255] <- 255
-    #convert basemap to have white as transparency
-    alphaMap <- terra::app(basemap, function(x) (abs(x - 255)) / 255 )
 
     # basemap2 <- c(subset(basemap, 1:3), alphaMap)
 
@@ -252,6 +295,24 @@ step2_server <- function(id, fshape, i18n, currentLang, needHelp = TRUE,
       .GlobalEnv$.vft_speciesData <- utils::read.csv2(vftData("tables/speciesInformation_SDMapsCH.csv"))
     }
     speciesData <- .GlobalEnv$.vft_speciesData
+
+    #Which of `choices` one filter value keeps. Lifted out of obsFilter so the
+    #species scan can apply the filter itself: after a re-scan the select input
+    #is already at "s8", so nothing changes it and obsFilter does not run. Both
+    #callers must produce the same list, hence one copy of the switch.
+    filterSpChoices <- function(filter, choices){
+      if(is.null(filter) || is.null(choices)) return(NULL)
+      switch(filter,
+             "s1" = choices,
+             "s2" = choices[choices %in% speciesData$latinN[speciesData$ch.priority %in% c("1")] ],
+             "s3" = choices[choices %in% speciesData$latinN[speciesData$ch.priority %in% c("1", "2")] ],
+             "s4" = choices[choices %in% speciesData$latinN[speciesData$ch.priority %in% c("1", "2", "3")] ],
+             "s5" = choices[choices %in% speciesData$latinN[speciesData$ch.priority %in% c("1", "2", "3", "4")] ],
+             "s6" = choices[choices %in% speciesData$latinN[speciesData$threat %in% c("CR")] ],
+             "s7" = choices[choices %in% speciesData$latinN[speciesData$threat %in% c("CR", "EN")] ],
+             "s8" = choices[choices %in% speciesData$latinN[speciesData$threat %in% c("CR", "EN", "VU")] ],
+             "s9" = choices[choices %in% speciesData$latinN[speciesData$threat %in% c("CR", "EN", "VU", "NT")] ],)
+    }
 
 
 
@@ -486,6 +547,19 @@ step2_server <- function(id, fshape, i18n, currentLang, needHelp = TRUE,
 
     # NEW METHOD ##
 
+    #The species scan, wrapped in a function so that enter() can run it again
+    #when - and only when - the perimeter changes. It used to be a bare
+    #`observeEvent(NULL, ..., once = TRUE)` at construction, which is exactly
+    #right for a module built once per visit and wrong for one built once per
+    #session: a user who went back to step 1, redrew the area and returned would
+    #have been choosing species for the area they had just replaced.
+    #
+    #Still a deferred one-shot observer rather than a direct call: `priority =
+    #12` with `ignoreNULL = FALSE` means it runs on the next flush, after the
+    #body has finished registering its outputs, and `once = TRUE` on an observer
+    #created per perimeter is a genuine one-shot rather than the app-level flag
+    #Stage 5 had to remove.
+    loadSpeciesData <- function(){
     shiny::observeEvent(NULL, {
 
         vftDbgCat(paste0("PROMISE ABOUT TO START" ) )
@@ -568,6 +642,16 @@ step2_server <- function(id, fshape, i18n, currentLang, needHelp = TRUE,
 
           r3$speciesOrder <- r$spChc
 
+          #Apply the filter to the new species list HERE as well as through the
+          #updateSelectInput() below, because on a SECOND scan the two are not
+          #the same thing. r3$spChoices is written in exactly one place -
+          #obsFilter, on a CHANGE to input$filterList - and after the first scan
+          #the select already sits at "s8", so setting it to "s8" again sends no
+          #change and obsFilter never runs. The species list would then still be
+          #the previous perimeter's.
+          filterNow <- shiny::isolate(input$filterList)
+          if(is.null(filterNow)) filterNow <- "s8"
+          r3$spChoices <- filterSpChoices(filterNow, r$spChc)
 
           #try to update checkboxes
           #default: VU-CR red list with all species selected
@@ -578,6 +662,7 @@ step2_server <- function(id, fshape, i18n, currentLang, needHelp = TRUE,
       })%...!%(vftAsyncError(progress, "Species data", NULL))
 
     }, once = TRUE, ignoreInit = FALSE, ignoreNULL = FALSE, priority = 12)
+    }
 
     ## END OF NEW METHOD ###
 
@@ -1109,6 +1194,19 @@ vftDbgCat(paste0("r3$spChoices = ", r3$spChoices ) )
     }, ignoreInit = TRUE)
 
     #observe banner click (choosing to step back in history)
+    #
+    #NOTE ON THE MISSING $destroy() LIST AND THE MISSING return().
+    #
+    #This handler, obsConfirm and obsSelectAfter each used to tear down all
+    #thirteen observers in this module and then return a handle. Neither did what
+    #it looks like: the return value of an observeEvent HANDLER goes nowhere -
+    #the module's handle is the one built at the bottom of this function - and
+    #the teardown existed only because a re-entered step 2 used to build a SECOND
+    #set of these observers on top of the live ones. There is one set now, for
+    #the life of the session, so destroying it would mean step 2 could be
+    #confirmed once and then never used again. (The three lists were not even the
+    #same: obsSelectAfter's `obsWeights$destroy()` had no is.null() guard and
+    #errored whenever no species had ever been weighted.)
     obsBanner <- observeEvent(input$banner,  {
       vftDbg("MAPPED IMAGE CLICKED")
       #determine where to go back in history
@@ -1116,26 +1214,6 @@ vftDbgCat(paste0("r3$spChoices = ", r3$spChoices ) )
       # print(input$banner)
       # shinyjs::runjs("Shiny.onInputChange('step2-banner', 'O')")
       # print(input$banner)
-
-      #cleanup
-      obsPrWeights$destroy()
-      obsRWeights$destroy()
-      obsReset$destroy()
-      obsFilter$destroy()
-      obsSpCheck$destroy()
-      obsGroupCheck$destroy()
-      obsGrpTr$destroy()
-      obsTrgReset$destroy()
-      obsBanner$destroy()
-      obsSpChoice$destroy()
-      if(!is.null(obsWeights)){obsWeights$destroy()}
-      obsSelectAfter$destroy()
-      obsConfirm$destroy()
-
-      return(list(SM_pres = shiny::reactive(r$SM_pres), SMcolors = shiny::reactive(r$SMcolors), toSelectSpAfter = shiny::reactive(toSelectSpAfter), confirm = shiny::reactive({r3$confirm}), needHelp = reactive({r$needHelp})),
-             currentLang = shiny::reactive(i18n()$get_translation_language()))
-
-      #trigger return to past (return with specific confirm value?)
     }, ignoreInit = TRUE)
 
 
@@ -1811,16 +1889,7 @@ vftDbg("CHOSEN")
       vftDbgCat(paste0("input$filterList = ", input$filterList) )
 
 
-      r3$spChoices <- switch(input$filterList,
-                            "s1" = r$spChc,
-                            "s2" = r$spChc[r$spChc %in% speciesData$latinN[speciesData$ch.priority %in% c("1")] ],
-                            "s3" = r$spChc[r$spChc %in% speciesData$latinN[speciesData$ch.priority %in% c("1", "2")] ],
-                            "s4" = r$spChc[r$spChc %in% speciesData$latinN[speciesData$ch.priority %in% c("1", "2", "3")] ],
-                            "s5" = r$spChc[r$spChc %in% speciesData$latinN[speciesData$ch.priority %in% c("1", "2", "3", "4")] ],
-                            "s6" = r$spChc[r$spChc %in% speciesData$latinN[speciesData$threat %in% c("CR")] ],
-                            "s7" = r$spChc[r$spChc %in% speciesData$latinN[speciesData$threat %in% c("CR", "EN")] ],
-                            "s8" = r$spChc[r$spChc %in% speciesData$latinN[speciesData$threat %in% c("CR", "EN", "VU")] ],
-                            "s9" = r$spChc[r$spChc %in% speciesData$latinN[speciesData$threat %in% c("CR", "EN", "VU", "NT")] ],)
+      r3$spChoices <- filterSpChoices(input$filterList, r$spChc)
 
  
 
@@ -1984,6 +2053,13 @@ vftDbg("CHOSEN")
     vftDbgCat(paste0("RenderMap" ) )
 
     output$SDMmap <- shiny::renderPlot({
+      #The perimeter and the basemap are plain locals that enter() refills, so
+      #nothing here would notice a new area on its own. mapRedraw is the nudge,
+      #and req() covers the window before the first enter() has run - or a visit
+      #with no perimeter at all, where terra::vect(NULL) would abort the output.
+      mapRedraw()
+      shiny::req(shp_WGS84, basemapWhite, basemap)
+
       #calculate extent of legend based on plot extent
       plotExt <- terra::ext(terra::vect(shp_WGS84))
       left <- plotExt[1]
@@ -2069,25 +2145,18 @@ shiny::isolate({
 
 
     obsConfirm <- shiny::observeEvent(input$confirmButton2, {
+      #app_server resets this button on the way out (shinyjs::reset), and that
+      #write is itself a change, so this observer fires a second time with 0. It
+      #used to be invisible because the observer had already destroyed itself by
+      #then; now the zero would be passed on as r3$confirm and reach app_server's
+      #handler as a confirm that is not one.
+      if(is.null(input$confirmButton2) || input$confirmButton2 == 0)
+        return(invisible(NULL))
 
       r3$ignoreCheckboxEffect <- FALSE
 
       vftDbg("CONFIRM STEP 3")
       r3$confirm <- input$confirmButton2
-      #cleanup
-      obsPrWeights$destroy()
-      obsRWeights$destroy()
-      obsReset$destroy()
-      obsFilter$destroy()
-      obsSpCheck$destroy()
-      obsGroupCheck$destroy()
-      obsGrpTr$destroy()
-      obsTrgReset$destroy()
-      obsBanner$destroy()
-      obsSpChoice$destroy()
-      if(!is.null(obsWeights)){obsWeights$destroy()}
-      obsSelectAfter$destroy()
-      obsConfirm$destroy()
 
       # shinyjs::reset("confirmButton2")
       # return(list(SM = reactive(SM), toSelectSpAfter = reactive(toSelectSpAfter), confirm = reactive({input$confirmButton2})) )
@@ -2095,7 +2164,26 @@ shiny::isolate({
       # shinyjs::useShinyjs()
 
       #SAVE spKept, sdmLayers and Filter state
-      r$checkboxSave <- input$speciesCheckbox
+      #
+      #r3$checkboxOut, NOT r$checkboxSave. Those are two different things that
+      #used to be the same variable, and conflating them broke the group
+      #checkboxes on every return to this step:
+      #
+      #  r$checkboxSave means "a selection from a save file is still waiting to
+      #  be restored into the UI". obsGrpTr is muted while it is set (`if
+      #  (is.null(r$checkboxSave))`, and obsFilter's delayed block clears it once
+      #  it has restored), because a restore drives the boxes itself and must not
+      #  be fought by the group->species linking.
+      #
+      #  What this line wants is the opposite: "here is the selection the user
+      #  just confirmed", for app_server to store.
+      #
+      #Before Stage 5 the collision was invisible - the module was destroyed on
+      #the way out, so a permanently muted obsGrpTr was never used again. In a
+      #singleton it survives: come back to step 2 and every group box does
+      #nothing, except "Alle", whose observer carries no such guard. Which is
+      #exactly what it looked like.
+      r3$checkboxOut <- input$speciesCheckbox
       r$groupSave_class <- input$groupCheckbox_class
       r$groupSave_sens <- input$groupCheckbox_sens
       r$groupSave_type <- input$groupCheckbox_type
@@ -2120,34 +2208,20 @@ shiny::isolate({
       # return(list(SM_pres = shiny::reactive(r$SM_pres), SMcolors = shiny::reactive(SMcolors), toSelectSpAfter = shiny::reactive(toSelectSpAfter), confirm = shiny::reactive({r3$confirm}), needHelp = reactive({r$needHelp}),
       #             groupSave_all = shiny::reactive(r$groupSave_all), groupSave_sens = shiny::reactive(r$groupSave_sens), groupSave_type = shiny::reactive(r$groupSave_type), groupSave_class = shiny::reactive(r$groupSave_class), checkboxSave = shiny::reactive(r$checkboxSave),
       #             filterList = shiny::reactive(r$filterList), weightInputs = shiny::reactive(r$weightInputs), weightNames = shiny::reactive(r$weightNames)) )
-    return(list(SM_pres = shiny::reactive(r$SM_pres), SMcolors = shiny::reactive(r$SMcolors), toSelectSpAfter = shiny::reactive(toSelectSpAfter), confirm = shiny::reactive({r3$confirm}), needHelp = reactive({r$needHelp}),
-                groupSave_all = shiny::reactive(r$groupSave_all), groupSave_sens = shiny::reactive(r$groupSave_sens), groupSave_type = shiny::reactive(r$groupSave_type), groupSave_class = shiny::reactive(r$groupSave_class), checkboxSave = shiny::reactive(r$checkboxSave),
-                filterList = shiny::reactive(r$filterList), weightInputs = shiny::reactive(r$weightInputs), weightNames = shiny::reactive(r$weightNames), species = shiny::reactive(r$keptSpecies),
-                currentLang = shiny::reactive(i18n()$get_translation_language()), minCutThresh = shiny::reactive(input$minValThreshold) ) )
+    #(the handle this used to return from here went nowhere - see the note on
+    #obsBanner. The module's handle is the one built at the bottom of this
+    #function, and it is the same list.)
     }, ignoreInit = TRUE)
 
     obsSelectAfter <- shiny::observeEvent(input$selectSpAfter, {
+      if(is.null(input$selectSpAfter) || input$selectSpAfter == 0)
+        return(invisible(NULL))
 
       toSelectSpAfter <<- TRUE
 
       SM <<- NULL
 
       r3$confirm <- input$selectSpAfter
-
-      #cleanup
-      obsPrWeights$destroy()
-      obsRWeights$destroy()
-      obsReset$destroy()
-      obsFilter$destroy()
-      obsSpCheck$destroy()
-      obsGroupCheck$destroy()
-      obsGrpTr$destroy()
-      obsTrgReset$destroy()
-      obsBanner$destroy()
-      obsSpChoice$destroy()
-      obsWeights$destroy()
-      obsSelectAfter$destroy()
-      obsConfirm$destroy()
       # return(list(SM = reactive(SM), toSelectSpAfter = reactive(toSelectSpAfter), confirm = reactive({input$selectSpAfter})) )
 
     })
@@ -2163,11 +2237,112 @@ shiny::isolate({
     #Manage SDM data (Make a sensitivity Matrix (SM))
 
 
+    #### enter(): everything that happens per VISIT rather than per session ####
+    #
+    # Called by vftGoToStep() on every return to this step, and once at the end of
+    # construction so that the first visit and the fifth run the same code.
+    #
+    # vftModuleEnterFn() supplies the two properties this body must have and
+    # neither of which is visible in it: the module's own session as the default
+    # reactive domain (or the shinyjs:: and update*Input() calls below silently
+    # address unnamespaced controls that do not exist), and isolate() around the
+    # whole body (or the observers enter() is called from take a dependency on
+    # values enter() itself assigns). See R/modules.R.
+    enter <- vftModuleEnterFn(session, function(){
+      lang <- currentLang()
+      if(is.null(lang)) lang <- "de"
+
+      #banner
+      if(lang == "de"){
+        vftSetBanner(id, "www/step2_wsl.png")
+      }else if(lang == "fr"){
+        vftSetBanner(id, "www/step2_wsl_fr.png")
+      }else if(lang == "en"){
+        vftSetBanner(id, "www/step2_wsl_en.png")
+      }
+
+      #language bar
+      shiny.i18n::update_lang(lang)
+      shiny::updateSelectInput(inputId = "languageSelect_2", selected = lang)
+      r$currentLang <- lang
+      r$needHelp    <- needHelp()
+
+      #This step's answer, cleared so that a return starts from no answer rather
+      #than from the one that brought the user here. NULL and not 0: app_server
+      #watches step2return$confirm() with ignoreNULL, so a 0 would reach it as a
+      #confirm that is not one and be handed to vftGoBack().
+      r3$confirm <- NULL
+
+      #the three switches that mute checkbox side effects while the module drives
+      #the checkboxes itself. Left set by an interrupted update, they silently
+      #disable the whole species selection for the rest of the session.
+      r3$ignoreGroupCheckboxEffect <- FALSE
+      r3$ignoreAllCheckboxEffect   <- FALSE
+      r3$ignoreCheckboxEffect      <- FALSE
+      r3$ignoreNextUpdate          <- FALSE
+
+      #"choose the species later" is answered per visit
+      toSelectSpAfter <<- FALSE
+
+      #THE PERIMETER. Everything below is derived from it and is recomputed only
+      #when it has actually changed - get_tiles() is a main-thread download and
+      #loadSpeciesData() is the ~30s scan of the national SDM stack, so a user
+      #coming back to adjust a weight must pay for neither. An sf perimeter
+      #survives identical() (a terra object would not) and is the same R object
+      #unless step 1 was re-confirmed.
+      shpNow <- fshape()
+      if(!is.null(shpNow) && !identical(cache$shape, shpNow)){
+        cache$shape <- shpNow
+
+        shp          <<- sf::st_transform(shpNow, 2056)
+        shp_otherWGS <<- sf::st_transform(shpNow, 3395)
+        shp_WGS84    <<- sf::st_transform(shpNow, 4326)
+        shapeBB      <<- sf::st_bbox(shp)
+
+        bm <- maptiles::get_tiles(shp_WGS84, provider = "OpenStreetMap",
+                                  cachedir = vft_tileCacheDir)
+        bm <- terra::crop(bm, shp_WGS84)
+        basemap      <<- terra::subset(bm, 1)
+        bmWhite <- basemap
+        bmWhite[bmWhite < 255] <- 255
+        basemapWhite <<- bmWhite
+        #convert basemap to have white as transparency
+        alphaMap     <<- terra::app(basemap, function(x) (abs(x - 255)) / 255 )
+
+        #the bookkeeping that links the group boxes to the species boxes. It
+        #describes a species list that is about to be replaced, and a stale
+        #history silently mis-links the first click on the new one.
+        spCheckHistory       <<- NULL
+        groupCheckboxHistory <<- NULL
+        removedCheck         <<- NULL
+
+        #every one of these describes the perimeter that has just been replaced
+        SM <<- NULL
+        r$SM_pres    <- NULL
+        r$SMcolors   <- NULL
+        r$sdmLayer   <- NULL
+        r$df_spInfo  <- NULL
+        r$spChc      <- NULL
+        r$keptSpecies <- NULL
+        r3$spChoices <- NULL
+        SMUpdate(0)
+
+        loadSpeciesData()
+      }
+
+      #the map is drawn from the locals above, which are not reactive
+      mapRedraw(shiny::isolate(mapRedraw()) + 1L)
+      invisible(NULL)
+    })
+
+    enter()
+
     vftDbgCat("RETURNING...")
     return(list(SM_pres = shiny::reactive(r$SM_pres), SMcolors = shiny::reactive(r$SMcolors), toSelectSpAfter = shiny::reactive(toSelectSpAfter), confirm = shiny::reactive({r3$confirm}), needHelp = reactive({r$needHelp}),
-                groupSave_all = shiny::reactive(r$groupSave_all), groupSave_sens = shiny::reactive(r$groupSave_sens), groupSave_type = shiny::reactive(r$groupSave_type), groupSave_class = shiny::reactive(r$groupSave_class), checkboxSave = shiny::reactive(r$checkboxSave),
+                groupSave_all = shiny::reactive(r$groupSave_all), groupSave_sens = shiny::reactive(r$groupSave_sens), groupSave_type = shiny::reactive(r$groupSave_type), groupSave_class = shiny::reactive(r$groupSave_class), checkboxSave = shiny::reactive(r3$checkboxOut),
                 filterList = shiny::reactive(r$filterList), weightInputs = shiny::reactive(r$weightInputs), weightNames = shiny::reactive(r$weightNames), species = shiny::reactive(r$keptSpecies),
-                currentLang = shiny::reactive(i18n()$get_translation_language()), minCutThresh = shiny::reactive(input$minValThreshold) ) )
+                currentLang = shiny::reactive(i18n()$get_translation_language()), minCutThresh = shiny::reactive(input$minValThreshold),
+                enter = enter) )
   })
 }
 #

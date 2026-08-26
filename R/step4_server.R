@@ -1110,14 +1110,15 @@ step4_server <- function(id, network, minThresh, i18n, currentLang,
           shinyjs::enable("confirmButton4")
           shinyjs::enable("resetButton")
 
+          #The five destroy() calls that used to sit here are gone. They were
+          #there because confirming meant leaving for good and a REBUILT module
+          #would have stacked a second set of map handlers on the live one;
+          #enter() has torn them down on every visit since Stage 5, so this copy
+          #was redundant - and it was actively harmful now that the confirm can
+          #be answered with "cancel": tearing the step down before app_server has
+          #decided whether the write goes ahead would leave a cancelling user on
+          #a frozen map they could neither edit nor confirm again.
           r$confirm <- input$confirmButton4
-
-          #cleanup
-          r$obsConfirm$destroy()
-          r$obsMapClick$destroy()
-          r$obsMarkerClick$destroy()
-          r$obsErase$destroy()
-          r$obsBanner$destroy()
 
           #transfer network and parking back to local variables
           r$newNetwork <- newNetworkParkingFinalP$newNetworkParking$newNetwork
@@ -1305,6 +1306,26 @@ step4_server <- function(id, network, minThresh, i18n, currentLang,
     #if saved polygons exist, do not generate new ones
     .vftStep4Launch <- function(){
     if(is.null(shiny::isolate(r$finalPolygons)) ){
+
+      #Nothing has been CONFIRMED yet - but that does not mean there is nothing
+      #on screen. A user who draws three areas, walks back to re-read step 3 and
+      #returns must find their three areas, not a fresh generation on top of
+      #them: entering a step is not supposed to destroy anything (see
+      #vftCommit() in R/providers.R). So the working set is kept whenever it was
+      #generated for exactly the inputs still in force.
+      #
+      #`aoiKey` is what those inputs are. When step 3 confirms a new threshold
+      #it invalidates finalPolygons AND the key stops matching, so the areas are
+      #regenerated - which is the case the guard must not swallow.
+      aoiKey <- list(minThresh = minThresh, skip = skip, shape = shape)
+      if(!is.null(shiny::isolate(r$polygonsList)) &&
+         identical(cache$aoiKey, aoiKey)){
+        r$startingPolygons <- shiny::isolate(r$polygonsList)
+        plotMap()
+        return(invisible(NULL))
+      }
+      cache$aoiKey <- aoiKey
+
       if(skip == FALSE){
 
         #naturalAreas was always NULL - step 3 set it to NULL and never

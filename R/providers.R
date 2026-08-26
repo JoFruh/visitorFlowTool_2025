@@ -252,11 +252,29 @@ VFT_DERIVED_FROM <- list(
   parking         = c("shape", "finalPolygons"),
   networkList     = c("network", "networkNodes", "finalPolygons", "parking"),
 
-  #step 5 and beyond. THESE are the cross-step edges: a simulation is a function
-  #of the network AND of the sensitivity matrix, and the second dependency is the
-  #one that is invisible at the call site.
-  pathUsage       = c("networkList", "SM_pres", "species", "minCutThresh"),
-  versionsUI      = c("networkList", "SM_pres", "pathUsage"),
+  #step 5 and beyond.
+  #
+  #A simulation is a function of the NETWORK, and of nothing that step 2
+  #produces. This file used to claim otherwise - "a simulation is a function of
+  #the network AND of the sensitivity matrix" - and made `pathUsage` a dependent
+  #of SM_pres, species and minCutThresh, so going back to step 2 threw away every
+  #simulation and every saved version. That claim is not true of this code and
+  #never was: `launchMultiSim()`, `launchSim_v2()`, `generatePopulation()`,
+  #`subsetPopulation()`, `generateAoI2()`, `determineShortestPath()`,
+  #`choosePath()` and `determineAgentCharacteristics()` contain no reference to
+  #any of the three. Every consumer of the sensitivity matrix is a DISPLAY
+  #consumer - a leaflet raster overlay (step5_server.R:702, :1494,
+  #newVersions_server.R:3681), a terra::plot overlay (step5_server.R:1701), the
+  #GeoTIFF export (:322) and the species caption beside it - and each of them
+  #reads the CURRENT value. Change the species set and the overlay is redrawn;
+  #there is no stale mixture to protect against, so there is nothing to discard.
+  #
+  #The edges that DO protect against a mixed result are the ones through
+  #`networkList` and `finalPolygons`: going back to step 1, 3 or 4 still
+  #invalidates the simulations, because those steps really do change what was
+  #simulated.
+  pathUsage       = "networkList",
+  versionsUI      = c("networkList", "pathUsage"),
   shp_PA          = "shape"
 )
 
@@ -392,6 +410,192 @@ vftInvalidate <- function(r, keys, session = shiny::getDefaultReactiveDomain()){
   invisible(dep)
 }
 
+
+
+#### Creating new data is what discards derived data ####
+
+# Until now the trigger was NAVIGATION: vftGoToStep() noticed a backward move,
+# named what was downstream of the step being returned to, and threw it away on
+# confirm. That is the wrong event, and it was wrong in both directions.
+#
+# Too eager: going back to LOOK at a step destroyed results the user had not
+# decided to replace. Step 5 -> step 3 discarded every simulation before the
+# user had touched the threshold slider.
+#
+# Not eager enough: the destruction that actually happens is a WRITE, and a
+# write can be reached without a backward move. Step 5 -> step 2 is free (step 2
+# is display-only downstream), but confirming step 2 walks FORWARD to step 3,
+# and forward moves were never checked - so the user reached step 3, confirmed a
+# new threshold, the areas of interest were regenerated with no warning at all,
+# and the nav bar went on offering step 5 and its now-orphaned scenarios.
+#
+# So the event is the write. vftCommit() is the single door every step's confirm
+# handler puts its results through: it compares them with what `r` already
+# holds, invalidates only what was derived from the keys that ACTUALLY changed,
+# and asks first when that would cost the user something. Re-confirming a step
+# without changing anything is therefore free, and so is walking back through
+# five steps to read them.
+
+#' Which of `values` would actually change `r`.
+#'
+#' `identical()` rather than a per-key comparison: it is total, so a key can be
+#' added to a confirm handler without teaching this function about it. Two
+#' consequences worth knowing:
+#'
+#'   - a freshly computed object of the same content is NOT identical to the old
+#'     one (terra pointers especially), so such a key counts as changed. That
+#'     errs towards invalidating, which is the safe direction.
+#'   - a slider that was moved and moved back IS identical, so returning to a
+#'     step, looking, and confirming it again costs nothing.
+#'
+#' tryCatch because identical() on an external pointer whose object has been
+#' released can raise; an error means "cannot prove it is the same", i.e. changed.
+vftChangedKeys <- function(r, values){
+  keys <- names(values)
+  if(is.null(keys) || !length(keys)) return(character(0))
+  keys[vapply(keys, function(k){
+    old <- shiny::isolate(r[[k]])
+    !isTRUE(tryCatch(identical(old, values[[k]]), error = function(e) FALSE))
+  }, logical(1))]
+}
+
+#' Write a step's results into `r`, discarding what they supersede.
+#'
+#' @param values named list of `r` key -> new value. Everything the step
+#'   produces, whether or not it changed; the comparison is done here.
+#' @param step the step making the write, for the modal's wording only.
+#' @param then run after the write has happened - the navigation, the autosave.
+#'   NOT run if the user cancels, which is the point of it being a callback:
+#'   cancelling has to leave the user on the step they are still working on.
+#' @param onCancel run instead of `then` if the user cancels. Nothing is written
+#'   and nothing is discarded; this is only for putting the step's own buttons
+#'   back the way they were before its confirm handler disabled them.
+#'
+#' @return the keys that changed, invisibly; NULL if a decision is pending.
+vftCommit <- function(r, values, session = shiny::getDefaultReactiveDomain(),
+                      step = NULL, then = NULL, onCancel = NULL){
+  #A key VFT_KEY_SOURCE attributes to this step but that is not in `values` is
+  #either written somewhere else on purpose (step 1's providers derive four of
+  #its six) or forgotten - and a forgotten one is a key that changes without
+  #anything downstream noticing. Only a trace, because only the first case can
+  #be told from the second by reading the call site.
+  if(!is.null(step)){
+    missed <- setdiff(vftStepProduces(step), names(values))
+    if(length(missed))
+      vftDbg(paste0("COMMIT ", step, ": not written here - ",
+                    paste(missed, collapse = ", ")))
+  }
+
+  changed <- vftChangedKeys(r, values)
+
+  if(!length(changed)){
+    vftDbg("COMMIT: nothing changed, nothing discarded")
+    if(is.function(then)) then()
+    return(invisible(character(0)))
+  }
+
+  #Only ask when something the user can point at would be lost. A warning about
+  #results they have not produced yet is a warning they learn to click through.
+  atRisk <- vftInvalidationPreview(r, changed)
+  if(length(atRisk) && !is.null(session)){
+    vftAskCommit(r, values, changed, atRisk, session, step, then, onCancel)
+    return(invisible(NULL))
+  }
+
+  vftApplyCommit(r, values, changed, session, then)
+}
+
+#' The write itself, once it is allowed to happen.
+#'
+#' Invalidate BEFORE writing: VFT_INVALIDATE_HOOKS reach sideways - the
+#' `pathUsage` hook strips the simulation out of every element of r$networkList -
+#' and step 4 commits a new networkList in the same call. Clearing first means
+#' the hook works on the list it was meant for, and the new value lands on top.
+#'
+#' Every key in `values` is written, not only the changed ones: a key that did
+#' not change may still have been cleared as a dependent of one that did (step
+#' 4's `parking` is derived from its `finalPolygons`), and it has to come back.
+vftApplyCommit <- function(r, values, changed,
+                           session = shiny::getDefaultReactiveDomain(),
+                           then = NULL){
+  vftInvalidate(r, changed, session)
+  for(k in names(values)) r[[k]] <- values[[k]]
+
+  vftDbg(paste0("COMMIT ", paste(changed, collapse = ", ")))
+  if(is.function(then)) then()
+  invisible(changed)
+}
+
+#' Ask before a write that costs the user results.
+#'
+#' The pending decision is parked in `session$userData`, NOT closed over by a
+#' fresh pair of observers per modal. Per-modal observers were the old shape of
+#' this and they are a trap: a cancelled one stays armed, so the NEXT modal's OK
+#' click runs the PREVIOUS modal's closure and writes values the user has since
+#' abandoned. One pair of observers per session, one slot, and cancel empties it.
+vftAskCommit <- function(r, values, changed, atRisk,
+                         session = shiny::getDefaultReactiveDomain(),
+                         step = NULL, then = NULL, onCancel = NULL){
+  session$userData$vftCommitPending <-
+    list(r = r, values = values, changed = changed, then = then, onCancel = onCancel)
+
+  what <- if(!is.null(step) && !is.null(VFT_STEPS[[step]]))
+            paste0(" in Schritt '", VFT_STEPS[[step]]$label, "'") else ""
+
+  shiny::showModal(shiny::modalDialog(
+    title = "Neue Daten uebernehmen?",
+    shiny::tags$p(paste0(
+      "Sie erstellen damit neue Daten", what,
+      ". Die folgenden Ergebnisse bauen darauf auf und werden verworfen:")),
+    shiny::tags$ul(lapply(atRisk, shiny::tags$li)),
+    shiny::tags$p(paste0(
+      "Abbrechen laesst alles unveraendert - fruehere Schritte koennen Sie ",
+      "jederzeit ansehen, ohne etwas zu verlieren.")),
+    footer = shiny::tagList(
+      shiny::actionButton("vftInvalidateCancel", "Abbrechen"),
+      shiny::actionButton("vftInvalidateOk", "Neu erstellen und verwerfen",
+                          class = "btn-danger")
+    ),
+    easyClose = FALSE
+  ), session = session)
+
+  invisible(NULL)
+}
+
+#' Wire the two modal buttons. Called once from `app_server()`.
+#'
+#' The `v == 0` guard is what makes one pair of observers safe across many
+#' modals: re-showing a modal re-renders the actionButton, and a re-rendered
+#' actionButton reports 0 - a CHANGE, which observeEvent would otherwise treat
+#' as a click on the button that has just appeared.
+vftCommitServer <- function(r, session = shiny::getDefaultReactiveDomain()){
+  take <- function(){
+    p <- session$userData$vftCommitPending
+    session$userData$vftCommitPending <- NULL
+    p
+  }
+
+  shiny::observeEvent(session$input$vftInvalidateOk, {
+    v <- session$input$vftInvalidateOk
+    if(is.null(v) || v == 0) return(invisible(NULL))
+    p <- take()
+    shiny::removeModal(session = session)
+    if(is.null(p)) return(invisible(NULL))
+    vftApplyCommit(p$r, p$values, p$changed, session, p$then)
+  }, ignoreInit = TRUE)
+
+  shiny::observeEvent(session$input$vftInvalidateCancel, {
+    v <- session$input$vftInvalidateCancel
+    if(is.null(v) || v == 0) return(invisible(NULL))
+    p <- take()
+    shiny::removeModal(session = session)
+    if(is.null(p)) return(invisible(NULL))
+    vftDbg("COMMIT CANCELLED - nothing written, nothing discarded")
+    if(is.function(p$onCancel)) try(p$onCancel(), silent = TRUE)
+  }, ignoreInit = TRUE)
+
+  invisible(NULL)
+}
 
 #### Per-session provider state ####
 

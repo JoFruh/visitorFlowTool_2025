@@ -135,3 +135,48 @@ vftModuleEnterFn <- function(session, body){
   force(session); force(body)
   function() shiny::withReactiveDomain(session, shiny::isolate(body()))
 }
+
+
+#' Publish a converted module's output into the app-level `r`, continuously.
+#'
+#' A module that produces results holds them in its own `reactiveValues` and
+#' hands them out as reactives. Getting them into `r` used to be the job of the
+#' handler on whichever button the user pressed to leave - which is fine while
+#' the module is rebuilt from `r` on the next visit, and silently lossy once it
+#' is a singleton that re-reads `r` in `enter()`:
+#'
+#'   run a simulation in step 5, leave by the NAV BAR rather than by one of the
+#'   two buttons that had a handler, come back - and `enter()` refreshes the
+#'   module's networkList from an `r` that never heard about the simulation.
+#'
+#' So the results are published as they are produced and every exit keeps them.
+#' Deliberately a plain write and not `vftCommit()`: this is the module
+#' reporting what it just made, not a step superseding an earlier answer. What
+#' the module's output supersedes is settled upstream, where the user confirms
+#' step 3 or step 4.
+#'
+#' Two guards, both load-bearing:
+#'
+#'   * an empty result is not a result. Several of these reactives read `NULL` or
+#'     `list()` before the module has anything, and publishing that would erase
+#'     what `r` already holds. (This is the `length(...) > 0` test the old exit
+#'     handlers carried, kept.)
+#'   * `identical()`, because `enter()` writes `r`'s own value INTO the module on
+#'     every visit. Without it each entry would push that value straight back and
+#'     invalidate every reader of the key - the nav bar, the provider layer - for
+#'     no change at all.
+#'
+#' @param r the app-level `reactiveValues`.
+#' @param key the name to publish under.
+#' @param get the module's reactive, passed unevaluated as a function.
+vftMirror <- function(r, key, get){
+  force(r); force(key); force(get)
+  shiny::observe({
+    val <- get()
+    if(is.null(val)) return(invisible(NULL))
+    if((is.list(val) || is.character(val)) && length(val) == 0) return(invisible(NULL))
+    if(identical(shiny::isolate(r[[key]]), val)) return(invisible(NULL))
+    vftDbg(paste0("MIRROR -> r$", key))
+    r[[key]] <- val
+  })
+}

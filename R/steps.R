@@ -69,11 +69,15 @@ VFT_STEPS <- list(
 #' Only used to write the nav bar tooltips ("... benoetigt: 3 Interessengebiete"),
 #' which is why it can be a flat static map: it answers "what would I have to go
 #' and do first", not "where did this value come from this time".
-#' Also read backwards, by vftStepProduces() in R/providers.R: re-doing a step
-#' overwrites everything this map attributes to it, so this is what the "you are
-#' about to discard..." warning starts from. `shapeLarger` is listed for that
-#' second reading only - it is in no step's `needs`, because nothing but a
-#' provider ever reads it.
+#' Also read backwards, by vftStepProduces() in R/providers.R. That reading used
+#' to be load-bearing - a backward move discarded everything downstream of what
+#' this map attributed to the step being returned to - and it is not any more:
+#' the discard happens at the write, and vftCommit() is handed the actual new
+#' values rather than inferring them from here. What the backward reading is
+#' still for is keeping this map honest: vftCommit() traces any key attributed to
+#' a step that the step's confirm handler did not write. `shapeLarger` is listed
+#' for that second reading only - it is in no step's `needs`, because nothing but
+#' a provider ever reads it.
 VFT_KEY_SOURCE <- c(
   shape         = "step1",
   shapeLarger   = "step1",
@@ -85,6 +89,23 @@ VFT_KEY_SOURCE <- c(
   SMcolors      = "step2",
   species       = "step2",
   minCutThresh  = "step2",
+  #The rest of what step 2 writes when it confirms (app_server.R's step-2 confirm
+  #handler sets every one of these). They are listed for the BACKWARD reading of
+  #this map only - none of them is in any step's `needs`, so no tooltip changes.
+  #
+  #Without them they counted as dependents of `species` rather than as step 2's
+  #own output, so going back to step 2 discarded the very selection the user was
+  #going back to look at: leave again without re-confirming and the app - and the
+  #next save file - had a NULL species selection while the screen showed one.
+  filterList      = "step2",
+  checkboxSave    = "step2",
+  groupSave_all   = "step2",
+  groupSave_sens  = "step2",
+  groupSave_type  = "step2",
+  groupSave_class = "step2",
+  weightInputs    = "step2",
+  weightNames     = "step2",
+  toSelectSpAfter = "step2",
   minThresh     = "step3",
   isSkip        = "step3",
   networkList   = "step4",
@@ -185,13 +206,15 @@ vftNavAllows <- function(step){
 #'
 #' Conversion order is smallest first - step3, step4, step2, step5, newVersions,
 #' lastStep, step1 - so the mechanism is proved on 400 lines before it is applied
-#' to 3900.
+#' to 3900. Done as of 2026-08-26: step2, step3, step4, step5.
 #'
 #' Note this restricts the NAV BAR and the module cache only. The app's own
 #' transitions (`vftGoToStep(check = FALSE)`) still reach any step, which is what
-#' lets step 5 and newVersions keep bouncing between each other while neither is
-#' converted.
-VFT_REENTRANT_STEPS <- c("step3", "step4")
+#' let step 5 and newVersions keep bouncing between each other while neither was
+#' converted. step 5 is a singleton now and newVersions is not, so that bounce is
+#' currently one reused module and one rebuilt one - which is exactly what the
+#' per-step switch is for.
+VFT_REENTRANT_STEPS <- c("step2", "step3", "step4", "step5")
 
 #' May the nav bar return to this step after it has been built once?
 vftStepReentrant <- function(step){

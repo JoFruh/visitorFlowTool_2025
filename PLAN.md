@@ -44,7 +44,7 @@ per-flush overhead drops.
 
 | Question | Decision |
 |---|---|
-| Backward navigation invalidating later results | **Auto-invalidate, with a cancellable warning modal.** Never display a result computed from mixed inputs. |
+| Backward navigation invalidating later results | **It does not.** Navigation reads; it never destroys. What destroys derived results is the confirm handler that writes new ones — auto-invalidate at that write, with a cancellable warning modal, and only for the keys whose value actually changed (corrected 2026-08-26; see "The trigger is the write"). |
 | Navigation UI | **New static nav bar.** Delete `imageMap()` and the 6 banner `renderUI` outputs. |
 | Module lifecycle | **Singleton per session, converted one module at a time**, smallest first. |
 | First shippable increment | **Stage 0 + Stage 1** (dead code, re-entry bugs, flush overhead). |
@@ -293,16 +293,108 @@ ready = function(r) !is.null(r$network) &&
 
 **Invalidation — this is where the "auto-invalidate + warn" decision lands.**
 `vftInvalidate(r, key)` NULLs the key and transitively every key whose `needs` contain it.
-The graph **must include the cross-step edges from day one**: `SM_pres` → `pathUsage`,
-`versionsUI`, `networkList[[i]]$pathUsage`. Without them, going back to step 2, re-confirming,
-and returning to step 5 shows a simulation computed against a sensitivity matrix that is no
-longer displayed — a silent correctness bug producing plausible-looking wrong maps.
+The graph **must include the cross-step edges from day one**: `finalPolygons` → `networkList` →
+`pathUsage` → `versionsUI`, and `networkList[[i]]$pathUsage` reached through the hook. Without
+them, going back to step 3 or 4, re-confirming, and returning to step 5 shows a simulation
+computed against a network that is no longer displayed — a silent correctness bug producing
+plausible-looking wrong maps.
 
-The warning modal belongs in `vftGoToStep()` / the confirm handlers, **not** in `vftInvalidate()`:
+> **Corrected 2026-08-26.** This paragraph originally named `SM_pres` → `pathUsage` as *the*
+> cross-step edge, and Stage 4 shipped it. It is wrong, and going back to step 2 therefore threw
+> away every simulation and every saved version. **Step 2 is independent of steps 3–6.** The
+> simulation engine — `launchMultiSim()`, `launchSim_v2()`, `generatePopulation()`,
+> `subsetPopulation()`, `generateAoI2()`, `determineShortestPath()`, `choosePath()`,
+> `determineAgentCharacteristics()` — contains no reference to `SM_pres`, `SMcolors`, `species` or
+> `minCutThresh`. Every consumer of them is a *display* consumer (leaflet raster overlays, a
+> `terra::plot` overlay, the GeoTIFF export and its species caption) and each reads the current
+> value, so changing the species set redraws the overlay and mixes nothing. The edges are removed;
+> see the note on `VFT_DERIVED_FROM$pathUsage` in `R/providers.R` and the suite
+> `stage5_step2_independent.R`, which holds both halves of the line: step 2 discards nothing, and
+> steps 1, 3 and 4 still discard everything downstream.
+
+The warning modal belongs in the confirm handlers, **not** in `vftInvalidate()`:
 compute the transitive closure first, and if it is non-empty and any of those keys is populated,
 show a modal naming what will be discarded ("Re-confirming step 2 will discard the simulation
 results and 3 saved versions") with Cancel as the default action. Only on confirm call
 `vftInvalidate()`.
+
+#### The trigger is the write, not the navigation (corrected 2026-08-26)
+
+Stage 4 shipped this in `vftGoToStep()`: a backward move named everything downstream of the step
+being returned to and discarded it on confirm. That is the wrong event, and it was wrong twice
+over.
+
+*Too eager.* Going back to **look** destroyed results the user had not decided to replace. Step 5
+→ step 3 threw away every simulation before the threshold slider had been touched.
+
+*Not eager enough.* The destruction that actually happens is a write, and a write is reachable
+without a backward move. Step 5 → step 2 is free (step 2 is display-only downstream), but
+confirming step 2 walks **forward** to step 3, and forward moves were never checked — so the user
+arrived at step 3, confirmed a new threshold, and the Zielgebiete were regenerated with no warning
+at all while the nav bar went on offering step 5 and its now-orphaned scenarios. That is the bug
+the user reported, and no amount of tuning the backward-navigation rule would have caught it.
+
+So the event is the write. `vftCommit(r, values, session, step, then, onCancel)` in
+`R/providers.R` is the single door every confirm handler puts its results through:
+
+1. `vftChangedKeys()` compares each value with what `r` already holds. **Re-confirming a step
+   without changing anything costs nothing** — no modal, no invalidation, just the move.
+2. Only the keys that actually changed seed `vftInvalidationPreview()`. If something populated is
+   downstream of them, `vftAskCommit()` raises the modal and **nothing is written yet**.
+3. On OK, `vftApplyCommit()` invalidates first (so `VFT_INVALIDATE_HOOKS`, which reach sideways
+   into `r$networkList`, work on the old list) and then writes every value, including the
+   unchanged ones — a key that did not change may still have been cleared as a dependent of one
+   that did.
+4. On Cancel, nothing is written, nothing is discarded, and the step's `onCancel` puts its own
+   buttons back.
+
+The pending decision is parked in `session$userData$vftCommitPending` and answered by **one** pair
+of observers registered once per session (`vftCommitServer()`, called from `app_server()`). A
+fresh pair per modal is a trap: a cancelled one stays armed and the *next* modal's OK runs the
+*previous* modal's closure, writing values the user has abandoned. `commit_on_create.R` holds that
+case explicitly.
+
+Two supporting changes were needed for "entering a step destroys nothing" to be true in practice:
+
+* `app_server()` now passes `finalPolygons = shiny::reactive(r$finalPolygons)` to `step4_server()`.
+  It used to leave the argument at its `NULL` default, so step 4's `enter()` reset its polygons to
+  NULL on every visit and `.vftStep4Launch()` generated a fresh set — merely *looking* at step 4
+  replaced the Zielgebiete. They are regenerated only when something upstream invalidated them,
+  which leaves the key NULL again. `.vftStep4Launch()` additionally keeps an unconfirmed working
+  set when `cache$aoiKey` (threshold, skip, perimeter) still matches, so a user who draws three
+  areas, walks back to re-read step 3 and returns finds their three areas.
+* Step 4's confirm no longer destroys its five map/confirm observers. That was there because
+  confirming meant leaving for good and a *rebuilt* module would stack a second set of handlers;
+  `enter()` has torn them down on every visit since Stage 5. Left in, it would have made Cancel
+  useless — the user would land back on a frozen map they could neither edit nor confirm again.
+
+#### Two collisions the singleton exposed (2026-08-26)
+
+Both are the same shape: a variable that carried two meanings at once, harmless while the module
+was destroyed on the way out, and permanent once it is not. Neither is visible in the dependency
+graph, and neither would be found by re-reading `vftCommit()`.
+
+**A module's results have to be published as they are produced.** Step 5 writes a simulation to
+`r$networkList[[i]]$pathUsage` in its own `reactiveValues`, and that reached the app's `r` only
+through the handlers on two buttons — "Neue Versionen" and confirm. Leaving by the nav bar goes
+through neither, so `r` never heard about it and `enter()` overwrote the module's list from `r` on
+the way back in. Run a simulation, step out, step back: gone. (The confirm door has never worked
+either — step 5 has no live `confirmButton5` observer — so only the newVersions round trip ever
+saved anything.) `vftMirror(r, key, get)` in `R/modules.R` publishes each output as it changes,
+with two guards: an empty result is not a result, and an unchanged one is not republished —
+`enter()` writes `r`'s own value into the module on every visit, and echoing it back would
+invalidate every reader of the key for nothing. **When newVersions is converted it needs the same
+treatment**, and so does anything else that produces results the user can lose.
+
+**`r$checkboxSave` in step 2 meant both "a saved selection is waiting to be restored" and "here is
+what the user just confirmed".** `obsGrpTr` is muted while the first is true, because a restore
+drives the checkboxes itself; `obsConfirm` set it to satisfy the second. So after one confirm the
+group boxes were muted for the rest of the session: come back to step 2 and every group box
+selects nothing, except "Alle", whose observer carries no such guard. The confirm handler writes
+`r3$checkboxOut` now, and the flag means only what it says. Suite: `step2_group_reentry.R` —
+runtime for both halves (the mute works when armed; the group boxes work when it is not), plus a
+source check that `r$checkboxSave` is written in exactly two places, because a harness without the
+SDM stack cannot tick a species without killing the session.
 
 **Verify:** with `VFT_DEBUG=1`, walk step 1 → 2 and confirm **no raster read occurs**; walk to
 step 3 and confirm exactly one `async:send` for `DULN_all`; walk to step 4 and confirm one for
@@ -339,6 +431,10 @@ The invalidation graph is complete and correct but **dormant**: it fires on back
 which `VFT_REENTRANT_STEPS` still blocks. That is the intended order — the edges exist before the
 navigation that needs them, rather than after.
 
+> **Superseded 2026-08-26.** The graph is no longer fired by navigation at all; it is fired by
+> `vftCommit()` from each step's confirm handler. See "The trigger is the write, not the
+> navigation" above. The edges themselves are unchanged.
+
 ---
 
 ## Stage 5 — Module lifecycle: first-touch singleton
@@ -373,7 +469,7 @@ Four things the singleton breaks, and the fix for each:
 1→5→1→5→newVersions→5 must leave **every module at exactly 1**. That is the acceptance test and
 it needs no new instrumentation.
 
-### As built (2026-08-25) — mechanism complete, 2 of 7 modules converted
+### As built (2026-08-25/26) — mechanism complete, 4 of 7 modules converted
 
 **The mechanism is `R/modules.R`** and it is done: `vftModuleOnce()`, `vftModuleHandle()`,
 `vftModuleEnter()`, plus one call in `vftGoToStep()` right after the visit counter is bumped.
@@ -388,8 +484,8 @@ independent of each other.
 |---|---|---|
 | step3 | 400 | **converted** — inputs are reactives, `enter()` re-runs banner/language/buttons/state and re-fetches the basemap only when the perimeter changed |
 | step4 | 1305 | **converted** — `enter()` snapshots the reactives into locals of the same names, so the body is untouched; also destroys the previous visit's five map-interaction observers |
-| step2 | 2173 | not yet |
-| step5 | 2262 | not yet |
+| step2 | 2205 | **converted** — the perimeter, its three projections, the basemap and the species scan are one snapshot `enter()` refills only when the shape changed; the twelve-observer teardown lists are gone |
+| step5 | 2384 | **converted** — snapshot inputs like step 4; `enter()` also empties `#placeholder_step5` and destroys the previous visit's per-version observers before re-inserting the cards |
 | newVersions | 3904 | not yet |
 | lastStep | 441 | not yet |
 | step1 | 1217 | not yet |
@@ -452,34 +548,113 @@ seed keys, so only the packed copy goes. Test: `stage5_savepath.R`.
 
 **The banner is being retired — do not gate it.** `vftGoBack()` calls
 `vftGoToStep(check = FALSE)`, so a banner letter bypasses the re-entry block the nav bar enforces:
-"A" or "B" rebuilds step 1 or step 2, and "A" also clears the sensitivity matrix. Decided
+"A" rebuilds step 1 and clears the sensitivity matrix with it. ("B" no longer rebuilds step 2 as of
+2026-08-26 — it re-enters the singleton, which is right by accident rather than by design.) Decided
 2026-08-26 that the nav bar replaces the banner outright, so this is left alone deliberately and
 noted at `vftGoBack()` in `R/navigation.R`. Spend no effort on banner paths in the remaining
 conversions.
 
+### step 2, converted 2026-08-26 — what was specific to it
+
+Everything below is in `R/step2_server.R` and is the third worked example of the standard four
+steps. Three things were not in step 3 or step 4:
+
+1. **The species scan had to move into `enter()` too.** It was a bare
+   `observeEvent(NULL, ..., once = TRUE, priority = 12)` in the body — exactly right for a module
+   built once per *visit*, and wrong for one built once per *session*: a user who went back to
+   step 1, redrew the area and returned would have been choosing species for the area they had just
+   replaced. It is `loadSpeciesData()` now, called from the changed-perimeter branch of `enter()`,
+   and still a deferred one-shot observer so it runs after the body has registered its outputs.
+2. **A re-scan has to apply the filter itself.** `r3$spChoices` is written in exactly one place —
+   `obsFilter`, on a *change* to `input$filterList` — and the scan's completion nudges that input to
+   `"s8"`. On the second scan the select is *already* `"s8"`, so nothing changes, `obsFilter` never
+   runs and the species list stays the previous perimeter's. The `switch` is now
+   `filterSpChoices()` and both callers use it, so the two paths cannot drift.
+3. **The map is drawn from plain locals**, so a return visit has nothing reactive to re-render it.
+   `mapRedraw` — a `reactiveVal` bumped by `enter()` and read at the top of `output$SDMmap` — is the
+   nudge, with a `req()` beside it for the window before the first `enter()`.
+
+The six save-state arguments (`checkboxSave`, the three `groupSave`s, the two weight lists) are read
+**once, at construction, and deliberately not refreshed by `enter()`**. They exist to restore a
+confirmed selection into empty checkboxes; on a return visit the checkboxes still hold that
+selection live, and re-arming them would let the delayed restore block hijack the user's next filter
+change and put the old selection back. The restore-from-file path populates `r` inside step 1's
+confirm handler, before step 2 has ever been built, so it still gets them.
+
+Also: `app_server` resets `step2-confirmButton2` on the way out, which re-fires `obsConfirm` with 0
+now that the observer no longer destroys itself — hence the zero guard, the same one step 3 needed.
+And the three teardown lists were not even identical to each other: `obsSelectAfter`'s
+`obsWeights$destroy()` had no `is.null()` guard and errored whenever no species had ever been
+weighted.
+
+### step 5, converted 2026-08-26 — what was specific to it
+
+Snapshot inputs through `.rx`, exactly as step 4. What is step 5's own is that its per-visit work
+is the largest in the app, and one part of it is destructive:
+
+* **The version cards.** One `insertUI()` into `#placeholder_step5` per entry in `versionsUI`, each
+  with an observer of its own appended to `r$obsEventSelList`. Re-entering without clearing first
+  shows every version twice and runs one card's handler twice per click — the step-5 shape of
+  step 4's "one click, two polygons". `enter()` destroys the list and empties the placeholder
+  before `generateVersionImages()` re-inserts. The clear used to be in the *go to new versions*
+  handler: on the way out, and `once = TRUE`, so it worked for exactly one round trip and not at
+  all for the nav bar.
+* **`r$networkList` and `r$versionsUI` are refreshed by `enter()`**, which is the entire point of
+  the newVersions side trip: that page writes both back into the app's `r` and step 5 has to pick
+  them up. Under the old rebuild this happened by construction; under a singleton it has to be
+  written down.
+* **`isFirstRun_stp6` is re-asked on every entry**, so the "Original" scenario is created from
+  `enter()` too. `app_server` clears `r$step6FirstRun` **outside** the `vftModuleOnce()` block —
+  inside it, the flag would be cleared once and `vftInvalidate()`'s re-arm (when the saved versions
+  are discarded) would never be seen. The order is "enter() asks, then app_server clears", because
+  `vftGoToStep()` calls `enter()` directly while the counter write that re-runs that observer is
+  deferred to the flush.
+* `vftProtectedAreas()` is cached against the perimeter, like step 3's tiles and step 4's lakes.
+
+Note `step5_server` never had a live `confirmButton5` observer — the final-confirm block is
+commented out at what is now `step5_server.R:2193`. `r$confirm` is only ever a banner letter or 0,
+so `app_server`'s step5 → finalStep branch has always been unreachable. Left alone: it is Stage 6's
+question, and the nav bar reaches `finalStep` anyway.
+
 ### Next session — start here
 
-**State:** Stage 4 is committed (`3ecb590`). Stage 5 is uncommitted: modified `PLAN.md`,
-`R/app_server.R`, `R/navigation.R`, `R/step3_server.R`, `R/step4_server.R`, `R/steps.R`, plus
-untracked `R/modules.R`. 299 assertions green across 14 suites in the session scratchpad; the
-package installs clean to a temp library.
+**State:** Stage 4 is committed (`3ecb590`) and the first Stage 5 increment as `2e288dc`. The step 2
+and step 5 conversions are uncommitted, as is the move of invalidation from navigation onto the
+write: modified `PLAN.md`, `R/app_server.R`, `R/modules.R`, `R/navigation.R`, `R/providers.R`,
+`R/step2_server.R`, `R/step4_server.R`, `R/step5_server.R`, `R/steps.R`. 524 assertions green
+across 23 suites in the
+session scratchpad (the 24th, `stage3_nocontext_unfixed.R`, is the negative control and must fail);
+the package installs clean to a temp library and `testServer(app_server)` boots with an empty
+module store.
 
-**Blocked on:** a live re-test of step 3 and step 4 with the two fixes above, before more of the
-app moves underneath them. Ask for the result before converting anything else. What to look for:
-"Bestätigen" and the language selector live again on a return to step 3; step 4's confirm and reset
-buttons likewise; a single click on the step-4 map drawing exactly **one** polygon on a second
-visit (two means the observer teardown in `enter()` is not holding); and the step-4 checkpoint
-downloading a file instead of an error page.
+**Live test wanted for the commit change** (`commit_on_create.R` covers the layer, not the
+modules): 5 → 2 → confirm → 3 must leave the scenarios alone and leave step 5 offered; confirming a
+**new** threshold at step 3 must raise the modal, and Cancel must leave step 3 usable (both buttons
+live) with everything intact; walking 5 → 4 → confirm must ask before replacing the scenario list,
+and Cancel there must leave the map still editable; entering step 4 without confirming anything
+must show the Zielgebiete that are already there rather than generating new ones.
 
-**Then, one module per increment, in this order** — the plan's size order, except that step5 may be
-worth pulling forward because it is the module behind the two-`Original`-scenarios symptom the user
-actually sees:
+**Live test wanted for the two singleton collisions:** run a simulation in step 5, leave by the nav
+bar, come back — the result and the version cards must still be there, and there must still be
+exactly one "Original"; and in step 2, confirm, come back, and tick a group box other than "Alle" —
+species must be selected.
+
+`stage5_step5_live.R` is the first RUNTIME test of a converted module rather than a source
+inspection: it drives the real `step5_server` under `testServer` with a NULL-pathUsage networkList
+and no perimeter (which keeps `enter()` off the leaflet map and the protected-areas read), traces
+`insertUI`/`removeUI`/`addClass`, and asserts that after three visits one card click still runs one
+handler. **Verified to fail** when the teardown is removed from `enter()`.
+
+**Live re-test wanted for step 5** before the next module: 5 → Neue Versionen → 5 shows each version
+**once** (not twice), one click on a card selects it once, a version created on the newVersions page
+appears on the return, and the simulation can still be launched after two round trips (it used to be
+destroyed by the *go to new versions* handler).
+
+**Then, one module per increment, in this order:**
 
 | next | lines | what it needs beyond the standard four steps |
 |---|---|---|
-| step2 | 2173 | large, but plain; going back to it clears `SM_pres_packed` and step 2 overwrites `SM_pres` on confirm, so the save path stays consistent |
-| step5 | 2262 | `removeUI`/`insertUI` of `placeholder_step5` driven from `enter()`, or every visit re-inserts the version cards |
-| newVersions | 3904 | same `placeholder_step5` handling; shares step5's rank in `VFT_STEP_RANK`, so step5 ↔ newVersions is a side trip, not a back-step |
+| newVersions | 3904 | same `placeholder_step5` handling as step 5; shares step5's rank in `VFT_STEP_RANK`, so step5 ↔ newVersions is a side trip, not a back-step. Converting it closes the last rebuild on the busiest path in the app |
 | lastStep | 441 | small |
 | step1 | 1217 | the welcome modal (`step1_server.R:30-46`) is a per-visit side effect |
 
@@ -512,7 +687,13 @@ step 4 keeps ~90 reads unchanged by shadowing the reactives with locals of the s
 
 1. **Stale downstream state is the biggest one** — addressed by the invalidation graph in Stage 4.
    Design the cross-step edges in from the start; retrofitting them means shipping a period where
-   backward navigation silently produces wrong maps.
+   backward navigation silently produces wrong maps. **The mirror risk is real too, and it is the
+   one that actually bit (2026-08-26):** an edge that is not true throws the user's work away.
+   Write an edge only where the downstream value was *computed from* the upstream one — being
+   *drawn on top of* it is not a dependency. Check the consumer: if every reader is a plot, an
+   overlay or a caption, there is no edge. **And getting the edges right is only half of it:** the
+   same day showed that firing a correct graph at the wrong *moment* is its own bug in both
+   directions. Fire it when new data is created, never when a step is merely reached.
 2. **Splitting `sf_to_tidygraph3` changes when node columns exist.** Consumers address them by
    name via `igraph::V(network)$...` (`generatePopulation.R:29-40`). Safe **provided**
    `r$networkList <- list(list(network = r$network, ...))` (`app_server.R:670`) is built only

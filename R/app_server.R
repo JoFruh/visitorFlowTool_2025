@@ -42,6 +42,13 @@ app_server <- function(input, output, session){
   #it. Registry and reasoning in R/providers.R.
   vftProviderServer(r, session)
 
+  #the two buttons of the "this will be discarded" modal. One pair of observers
+  #for the session, reading whichever commit is currently parked in
+  #session$userData - see vftAskCommit() in R/providers.R for why it is not a
+  #fresh pair per modal. Every step's confirm handler below hands its results to
+  #vftCommit(), which is what raises that modal when the write costs something.
+  vftCommitServer(r, session)
+
   #accompanying non reactive (nr) variables, to allow for back and forth access between step5 and newVersions
   r$triggerNewVersions_nr <- 1
   r$triggerStep5_nr <- 1
@@ -270,16 +277,22 @@ app_server <- function(input, output, session){
         #entered. step1_server still returns them for call-site compatibility;
         #reading them here would only put NULLs into `r` and make every one of
         #them look "not derivable but present".
-        r$shape <- step1return$ffshape()
-        #the 1 km buffered perimeter every crop and the path query are cut
-        #against. step 1 computes it because the shapefile and drawing branches
-        #normalise the shape differently; a provider derives it from `shape` alone
-        #on the restore path, where no save file has ever carried it.
-        r$shapeLarger <- step1return$shapeLarger()
         r$needHelp <- step1return$needHelp()
         r$currentLang <- step1return$currentLang()
         # r$parking <- step1return$parking()
-        #activate download
+
+        #A new perimeter is the most expensive write in the app: everything
+        #further on was cut from it. vftCommit() names what that costs and asks
+        #before doing it - which today it never has to, because step 1 cannot be
+        #returned to (it is not in VFT_REENTRANT_STEPS), so nothing downstream
+        #exists the first and only time this runs. It is written this way so that
+        #converting step 1 in Stage 5 does not also have to remember this.
+        #
+        #shapeLarger: the 1 km buffered perimeter every crop and the path query
+        #are cut against. step 1 computes it because the shapefile and drawing
+        #branches normalise the shape differently; a provider derives it from
+        #`shape` alone on the restore path, where no save file has ever carried it.
+        #
         #autosave dropped here, on leaving step 1 (shape + path network). downloadSave
         #materialises the raster and save()s the whole session state on the
         #shared main thread, and it used to fire at all eight step transitions.
@@ -287,7 +300,11 @@ app_server <- function(input, output, session){
         #expensive: the sensitivity matrix, the confirmed network + parking,
         #and the finished simulation. Restore with:
         #  shinyjs::click("downloadSave", asis = FALSE)
-        vftGoToStep(r, "step2", session)
+        vftCommit(r,
+                  list(shape       = step1return$ffshape(),
+                       shapeLarger = step1return$shapeLarger()),
+                  session, step = "step1",
+                  then = function() vftGoToStep(r, "step2", session))
 
       }else if(step1return$confirm() == -1){
 
@@ -409,12 +426,29 @@ app_server <- function(input, output, session){
     #checkboxSave used to be passed, so a second visit ran that block against a
     #module that still had NULLs and died twice over. app_server has held these
     #values all along; they simply never travelled back.
-    step2return <- vftTime("module:step2", step2_server("step2", fshape = r$shape,
-                                needHelp = r$needHelp, filterList = r$filterList, checkboxSave = r$checkboxSave,
-                                groupSave_all = r$groupSave_all, groupSave_sens = r$groupSave_sens,
-                                groupSave_type = r$groupSave_type, groupSave_class = r$groupSave_class,
-                                weightInputs = r$weightInputs, weightNames = r$weightNames,
-                                i18n = shiny::reactive(i18n), currentLang = r$currentLang))
+    #FIRST-TOUCH SINGLETON (Stage 5). Built on the first visit and reused
+    #afterwards; vftGoToStep() calls its enter() on every return. The module AND
+    #the observer on its handle are created exactly once per session, which is
+    #why that observer is no longer `once = TRUE`: the flag was there to stop a
+    #REBUILT module's handlers stacking on the live ones, and it would now mean
+    #step 2 could be confirmed once and never used again.
+    #
+    #Every input is a REACTIVE. The six save-state ones are read once, at
+    #construction, by design - see the note on step2_server().
+    vftModuleOnce(session, "step2", function(){
+    step2return <- vftTime("module:step2", step2_server("step2",
+                                fshape          = shiny::reactive(r$shape),
+                                needHelp        = shiny::reactive(r$needHelp),
+                                filterList      = shiny::reactive(r$filterList),
+                                checkboxSave    = shiny::reactive(r$checkboxSave),
+                                groupSave_all   = shiny::reactive(r$groupSave_all),
+                                groupSave_sens  = shiny::reactive(r$groupSave_sens),
+                                groupSave_type  = shiny::reactive(r$groupSave_type),
+                                groupSave_class = shiny::reactive(r$groupSave_class),
+                                weightInputs    = shiny::reactive(r$weightInputs),
+                                weightNames     = shiny::reactive(r$weightNames),
+                                i18n            = shiny::reactive(i18n),
+                                currentLang     = shiny::reactive(r$currentLang)))
 
 
     shiny::observeEvent(step2return$confirm(), {
@@ -430,43 +464,45 @@ app_server <- function(input, output, session){
         shinyjs::reset(id = "step2-confirmButton2")
 
         vftDbg("PRE-TRIGGER STEP 2")
-        #save returns
-        r$toSelectSpAfter <- step2return$toSelectSpAfter()
-        #save chosen sensitivity matrix
-
-        #
-        r$SM_pres <- step2return$SM_pres()
-        #new sensitivity raster from step 2: invalidate the packed copy so the next
-        #checkpoint repacks it once (then reuses it for later checkpoints)
-        r$SM_pres_packed <- NULL
-        # r$SM_noPres <- step2return$SM_noPres()
-        r$SMcolors <- step2return$SMcolors()
-        r$minCutThresh <- step2return$minCutThresh()
+        #save returns that are not part of the dependency graph
+        r$needHelp <- step2return$needHelp()
+        r$currentLang <- step2return$currentLang()
 
         vftDbgCat("STEP 3_2")
 
-        r$needHelp <- step2return$needHelp()
-        r$groupSave_all <- step2return$groupSave_all()
-        r$groupSave_sens <- step2return$groupSave_sens()
-        r$groupSave_type <- step2return$groupSave_type()
-        r$groupSave_class <- step2return$groupSave_class()
-        r$checkboxSave <- step2return$checkboxSave()
-        r$filterList <- step2return$filterList()
-        r$weightInputs <- step2return$weightInputs()
-        r$weightNames <- step2return$weightNames()
-        r$species <- step2return$species()
-
-        r$currentLang <- step2return$currentLang()
-
+        #The sensitivity matrix and the whole selection behind it, in one write.
+        #Nothing downstream is derived from any of them - a simulation is a
+        #function of the network, and every consumer of the matrix is a display
+        #overlay that reads the current value (see VFT_DERIVED_FROM) - so this
+        #commit never raises the modal. The one thing it does discard is
+        #SM_pres_packed, the save file's cached copy, which used to be NULLed by
+        #hand right here and is now an edge in the graph.
+        vftCommit(r,
+                  list(SM_pres         = step2return$SM_pres(),
+                       # SM_noPres     = step2return$SM_noPres(),
+                       SMcolors        = step2return$SMcolors(),
+                       minCutThresh    = step2return$minCutThresh(),
+                       species         = step2return$species(),
+                       toSelectSpAfter = step2return$toSelectSpAfter(),
+                       groupSave_all   = step2return$groupSave_all(),
+                       groupSave_sens  = step2return$groupSave_sens(),
+                       groupSave_type  = step2return$groupSave_type(),
+                       groupSave_class = step2return$groupSave_class(),
+                       checkboxSave    = step2return$checkboxSave(),
+                       filterList      = step2return$filterList(),
+                       weightInputs    = step2return$weightInputs(),
+                       weightNames     = step2return$weightNames()),
+                  session, step = "step2",
+                  then = function(){
+                    #activate download. vftGoToStep sets r$step, which
+                    #downloadSave reads to name the file, so it has to come
+                    #before the click.
+                    vftGoToStep(r, "step3", session)
+                    shinyjs::click("downloadSave", asis = FALSE)
+                    # shinyjs::click("downloadSaveRaster", asis = FALSE)
+                  })
 
         vftDbgCat("STEP 3_3")
-
-
-        #activate download. vftGoToStep sets r$step, which downloadSave reads to
-        #name the file, so it has to come before the click.
-        vftGoToStep(r, "step3", session)
-        shinyjs::click("downloadSave", asis = FALSE)
-        # shinyjs::click("downloadSaveRaster", asis = FALSE)
 
         vftDbg(input$`step2-confirmButton2`)
         vftDbgCat("STEP 3_3")
@@ -478,7 +514,10 @@ app_server <- function(input, output, session){
         vftGoBack(r, step2return$confirm(), from = "step2",
                   bannerId = "step2-banner", session = session)
       }
-    },ignoreInit = TRUE, once = TRUE)
+    },ignoreInit = TRUE)
+
+    step2return
+    })
   })
 
   #STEP 3:
@@ -520,15 +559,25 @@ app_server <- function(input, output, session){
         shinyjs::runjs("Shiny.onInputChange('step3-confirmButton3', 0);")
         # shinyjs::reset(id = "step3-confirmButton3", asis = TRUE)
 
-        #save returns
-        r$minThresh <- step3return$minThresh()
-        r$isSkip <- step3return$isSkip()
+        #save returns that are not part of the dependency graph
         # r$DULN <- step3return$DULN()
         # r$DULN_all <- step3return$DULN_all()
         r$needHelp <- step3return$needHelp()
         r$currentLang <- step3return$currentLang()
 
-        #activate download
+        #THE write this whole change is about. A new attractiveness threshold is
+        #a new set of areas of interest, and everything cut from them - the
+        #Zielgebiete, the parking, the scenarios, the simulations, the saved
+        #versions - stops describing what is on screen. That used to happen
+        #silently, on the way IN to this step; it happens here now, when the new
+        #threshold is actually confirmed, and only if it differs from the one
+        #already held. Walk back through step 3, read it, confirm the same
+        #number, and nothing at all is discarded.
+        #
+        #Cancelling leaves everything as it was, so step 3's own buttons - which
+        #its confirm observer disabled on the way out - have to come back, or the
+        #user would be left on a step they cannot leave.
+        #
         #autosave dropped here, on leaving step 3 (threshold choice). downloadSave
         #materialises the raster and save()s the whole session state on the
         #shared main thread, and it used to fire at all eight step transitions.
@@ -539,12 +588,25 @@ app_server <- function(input, output, session){
 
         vftDbg(input$`step3-confirmButton3`)
 
-        vftGoToStep(r, "step4", session)
+        vftCommit(r,
+                  list(minThresh = step3return$minThresh(),
+                       isSkip    = step3return$isSkip()),
+                  session, step = "step3",
+                  then     = function() vftGoToStep(r, "step4", session),
+                  onCancel = function(){
+                    shinyjs::enable(id = "step3-confirmButton3")
+                    shinyjs::enable(id = "step3-skipButton")
+                  })
       }else if(step3return$isSkip() == TRUE ){
         r$currentLang <- step3return$currentLang()
 
-        #activate download
-        r$isSkip <- step3return$isSkip()
+        #Skipping produces no threshold, so it supersedes nothing and never
+        #raises the modal: whatever areas of interest exist are kept and step 4
+        #opens on them, which is what "skip" has always meant. Through
+        #vftCommit() anyway, so that the rule "a step's results are written in
+        #one place, by one function" holds for every exit from every step.
+        vftCommit(r, list(isSkip = step3return$isSkip()), session, step = "step3",
+                  then = function() vftGoToStep(r, "step4", session))
         #autosave dropped here, on leaving step 3 via the skip path. downloadSave
         #materialises the raster and save()s the whole session state on the
         #shared main thread, and it used to fire at all eight step transitions.
@@ -552,8 +614,6 @@ app_server <- function(input, output, session){
         #expensive: the sensitivity matrix, the confirmed network + parking,
         #and the finished simulation. Restore with:
         #  shinyjs::click("downloadSave", asis = FALSE)
-
-        vftGoToStep(r, "step4", session)
       }else{
         #a banner letter, meaning "go back to an earlier step". See
         #vftGoBack() in R/navigation.R.
@@ -566,8 +626,10 @@ app_server <- function(input, output, session){
       if(step3return$isSkip() > 0 ){
         r$currentLang <- step3return$currentLang()
 
-        #activate download
-        r$isSkip <- step3return$isSkip()
+        #the skip BUTTON, as opposed to the confirm handler's skip branch above.
+        #Same write, same reasoning: nothing is superseded by skipping.
+        vftCommit(r, list(isSkip = step3return$isSkip()), session, step = "step3",
+                  then = function() vftGoToStep(r, "step4", session))
         #autosave dropped here, on leaving step 3 via the skip button. downloadSave
         #materialises the raster and save()s the whole session state on the
         #shared main thread, and it used to fire at all eight step transitions.
@@ -575,8 +637,6 @@ app_server <- function(input, output, session){
         #expensive: the sensitivity matrix, the confirmed network + parking,
         #and the finished simulation. Restore with:
         #  shinyjs::click("downloadSave", asis = FALSE)
-
-        vftGoToStep(r, "step4", session)
       }
     }, ignoreInit = TRUE)
 
@@ -609,7 +669,19 @@ app_server <- function(input, output, session){
                                 needHelp      = shiny::reactive(r$needHelp),
                                 i18n          = shiny::reactive(i18n),
                                 currentLang   = shiny::reactive(r$currentLang),
-                                shape         = shiny::reactive(r$shape)))
+                                shape         = shiny::reactive(r$shape),
+                                #The areas of interest already confirmed, if any.
+                                #This used to be left at its NULL default, so
+                                #step 4's enter() reset its polygons to NULL on
+                                #every visit and .vftStep4Launch() generated a
+                                #fresh set - i.e. merely LOOKING at step 4 threw
+                                #the Zielgebiete away and replaced them, which is
+                                #the behaviour this change exists to remove. With
+                                #the real value passed, a return shows what was
+                                #confirmed; they are regenerated only when
+                                #something upstream invalidated them, which
+                                #leaves this NULL again.
+                                finalPolygons = shiny::reactive(r$finalPolygons)))
 
 
 
@@ -625,27 +697,49 @@ app_server <- function(input, output, session){
 
 
         # shinyjs::reset
-        #save returns
-        r$finalPolygons <- step4return$finalPolygons()
-        r$network <- step4return$network()
+        #save returns that are not part of the dependency graph
         r$needHelp <- step4return$needHelp()
-        r$parking <- step4return$parking()
         r$currentLang <- step4return$currentLang()
 
+        newNetwork <- step4return$network()
+        newParking <- step4return$parking()
 
         #CREATE NETWORK LIST ####
-        #Package together all aspects that can be altered and results (network, usage, parking, attractivity..)
-        r$networkList <- list(list(network = r$network, pathUsage = NULL, parking = r$parking, residential = NULL, newAttr = NULL))
+        #Package together all aspects that can be altered and results (network,
+        #usage, parking, attractivity..). This list IS the simulation's input, so
+        #building a new one is what ends the old simulations - which is why it
+        #goes through vftCommit() with everything else step 4 confirms rather
+        #than being assigned here. If the user has simulations or saved versions,
+        #this is the write that asks them first.
+        newList <- list(list(network = newNetwork, pathUsage = NULL,
+                             parking = newParking, residential = NULL,
+                             newAttr = NULL))
 
-        r$step6FirstRun <- TRUE
-        r$newVersionsFirstRun <- TRUE
+        vftCommit(r,
+                  list(finalPolygons = step4return$finalPolygons(),
+                       network       = newNetwork,
+                       parking       = newParking,
+                       networkList   = newList),
+                  session, step = "step4",
+                  then = function(){
+                    r$step6FirstRun <- TRUE
+                    r$newVersionsFirstRun <- TRUE
 
-        #activate download. vftGoToStep sets r$step, which downloadSave reads to
-        #name the file, so it has to come before the click.
-        vftGoToStep(r, "step5", session)
-        shinyjs::click("downloadSave", asis = FALSE)
+                    #activate download. vftGoToStep sets r$step, which
+                    #downloadSave reads to name the file, so it has to come
+                    #before the click.
+                    vftGoToStep(r, "step5", session)
+                    shinyjs::click("downloadSave", asis = FALSE)
 
-        r$triggerStep5_nr <- 1
+                    r$triggerStep5_nr <- 1
+                  },
+                  #No onCancel: step 4's confirm observer re-enables its own two
+                  #buttons before handing the result over, and it no longer
+                  #destroys the map observers on the way out - enter() does that,
+                  #once, on each visit. So a cancel leaves the step exactly as
+                  #the user left it, polygons and all, and they can go on editing
+                  #and confirm again.
+                  onCancel = NULL)
       }else{
         #a banner letter, meaning "go back to an earlier step". See
         #vftGoBack() in R/navigation.R.
@@ -663,25 +757,64 @@ app_server <- function(input, output, session){
   shiny::observeEvent(vftStepTrigger(session, "step5"), {
     vftDbg("BUILD STEP 5")
     # cat(file = stderr(), paste0("contents of envBase: ", ls(envBase)))
-    step5return <- vftTime("module:step5", step5_server("step5", networkList = r$networkList, SM_pres = r$SM_pres, SMcolors = r$SMcolors, shape = r$shape, finalPolygons = r$finalPolygons, versionsUI = r$versionsUI, isFirstRun_stp6 = r$step6FirstRun,
-                                needHelp = r$needHelp, species = r$species,
-                                i18n = shiny::reactive(i18n), currentLang = r$currentLang, minCutThresh = r$minCutThresh))
-    r$step6FirstRun <- FALSE
+    #FIRST-TOUCH SINGLETON (Stage 5). Built once and re-entered through its
+    #enter() closure - which matters more here than anywhere else, because the
+    #newVersions page is a side trip off this step in both directions and every
+    #round trip used to build another step 5 beside the live one. That is where
+    #the two "Original" scenarios came from: two modules, each holding the
+    #networkList it had frozen, both answering the same click.
+    #
+    #Every input is a REACTIVE; the module snapshots them in enter().
+    vftModuleOnce(session, "step5", function(){
+    step5return <- vftTime("module:step5", step5_server("step5",
+                                networkList     = shiny::reactive(r$networkList),
+                                SM_pres         = shiny::reactive(r$SM_pres),
+                                SMcolors        = shiny::reactive(r$SMcolors),
+                                shape           = shiny::reactive(r$shape),
+                                finalPolygons   = shiny::reactive(r$finalPolygons),
+                                versionsUI      = shiny::reactive(r$versionsUI),
+                                isFirstRun_stp6 = shiny::reactive(r$step6FirstRun),
+                                needHelp        = shiny::reactive(r$needHelp),
+                                species         = shiny::reactive(r$species),
+                                i18n            = shiny::reactive(i18n),
+                                currentLang     = shiny::reactive(r$currentLang),
+                                minCutThresh    = shiny::reactive(r$minCutThresh)))
+
+    #### step 5's results, published into `r` as they are produced ####
+    #
+    #A simulation is written to r$networkList[[i]]$pathUsage INSIDE the module,
+    #and the module's copy used to reach `r` only through the two handlers below
+    #- the "Neue Versionen" button and the confirm button. Leaving step 5 by the
+    #nav bar goes through neither, so the app never learned about the simulation;
+    #then enter() refreshed the module's list from `r` on the way back in and
+    #overwrote it with the version that has no results. Run a simulation, step
+    #out, step back: gone. (The confirm door has never worked either - step 5 has
+    #no live confirmButton5 observer - so in practice only the newVersions round
+    #trip ever saved anything.)
+    #
+    #See vftMirror() in R/modules.R for the two guards and for why this is a
+    #plain write rather than a vftCommit().
+    #
+    #`pathUsage` has a second consequence, deliberate: it is what the discard
+    #warning names as "Simulationsergebnisse", and it was NULL at every point the
+    #user could have been warned. It also means a save taken at step 5 now
+    #carries it - the slot has always been in the save list and the restore path
+    #has always read it back, so nothing about the format changes; the file grows
+    #by one copy of the path network, which is the price of the warning being
+    #true.
+    vftMirror(r, "networkList", step5return$networkList)
+    vftMirror(r, "versionsUI",  step5return$versionsUI)
+    vftMirror(r, "pathUsage",   step5return$pathUsage)
+    vftMirror(r, "shp_PA",      step5return$shp_PA)
 
     #From step 5, go to New Versions
     shiny::observeEvent(step5return$newVersions(), {
 
       vftDbg("From step 5, go to New Versions")
       r$triggerStep5_nr <- step5return$trigger()
-      #save returns (but only if larger than null: Avoid overwriting with default empty returns)
-      if(length(step5return$networkList()) > 0 ){
-        r$networkList <- step5return$networkList()
-      }
-      if(length(step5return$versionsUI()) > 0 ){
-        r$versionsUI <- step5return$versionsUI()
-      }
-      r$shp_PA <- step5return$shp_PA()
-
+      #the networkList / versionsUI / shp_PA writes that used to be here are
+      #vftMirror()'s job now, and have already happened. Leaving them would not
+      #be wrong, only a second copy of the rule.
 
       r$currentLang <- step5return$currentLang()
 
@@ -706,7 +839,7 @@ app_server <- function(input, output, session){
         r$triggerStep5_nr <- 0
 
       }
-    }, ignoreInit = TRUE, once = TRUE)
+    }, ignoreInit = TRUE)
 
 
 
@@ -724,11 +857,8 @@ app_server <- function(input, output, session){
         #show over current timeframe
 
         #CONFIRM SIMULATIONS
-        #save returns
-        r$pathUsage <- step5return$pathUsage()
-        r$versionsUI <- step5return$versionsUI()
-        r$networkList <- step5return$networkList()
-        r$shp_PA <- step5return$shp_PA()
+        #the four saves that used to be here are vftMirror()'s job now, and have
+        #already happened - see the note above.
         #vftGoToStep sets r$step, which downloadSave reads to name the file, so
         #it has to come before the click.
         vftGoToStep(r, "finalStep", session)
@@ -740,7 +870,19 @@ app_server <- function(input, output, session){
         vftGoBack(r, step5return$confirm(), from = "step5",
                   bannerId = "step5-banner", session = session)
       }
-    }, ignoreInit = TRUE, once = TRUE)
+    }, ignoreInit = TRUE)
+
+    step5return
+    })
+
+    #Deliberately OUTSIDE the vftModuleOnce() block, so it runs on every visit
+    #rather than once at construction. The module's enter() has already read this
+    #flag by the time this line executes - vftGoToStep() calls enter() directly,
+    #while the counter write that re-runs this observer is deferred to the flush -
+    #so the order is "ask, then clear", on every entry. It has to be re-asked
+    #every time because vftInvalidate() re-arms it whenever the saved versions are
+    #discarded.
+    r$step6FirstRun <- FALSE
 
   })
 

@@ -1,8 +1,44 @@
 
 
 # Define server logic
-step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, currentLang, isFirstRun_stp6, finalPolygons = NULL, versionsUI = list(), triggerStp6 = 0,
-                         needHelp = FALSE, species = NULL, minCutThresh = NULL){
+#' CONVERTED TO A FIRST-TOUCH SINGLETON (Stage 5, fourth module).
+#'
+#' This is the module the duplicate-instance symptom was actually *seen* in: two
+#' step 5s answering one click, each with its own frozen `networkList`, showing
+#' two "Original" scenarios - one simulated against an area that was no longer on
+#' screen. It is also the module that is left and re-entered most often, because
+#' the newVersions page is a side trip off it in both directions.
+#'
+#' Every argument except `id` and `i18n` is a REACTIVE now, and none is read
+#' directly by the body: enter() snapshots them into locals of the same names, so
+#' the ~2200 lines below are unchanged and still see plain values. A visit works
+#' against a fixed network list; only BETWEEN visits may it change - which is
+#' exactly what coming back from newVersions with a new version in hand is.
+#'
+#' The per-visit work is bigger here than in any other module, and all of it is in
+#' enter() at the bottom:
+#'
+#'   * the version cards. They are `insertUI()`d into `#placeholder_step5`, one
+#'     per entry in `versionsUI`, each with an observer of its own on `r$obsEventSelList`.
+#'     Re-entering without clearing the placeholder first would insert a second
+#'     copy of every card and a second observer behind each. The clear used to
+#'     live in the "go to new versions" handler, i.e. on the way OUT and only
+#'     once; it is on the way IN now, which also covers leaving by the nav bar.
+#'   * `r$networkList` and `r$versionsUI`, which is the whole point of the side
+#'     trip: newVersions writes them back into the app's `r` and step 5 must pick
+#'     them up.
+#'   * the "Original" scenario, created when `isFirstRun_stp6` says so.
+#'
+#' No observer destroys its siblings any more. They did that so a REBUILT module's
+#' handlers would not stack on the live ones; with one instantiation, destroying
+#' them would mean the simulation could be launched exactly once per session.
+step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, currentLang, isFirstRun_stp6,
+                         finalPolygons = shiny::reactive(NULL),
+                         versionsUI = shiny::reactive(list()),
+                         triggerStp6 = shiny::reactive(0),
+                         needHelp = shiny::reactive(FALSE),
+                         species = shiny::reactive(NULL),
+                         minCutThresh = shiny::reactive(NULL)){
 
   #count this instantiation. A module server should be created once per
   #session; this app re-calls it from an observeEvent on a trigger, so any
@@ -10,43 +46,46 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
   #alongside the previous one. See vftModuleInstance() in perf_helpers.R.
   vftModuleInstance("step5")
 
+  #The reactives, held under different names so that the locals inside can shadow
+  #them. Everything after this point reads plain values.
+  #`triggerStp6` is not among them: it is a formal nothing has ever read - the
+  #module writes its own `r$triggerStp6` - and it is kept only so the call site
+  #does not have to change.
+  .rx <- list(networkList = networkList, SM_pres = SM_pres, SMcolors = SMcolors,
+              shape = shape, currentLang = currentLang,
+              isFirstRun_stp6 = isFirstRun_stp6, finalPolygons = finalPolygons,
+              versionsUI = versionsUI, needHelp = needHelp, species = species,
+              minCutThresh = minCutThresh)
 
   shiny::moduleServer(id, function(input, output, session) {
+
+    #per-visit snapshots. enter() refills these; the body and every closure in it
+    #resolve them lexically from here, so nothing else in this file changes.
+    networkList     <- NULL
+    SM_pres         <- NULL
+    SMcolors        <- NULL
+    shape           <- NULL
+    currentLang     <- NULL
+    isFirstRun_stp6 <- FALSE
+    finalPolygons   <- NULL
+    versionsUI      <- list()
+    needHelp        <- NULL
+    species         <- NULL
+    minCutThresh    <- NULL
+
+    #the protected-areas layer, and what it was last clipped for. See the note at
+    #its assignment in enter(): this is display-only geometry keyed on the
+    #perimeter, so it is derived when the PERIMETER changes rather than per visit.
+    shp_PA <- NULL
+    cache  <- new.env(parent = emptyenv())
+    cache$shape <- NULL
 
     #CONSTANT:division of total residents to get number of agents
     CONST_residentDivision <- 50
 
     r <- shiny::reactiveValues()
 
-    r$needHelp <- needHelp
-
-
-    #handle language bar
-    r$needHelp <- needHelp
-    r$currentLang <- currentLang
-
-    vftDbgCat("CURRENTLANG : ")
-    vftDbgCat(r$currentLang )
-
-    #keep track of checkbox
-    r$agentCheckboxIsDisabled <- TRUE
-
-    #variable to determine if there is a simulation map
-    r$mapPresent <- NULL
-    r$refreshMap <- FALSE
-
-
-    shiny.i18n::update_lang(r$currentLang)
-    shiny::updateSelectInput(inputId = "languageSelect_5", selected = currentLang)
-
-
-    #render banner image from start
-    if(r$currentLang == "de"){
-      vftSetBanner(id, "www/step5_wsl.png")
-    }else if(r$currentLang == "fr"){
-      vftSetBanner(id, "www/step5_wsl_fr.png")
-    }
-
+    #the banner, the language bar and the per-visit state are in enter() now.
 
     #LOAD PROTECTED AREAS DATA ####
     #Display-only layer, handed straight to leaflet::addPolygons() below and in
@@ -61,7 +100,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
     #vftProtectedAreas() clips a process-wide, pre-simplified copy held in
     #EPSG:2056 and hands back lon/lat for leaflet: ~0.10s here instead of ~5.7s,
     #and 58% less GeoJSON for htmlwidgets to serialise. See data_paths.R.
-    shp_PA <- vftTime("step5:protectedAreas", vftProtectedAreas(shape))
+    #(derived in enter(), and only when the perimeter has changed - see there.)
 
     # Activate outputUI checkbox at start
     # if(currentLang == "de"){
@@ -313,14 +352,10 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
     outputOptions(output, "downloadTIFF", suspendWhenHidden = FALSE)
     outputOptions(output, "downloadSM", suspendWhenHidden = FALSE)
 
-    #variables
-    r$networkList <- networkList
-    r$versionsUI <- versionsUI
-
-    r$triggerStp6 <- 0
+    #variables. r$networkList, r$versionsUI, r$triggerStp6 and r$lastSelectedImage
+    #are per-VISIT and are set by enter(); these are the declarations only.
     obsEvent_sim <- NULL
     r$obsEventSelList <- list()
-    r$lastSelectedImage <- NULL
 
     selectedNetwork_position <- 1
 
@@ -828,15 +863,18 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
 
       results <- NULL
 
-
-      plotPathUsage()
-
+      #CREATE ORIGINAL VERSIONS (FOR FIRST RUN ONLY) ####
+      #Per VISIT, so it is a function enter() calls rather than a statement here.
+      #`isFirstRun_stp6` is the app's r$step6FirstRun, which app_server clears
+      #immediately after each visit and vftInvalidate() re-arms when the saved
+      #versions are discarded - so this has to be asked again on every entry, not
+      #once at construction.
+      createOriginalVersion <- function(){
       vftDbgCat("TEST15")
 
       vftDbgCat(paste0("isFirstRun_stp6 : ", isFirstRun_stp6))
 
-      #CREATE ORIGINAL VERSIONS (FOR FIRST RUN ONLY) ####
-      if(isFirstRun_stp6 | is.null(r$versionsUI) ){
+      if(isTRUE(isFirstRun_stp6) | is.null(r$versionsUI) ){
         vftDbgCat("TEST15b")
 
 
@@ -869,6 +907,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
         # })
 
         r$step6FirstRun <- FALSE
+      }
       }
 
 
@@ -1000,24 +1039,28 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
       }, ignoreInit = TRUE)
 
       #observe banner click (choosing to step back in history)
+      #
+      #NOTE ON THE MISSING $destroy() LISTS AND THE MISSING return()s, HERE AND IN
+      #obsNewVersions BELOW.
+      #
+      #Both handlers used to tear down the module's observers and then return a
+      #handle. Neither did what it looks like: an observeEvent HANDLER's return
+      #value goes nowhere - the module's handle is the one built at the bottom of
+      #this function - and the teardown existed only because a re-entered step 5
+      #used to build a SECOND set of observers on top of the live ones. There is
+      #one set now, for the life of the session, so destroying it would mean the
+      #simulation could be launched exactly once per session. The per-VERSION
+      #observers are different: those really are recreated on every visit, and
+      #enter() destroys them before it re-inserts the cards.
       obsBanner <- observeEvent(input$banner,  {
         vftDbg("MAPPED IMAGE CLICKED")
         #determine where to go back in history
         r$confirm <- input$banner
 
-        #clean up
-        obsEvent_sim$destroy()
-        obsBanner$destroy()
-        #remove all versions
-        for(obs in r$obsEventSelList){
-          vftDbg(paste0("obs", obs) )
-          obs[[1]]$destroy()
-        }
-        #treat next step 6 as first run
+        #treat next step 6 as first run. (This is the MODULE's r, not the app's,
+        #so it has never had that effect - left as found: the banner is being
+        #retired in favour of the nav bar. See vftGoBack() in R/navigation.R.)
         r$step6FirstRun <- TRUE
-
-        return(list(pathUsage = shiny::reactive({r$pathUsage}), networkList = shiny::reactive({r$networkList}), confirm = shiny::reactive({r$confirm}), newVersions = shiny::reactive({input$newVersionsButton}), trigger = shiny::reactive(r$triggerStp6), versionsUI = shiny::reactive(versionsUI) ,
-                    shp_PA = shiny::reactive(shp_PA)) )
 
         #trigger return to past (return with specific confirm value?)
       }, ignoreInit = TRUE)
@@ -2180,48 +2223,28 @@ vftDbgCat("FINISHED TIFF\n")
 
       # GO TO VERSIONS TAB ####
       obsNewVersions <- shiny::observeEvent(input$newVersionsButton, {
+        #the flag app_server's handler tests before it navigates. enter() clears
+        #it again on the way back in, so a return does not read as a fresh click.
         r$triggerStp6 <- 1
-        #destroy observers
-        obsEvent_sim$destroy()
-        obsConfirmName$destroy()
-        obsGenImage$destroy()
-        obsAgentStart$destroy()
-        obsResidential$destroy()
-        obsParking$destroy()
-        obsSM$destroy()
-        obsAOI$destroy()
-        obsAgent$destroy()
-        obsUsage$destroy()
-        obsEvent_map$destroy()
 
-
-        #destroy all observers in list
-        vftDbg(paste0("obsEventSelList: ", r$versionsUI))
-        for(obs in r$obsEventSelList){
-          vftDbg(paste0("obs", obs) )
-          obs[[1]]$destroy()
-        }
-        #REMOVE ALL VERSIONS ####
-        # they are entirely refreshed when returning here from newVersions
-        shiny::removeUI(selector = "div#placeholder_step5")
-        shiny::insertUI(selector = "#topPlaceHolder",
-                        ui = shiny::tags$div(
-                          id = "placeholder_step5"
-                        )
-        )
+        #The version cards and their observers used to be cleared here, on the way
+        #OUT. They are cleared by enter(), on the way IN, which does the same job
+        #for the newVersions round trip and also covers leaving this step by the
+        #nav bar - which does not come through here at all.
 
         #no confirm button pressed
         r$confirm <- 0
-        return(list(pathUsage = shiny::reactive({r$pathUsage}), networkList = shiny::reactive({r$networkList}), confirm = shiny::reactive({r$confirm}), newVersions = shiny::reactive({input$newVersionsButton}), trigger = shiny::reactive(r$triggerStp6), versionsUI = shiny::reactive(versionsUI),
-                    currentLang = shiny::reactive(i18n()$get_translation_language()), shp_PA = shiny::reactive(shp_PA) ) )
-
-      }, ignoreInit = TRUE, once = TRUE)
+      }, ignoreInit = TRUE)
 
 
 
       vftDbgCat("TEST17")
 
     #GENERATE VERSION IMAGES ####
+    #Per VISIT: every entry in versionsUI gets a card insertUI'd into
+    ##placeholder_step5 and an observer of its own. enter() clears both before
+    #calling this, or a second visit shows every version twice.
+    generateVersionImages <- function(){
     if(length(r$versionsUI) > 0){
 
       for(i in 1:length(r$versionsUI) ){
@@ -2250,13 +2273,110 @@ vftDbgCat("FINISHED TIFF\n")
       vftDbg(r$versionsUI[[1]]$inputId_select)
       vftDbg(r$lastSelectedImage)
     }
+    }
 
-    vftDbg("RETURNING STEP 6")
-    vftDbg(r$lastSelectedImage)
-#no confirmation at first
-    r$confirm <- 0
+    #### enter(): everything that happens per VISIT rather than per session ####
+    #
+    # Called by vftGoToStep() on every return to this step - including the return
+    # from newVersions, which is the busiest path in the app - and once here at
+    # the end of construction, so the first visit and the fifth run the same code.
+    #
+    # vftModuleEnterFn() supplies the two properties this body must have and
+    # neither of which is visible in it: the module's own session as the default
+    # reactive domain (or the shinyjs:: and update*Input() calls below silently
+    # address unnamespaced controls that do not exist), and isolate() around the
+    # whole body (or the observers enter() is called from - among them Stage 4's
+    # provider observe(), which is not isolated - take a dependency on values
+    # enter() itself assigns, and this one assigns r$networkList). See R/modules.R.
+    enter <- vftModuleEnterFn(session, function(){
+
+      #--- 1. refresh the snapshots the rest of this module reads
+      networkList     <<- .rx$networkList()
+      SM_pres         <<- .rx$SM_pres()
+      SMcolors        <<- .rx$SMcolors()
+      shape           <<- .rx$shape()
+      currentLang     <<- .rx$currentLang()
+      isFirstRun_stp6 <<- isTRUE(as.logical(.rx$isFirstRun_stp6()))
+      finalPolygons   <<- .rx$finalPolygons()
+      versionsUI      <<- .rx$versionsUI()
+      needHelp        <<- .rx$needHelp()
+      species         <<- .rx$species()
+      minCutThresh    <<- .rx$minCutThresh()
+
+      #--- 2. tear down the previous visit's version cards and their observers.
+      #One observer per card, created by updateVersions(), and the cards are
+      #insertUI'd - so without this a second visit shows every version twice and
+      #a single click on a card runs its handler twice. The "go to new versions"
+      #handler used to do this on the way out; the nav bar does not go through it.
+      for(obs in r$obsEventSelList){
+        if(!is.null(obs)) try(obs[[1]]$destroy(), silent = TRUE)
+      }
+      r$obsEventSelList <- list()
+      shiny::removeUI(selector = "div#placeholder_step5")
+      shiny::insertUI(selector = "#topPlaceHolder",
+                      ui = shiny::tags$div(
+                        id = "placeholder_step5"
+                      )
+      )
+
+      #--- 3. banner and language
+      if(is.null(currentLang)) currentLang <<- "de"
+      vftDbgCat("CURRENTLANG : ")
+      vftDbgCat(currentLang)
+      shiny.i18n::update_lang(currentLang)
+      shiny::updateSelectInput(inputId = "languageSelect_5", selected = currentLang)
+      if(currentLang == "de"){
+        vftSetBanner(id, "www/step5_wsl.png")
+      }else if(currentLang == "fr"){
+        vftSetBanner(id, "www/step5_wsl_fr.png")
+      }
+
+      #--- 4. this visit's state. networkList and versionsUI are the point of the
+      #whole exercise: newVersions writes them back into the app's `r`, and this
+      #is where step 5 picks them up.
+      r$networkList        <- networkList
+      r$versionsUI         <- versionsUI
+      r$needHelp           <- needHelp
+      r$currentLang        <- currentLang
+      r$triggerStp6        <- 0
+      r$confirm            <- NULL
+      r$lastSelectedImage  <- NULL
+      r$result             <- NULL
+      r$passageTable       <- NULL
+      r$startingPointsSf   <- NULL
+      r$mapPresent         <- NULL
+      r$refreshMap         <- FALSE
+      #the agent-type radio buttons follow the simulation map, which has just
+      #been cleared with r$result above
+      r$agentCheckboxIsDisabled <- TRUE
+      selectedNetwork_position <<- 1
+
+      #--- 5. the protected areas, only when the perimeter actually changed.
+      #Display-only geometry handed straight to leaflet, and a pure function of
+      #the perimeter: deriving it per visit would pay ~0.10s of main-thread clip
+      #for a layer that cannot have changed. (It used to be ~5.7s - see the note
+      #at the top of this file.)
+      if(!is.null(shape) && !identical(cache$shape, shape)){
+        cache$shape <- shape
+        shp_PA <<- vftTime("step5:protectedAreas", vftProtectedAreas(shape))
+      }
+
+      #--- 6. the map, then the "Original" scenario if this is a first run, then
+      #the cards. Same order as the construction-time code this replaces.
+      plotPathUsage()
+      createOriginalVersion()
+      generateVersionImages()
+
+      vftDbg("RETURNING STEP 6")
+      vftDbg(r$lastSelectedImage)
+      invisible(NULL)
+    })
+
+    enter()
+
     return(list(pathUsage = shiny::reactive(r$result$pathUsage), networkList = shiny::reactive(r$networkList), confirm = shiny::reactive({r$confirm}), newVersions = shiny::reactive(input$newVersionsButton), trigger = shiny::reactive(r$triggerStp6), versionsUI = shiny::reactive(r$versionsUI),
-                currentLang = shiny::reactive(i18n()$get_translation_language()), shp_PA = shiny::reactive( shp_PA) ) )
+                currentLang = shiny::reactive(i18n()$get_translation_language()), shp_PA = shiny::reactive( shp_PA),
+                enter = enter) )
 
   })
 }

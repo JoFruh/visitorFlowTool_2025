@@ -155,23 +155,17 @@ vftGoToStep <- function(r, step, session = shiny::getDefaultReactiveDomain(),
     }
   }
 
-  #### going back discards what was computed from what is about to change ####
+  #### going back costs nothing ####
   #
-  #Re-doing a step overwrites the keys it produces, so everything downstream of
-  #them is about to describe inputs that are no longer on screen. That is the
-  #silent-wrong-map risk, and it is caught here rather than in vftInvalidate()
-  #because "what will be lost" has to be answerable while it still exists.
-  #
-  #Only backwards, and only when something would actually be lost: a warning
-  #about results the user has not produced yet is a warning they learn to click
-  #through. The modal navigates itself on confirm.
-  if(vftStepIsBack(shiny::isolate(r$navStep), step)){
-    atRisk <- vftInvalidationPreview(r, vftStepProduces(step))
-    if(length(atRisk)){
-      vftConfirmInvalidation(r, step, atRisk, session)
-      return(invisible(NULL))
-    }
-  }
+  #This is where the "you are about to discard..." modal used to be: a backward
+  #move named everything downstream of the step being returned to and threw it
+  #away on confirm. Navigation is the wrong event to hang that on, in both
+  #directions - see the note above vftCommit() in R/providers.R - and it is gone.
+  #Moving between steps now reads state; it never destroys it. What destroys
+  #derived results is the confirm handler that writes new ones, and that is where
+  #the question is asked.
+  if(vftStepIsBack(shiny::isolate(r$navStep), step))
+    vftDbg(paste0("NAV BACK -> ", step, " (nothing is discarded by looking)"))
 
   #### hold the move until the step's data exists ####
   #
@@ -247,10 +241,10 @@ vftBackTarget <- function(confirm, from){
 #' Handle a step's `confirm` when it holds a banner letter.
 #' BEING RETIRED - the nav bar replaces it. Decided 2026-08-25, so do not tidy
 #' this: `check = FALSE` below means a banner letter bypasses the re-entry block
-#' the nav bar enforces, and clicking "A" or "B" rebuilds step 1 or step 2 (both
-#' still unconverted) and, for "A", invalidates the sensitivity matrix along with
-#' everything else derived from the perimeter. Gating it would be the wrong
-#' investment: it is going away.
+#' the nav bar enforces, and clicking "A" rebuilds step 1, which is still
+#' unconverted. It no longer discards anything on the way - nothing does, except
+#' the write that supersedes it - so the second half of this warning is gone.
+#' Gating what is left would be the wrong investment: it is going away.
 #'
 #'
 #' Returns TRUE if it did navigate, so a caller can tell "went back" from
@@ -265,50 +259,14 @@ vftGoBack <- function(r, confirm, from, bannerId, session = shiny::getDefaultRea
   TRUE
 }
 
-#' Ask before discarding results, then go.
+#' `vftConfirmInvalidation()` used to live here.
 #'
-#' The decision this stage records is "auto-invalidate, with a cancellable
-#' warning" - never display a result computed from mixed inputs, but never throw
-#' work away behind the user's back either. So: name what will be lost, default
-#' to Cancel, and only on an explicit confirm call vftInvalidate() and complete
-#' the move.
-#'
-#' `check = FALSE` on the way back in, deliberately. The gate has already been
-#' passed by the caller that raised this modal; re-running it here would re-ask
-#' the re-entry question and refuse the very move the user has just confirmed.
-#'
-#' The observer is `once = TRUE` so a second modal does not accumulate handlers,
-#' and `ignoreInit = TRUE` because the button's input value survives the modal
-#' being removed - without it the next modal would fire the moment it opened.
-#'
-#' @param atRisk character vector of human-readable things about to be discarded,
-#'   from vftInvalidationPreview().
-vftConfirmInvalidation <- function(r, step, atRisk,
-                                   session = shiny::getDefaultReactiveDomain()){
-  okId <- "vftInvalidateOk"
-
-  shiny::showModal(shiny::modalDialog(
-    title = "Ergebnisse verwerfen?",
-    shiny::tags$p(paste0(
-      "Wenn Sie zu '", VFT_STEPS[[step]]$label,
-      "' zurückgehen, werden die darauf aufbauenden Ergebnisse verworfen:")),
-    shiny::tags$ul(lapply(atRisk, shiny::tags$li)),
-    shiny::tags$p("Sie können sie danach neu berechnen lassen."),
-    footer = shiny::tagList(
-      shiny::modalButton("Abbrechen"),
-      shiny::actionButton(okId, "Verwerfen und zurück", class = "btn-danger")
-    ),
-    easyClose = TRUE
-  ), session = session)
-
-  shiny::observeEvent(session$input[[okId]], {
-    shiny::removeModal(session = session)
-    vftInvalidate(r, vftStepProduces(step), session)
-    vftGoToStep(r, step, session, check = FALSE)
-  }, once = TRUE, ignoreInit = TRUE)
-
-  invisible(NULL)
-}
+#' It asked "you are about to go back - may I discard X?" and, on confirm, called
+#' vftInvalidate() and completed the move. The question was right and the moment
+#' was wrong: it fired for a user who only wanted to re-read an earlier step, and
+#' it never fired for the write that actually replaced the data. Its replacement
+#' is vftAskCommit() in R/providers.R, raised from the confirm handler that is
+#' about to write, and answered once per session by vftCommitServer().
 
 
 #### The nav bar ####
