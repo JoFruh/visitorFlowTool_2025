@@ -1,6 +1,20 @@
 # Define server logic
-lastStep_server <- function(id, networkList , versionsUI ,
-                            SM_pres, shape , finalPolygons ){
+#' CONVERTED TO A FIRST-TOUCH SINGLETON (Stage 5, seventh and last module).
+#'
+#' The smallest of the seven, and the one with the least per-visit work: it
+#' produces nothing the app reads back (its only return is `confirm`, a banner
+#' letter), so unlike step 5 and newVersions it needs no vftMirror(). What it
+#' does own is the version cards - insertUI'd into `#placeholder_lastStep`, one
+#' per entry in `versionsUI`, each with an observer of its own on
+#' `r$obsEventSelList` - and those have to be torn down and rebuilt per visit or
+#' a return shows every version twice and one click runs its handler twice.
+#'
+#' Every argument except `id` is a REACTIVE now, and none is read directly by the
+#' body: enter() snapshots them into locals of the same names. This step is
+#' downstream of everything, so its inputs change every time the user goes back,
+#' edits and returns - which is precisely what a frozen `networkList` got wrong.
+lastStep_server <- function(id, networkList, versionsUI,
+                            SM_pres, shape, finalPolygons){
 
   #count this instantiation. A module server should be created once per
   #session; this app re-calls it from an observeEvent on a trigger, so any
@@ -8,24 +22,34 @@ lastStep_server <- function(id, networkList , versionsUI ,
   #alongside the previous one. See vftModuleInstance() in perf_helpers.R.
   vftModuleInstance("finalStep")
 
+  #The reactives, held under different names so the locals inside can shadow
+  #them. Everything after this point reads plain values. `SM_pres` is not among
+  #them: it is a formal nothing in this file has ever read, kept so the call site
+  #need not change.
+  .rx <- list(networkList = networkList, versionsUI = versionsUI,
+              shape = shape, finalPolygons = finalPolygons)
 
   shiny::moduleServer(id, function(input, output, session) {
 
+    #per-visit snapshots. enter() refills these; the body and every closure in it
+    #resolve them lexically from here, so nothing else in this file changes.
+    networkList   <- NULL
+    versionsUI    <- list()
+    shape         <- NULL
+    finalPolygons <- NULL
+
     r <- shiny::reactiveValues()
 
-    r$confirm <- NULL
-
-    r$obsEventSelList <- list()
-
-    r$lastSelectedImage <- NULL
-
-    r$selectedNetwork_position <- NULL
-    r$selectedNetwork_position <- 1
-
-    r$networkList <- networkList
-
-
-
+    #Everything this block used to assign - the answer, the observer list, the
+    #selected card and the network list - is per VISIT and is in enter() at the
+    #bottom of this file. `r` itself is per session, so it is still made here.
+    #
+    #r$mapRedraw is new and is the nudge output$mapArea needs: that render reads
+    #r$networkList and r$selectedNetwork_position through isolate() and takes its
+    #geometry from plain locals, so nothing in it would invalidate on a return
+    #visit. Seeded here rather than in enter(), because enter() INCREMENTS it and
+    #NULL + 1 is numeric(0).
+    r$mapRedraw <- 0
     envLastStep <- new.env(parent = emptyenv())
 
     envLastStep$selectedNetwork_r <- shiny::reactiveVal()
@@ -205,6 +229,11 @@ lastStep_server <- function(id, networkList , versionsUI ,
 
 
       #GENERATE VERSION IMAGES ####
+      #Per VISIT: every entry in versionsUI gets a card insertUI'd into
+      ##placeholder_lastStep and an observer of its own on r$obsEventSelList.
+      #enter() destroys those observers and empties the placeholder before
+      #calling this, or a second visit shows every version twice.
+      generateVersionImages <- function(){
       if(length(versionsUI) > 0){
 
         for(i in 1:length(versionsUI) ){
@@ -227,6 +256,8 @@ lastStep_server <- function(id, networkList , versionsUI ,
         vftDbg(versionsUI[[1]]$inputId_select)
         vftDbg(r$lastSelectedImage)
       }
+      invisible(NULL)
+      }
 
 
 
@@ -236,6 +267,12 @@ lastStep_server <- function(id, networkList , versionsUI ,
     # RENDER COMBINED MAPS ####
 
     output$mapArea <- shiny::renderUI({
+
+      #the per-visit nudge. Everything below reads r$ through isolate() or reads
+      #a plain local, so without this a return visit would show the map built for
+      #whatever version was selected the LAST time, against a networkList that
+      #may since have been replaced. enter() bumps it.
+      r$mapRedraw
 
       bboxUsage <- NULL
       map <- NULL
@@ -406,6 +443,16 @@ lastStep_server <- function(id, networkList , versionsUI ,
 
     #OBSERVERS####
     #observe banner click (choosing to step back in history)
+    #
+    #The banner is being retired in favour of the nav bar (decided 2026-08-26),
+    #so this is left as it is - except for the five $destroy() calls that used to
+    #be here. They were unrunnable: `obsConfirm`, `r$obsMapClick`,
+    #`r$obsMarkerClick` and `r$obsErase` do not exist in this file, so the first
+    #of them aborted the observer - and an error in an observer takes the session
+    #with it. That went unnoticed because the banner has never been clickable
+    #(imageMap() early-returns a bare <img>). With one instantiation the
+    #obsBanner$destroy() would also have been wrong on its own terms: it would
+    #have disarmed the only handler this module has, for the rest of the session.
     obsBanner <- observeEvent(input$banner,  {
 
       shinyjs::disable(id = "banner")
@@ -414,27 +461,67 @@ lastStep_server <- function(id, networkList , versionsUI ,
       #determine where to go back in history
       r$confirm <- input$banner
 
-
-
-      obsConfirm$destroy()
-      r$obsMapClick$destroy()
-      r$obsMarkerClick$destroy()
-      r$obsErase$destroy()
-      obsBanner$destroy()
-
       r$finalPolygons <- NULL
-
-
-
-      # shinyjs::enable("banner")
-
-      return(shiny::reactive(r$confirm))
 
       #trigger return to past (return with specific confirm value?)
     }, ignoreInit = TRUE)
 
 
-    return(list(confirm = shiny::reactive(r$confirm)))
+    #### enter(): everything that happens per VISIT rather than per session ####
+    #
+    # Called by vftGoToStep() on every return to this step, and once here at the
+    # end of construction, so the first visit and the fifth run the same code.
+    #
+    # vftModuleEnterFn() supplies the two properties this body must have and
+    # neither of which is visible in it: the module's own session as the default
+    # reactive domain (or the shinyjs:: calls below silently address unnamespaced
+    # controls that do not exist), and isolate() around the whole body (or the
+    # observers enter() is called from take a dependency on values it assigns).
+    # See R/modules.R.
+    enter <- vftModuleEnterFn(session, function(){
+
+      #--- 1. refresh the snapshots the rest of this module reads
+      networkList   <<- .rx$networkList()
+      versionsUI    <<- .rx$versionsUI()
+      shape         <<- .rx$shape()
+      finalPolygons <<- .rx$finalPolygons()
+
+      #--- 2. tear down the previous visit's version cards and their observers.
+      #One observer per card, created by updateVersions(), and the cards are
+      #insertUI'd - so without this a second visit shows every version twice and
+      #a single click runs its handler twice.
+      for(obs in r$obsEventSelList){
+        if(!is.null(obs)) try(obs[[1]]$destroy(), silent = TRUE)
+      }
+      r$obsEventSelList <- list()
+      shiny::removeUI(selector = "div#placeholder_lastStep")
+      shiny::insertUI(selector = "#topPlaceHolder_lastStep",
+                      ui = shiny::tags$div(
+                        id = "placeholder_lastStep"
+                      )
+      )
+
+      #--- 3. this visit's state. networkList is the point: this step is
+      #downstream of everything, so a user who went back, edited and returned has
+      #a different one every time.
+      r$networkList              <- networkList
+      r$confirm                  <- NULL
+      r$lastSelectedImage        <- NULL
+      r$selectedNetwork_position <- 1
+      r$result                   <- NULL
+      #obsBanner disables the strip on its way out and nothing ever re-enabled it
+      shinyjs::enable(id = "banner")
+
+      #--- 4. the cards, then the map
+      generateVersionImages()
+      r$mapRedraw <- r$mapRedraw + 1
+
+      invisible(NULL)
+    })
+
+    enter()
+
+    return(list(confirm = shiny::reactive(r$confirm), enter = enter))
   })
 
 

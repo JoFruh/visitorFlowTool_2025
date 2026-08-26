@@ -116,7 +116,12 @@ lastStep_ui <- function(id){
 
 
 
-                                    shiny::div(id = "topPlaceHolder",
+                                    #topPlaceHolder_lastStep, not topPlaceHolder: step5_ui.R:215
+                                    #already ships a div with that id, and all seven module UIs
+                                    #sit in the DOM at once - so the duplicate meant this step's
+                                    #insertUI(selector = "#topPlaceHolder") would have put its
+                                    #cards inside STEP 5's container, which comes first.
+                                    shiny::div(id = "topPlaceHolder_lastStep",
                                                shiny::div(id = "placeholder_lastStep")
                                     )
 

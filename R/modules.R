@@ -20,8 +20,9 @@
 # module is reused rather than rebuilt. Adding a step to that vector is the whole
 # act of converting it, which is what makes this safe to do one module at a time:
 # an unconverted step keeps the old rebuild-per-visit behaviour exactly, because
-# the paths that still rely on it - step5 <-> newVersions bouncing, the restore
-# ladder - are unchanged until its turn comes.
+# the paths that still rely on it - the restore ladder - are unchanged until its
+# turn comes. As of 2026-08-26 all seven are converted and nothing takes that
+# branch any more; it stays as the way to back one out.
 #
 # A converted module owes two things:
 #

@@ -204,9 +204,15 @@ vftNavAllows <- function(step){
 #' area of interest back into `r$`: observed live as two "Original" scenarios in
 #' step 5, one simulated against an area that was no longer on screen.
 #'
-#' Conversion order is smallest first - step3, step4, step2, step5, step1,
-#' newVersions, lastStep - so the mechanism is proved on 400 lines before it is
-#' applied to 3900. Done as of 2026-08-26: step1, step2, step3, step4, step5.
+#' **As of 2026-08-26 the list is complete: all seven modules are converted**,
+#' so nothing takes the unconverted branch any more. The branch is kept rather
+#' than deleted - it is what makes vftModuleOnce() safe to read, and removing a
+#' step from this vector is still the way to isolate one if a conversion has to
+#' be backed out.
+#'
+#' Conversion order was smallest first - step3, step4, step2, step5, step1,
+#' newVersions, lastStep - so the mechanism was proved on 400 lines before it
+#' was applied to 3900.
 #'
 #' step1 was taken out of turn because the user asked for the return, and it is
 #' the odd one: its module is built at SESSION START by its own
@@ -218,10 +224,10 @@ vftNavAllows <- function(step){
 #' Note this restricts the NAV BAR and the module cache only. The app's own
 #' transitions (`vftGoToStep(check = FALSE)`) still reach any step, which is what
 #' let step 5 and newVersions keep bouncing between each other while neither was
-#' converted. step 5 is a singleton now and newVersions is not, so that bounce is
-#' currently one reused module and one rebuilt one - which is exactly what the
-#' per-step switch is for.
-VFT_REENTRANT_STEPS <- c("step1", "step2", "step3", "step4", "step5")
+#' converted. Both ends of that bounce are singletons now, which closes the last
+#' rebuild on the busiest path in the app.
+VFT_REENTRANT_STEPS <- c("step1", "step2", "step3", "step4", "step5",
+                         "newVersions", "finalStep")
 
 #' May the nav bar return to this step after it has been built once?
 vftStepReentrant <- function(step){

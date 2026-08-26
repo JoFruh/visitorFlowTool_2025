@@ -916,15 +916,40 @@ app_server <- function(input, output, session){
   #NEW VERSIONS PAGE
   shiny::observeEvent(vftStepTrigger(session, "newVersions"), {
     vftDbg("BUILD NEW VERSIONS")
-    newVersionsReturn <- newVersions_server("newVersions", networkList = r$networkList, SM_pres = r$SM_pres,  SMcolors =  r$SMcolors, shp_PA = r$shp_PA,
-                                            finalPolygons = r$finalPolygons, versionsUI = r$versionsUI, isFirstRun = r$newVersionsFirstRun,
-                                            DULN = r$DULN,
+    #FIRST-TOUCH SINGLETON (Stage 5, sixth module). This page is a side trip off
+    #step 5 in both directions and every round trip used to call the 3900-line
+    #server again, stacking a second set of observers and outputs on the live
+    #ones. Every input is a REACTIVE; the module snapshots them in enter().
+    vftModuleOnce(session, "newVersions", function(){
+    newVersionsReturn <- newVersions_server("newVersions",
+                                            networkList   = shiny::reactive(r$networkList),
+                                            SM_pres       = shiny::reactive(r$SM_pres),
+                                            SMcolors      = shiny::reactive(r$SMcolors),
+                                            shp_PA        = shiny::reactive(r$shp_PA),
+                                            finalPolygons = shiny::reactive(r$finalPolygons),
+                                            versionsUI    = shiny::reactive(r$versionsUI),
+                                            isFirstRun    = shiny::reactive(r$newVersionsFirstRun),
+                                            DULN          = shiny::reactive(r$DULN),
                                             #the step-1 perimeter, for cropping the land cover under the
                                             #paint. step5_server and lastStep_server already take it this way
-                                            shape = r$shape,
-                                            i18n = shiny::reactive(i18n), currentLang = r$currentLang)
+                                            shape         = shiny::reactive(r$shape),
+                                            i18n = shiny::reactive(i18n),
+                                            currentLang   = shiny::reactive(r$currentLang))
 
-    r$newVersionsFirstRun <- FALSE
+    #### this page's results, published into `r` as they are produced ####
+    #
+    #Same defect step 5 had, and the same fix: a new version reached the app's
+    #`r` only through the handler on the confirm button, so leaving by the NAV
+    #BAR lost it - and then enter() refreshed the module from an `r` that had
+    #never heard of it. See vftMirror() in R/modules.R for the two guards.
+    #
+    #The explicit writes in the confirm handler below are NOT redundant with
+    #this and must stay: the mirror is an observe() and runs at the next flush,
+    #while the confirm handler calls vftGoToStep(r, "step5") - and therefore
+    #step 5's enter(), which reads r$networkList - in this same tick. The
+    #identical() guard inside vftMirror() makes the second write free.
+    vftMirror(r, "networkList", newVersionsReturn$networkList)
+    vftMirror(r, "versionsUI",  newVersionsReturn$versionsUI)
 
     shiny::observeEvent(newVersionsReturn$confirm(), {
 
@@ -953,11 +978,6 @@ app_server <- function(input, output, session){
         vftDbg("PRE-TRIGGER STEP 5 return")
         vftDbgCat("TESTFb")
 
-        #save returns (but only if non NULL, to avoid overwriting with default)
-        # if(length(newVersionsReturn$networkList() ) > 0){
-        #   networkList <<- newVersionsReturn$networkList()
-        # }
-
         #activate download
         #autosave dropped here, on returning from newVersions. downloadSave
         #materialises the raster and save()s the whole session state on the
@@ -974,8 +994,23 @@ app_server <- function(input, output, session){
         # isolate(tiggerNewVersions(0))#reset value without trigger
 
       }
-    }, ignoreInit = TRUE, once = TRUE)
+      #`once = TRUE` had to go with the rebuild it existed for. It was there so a
+      #REBUILT module's handler would not stack on the live one; with one
+      #instantiation it would mean the page could be left exactly once per
+      #session and then never again.
+    }, ignoreInit = TRUE)
 
+    newVersionsReturn
+    })
+
+    #Deliberately OUTSIDE the vftModuleOnce() block, so it runs on every visit
+    #rather than once at construction. The module's enter() has already read this
+    #flag by the time this line executes - vftGoToStep() calls enter() directly,
+    #while the counter write that re-runs this observer is deferred to the flush -
+    #so the order is "ask, then clear", on every entry. It has to be re-asked
+    #every time because vftInvalidate() re-arms it whenever the saved versions are
+    #discarded.
+    r$newVersionsFirstRun <- FALSE
 
   }, ignoreInit = TRUE)
 
@@ -985,13 +1020,25 @@ app_server <- function(input, output, session){
 
   shiny::observeEvent(vftStepTrigger(session, "finalStep"), {
     vftDbg("BUILD FINAL STEP")
-    finalStepReturn <- lastStep_server("finalStep", networkList = r$networkList, versionsUI = r$versionsUI,
-                                       SM_pres = r$SM_pres, shape = r$shape,
-                                       finalPolygons = r$finalPolygons)
+    #FIRST-TOUCH SINGLETON (Stage 5, seventh and last module). Every input is a
+    #REACTIVE; the module snapshots them in enter(). This step is downstream of
+    #everything, so its inputs are exactly what changes when a user goes back,
+    #edits and comes forward again - a networkList frozen at the first visit was
+    #the whole defect here.
+    vftModuleOnce(session, "finalStep", function(){
+    finalStepReturn <- lastStep_server("finalStep",
+                                       networkList   = shiny::reactive(r$networkList),
+                                       versionsUI    = shiny::reactive(r$versionsUI),
+                                       SM_pres       = shiny::reactive(r$SM_pres),
+                                       shape         = shiny::reactive(r$shape),
+                                       finalPolygons = shiny::reactive(r$finalPolygons))
 
+    #No vftMirror() here, and that is not an omission: this module produces
+    #nothing the app reads back. Its only return is `confirm`, which carries a
+    #banner letter, and its map is display-only.
 
     shiny::observeEvent( finalStepReturn$confirm() , {
-      vftDbg("REACTIVE::: STEP5RETURN$CONFIRM")
+      vftDbg("REACTIVE::: FINALSTEPRETURN$CONFIRM")
       #button indirectly triggers step 2, to allow for program intervention
       if(is.integer(finalStepReturn$confirm()) & finalStepReturn$confirm() > 0){
         #the last step has nowhere forward to go; its confirm button does nothing.
@@ -1002,7 +1049,13 @@ app_server <- function(input, output, session){
         vftGoBack(r, finalStepReturn$confirm(), from = "finalStep",
                   bannerId = "lastStep-banner", session = session)
       }
-    }, ignoreInit = TRUE, once = TRUE)
+      #`once = TRUE` had to go with the rebuild it existed for: with one
+      #instantiation it would mean this step could answer exactly once per
+      #session and then never again.
+    }, ignoreInit = TRUE)
+
+    finalStepReturn
+    })
   })
 
 
