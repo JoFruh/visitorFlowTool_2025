@@ -3999,6 +3999,14 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
       #it produces them (vftMirror), and this is where newVersions picks them up.
       r$networkList     <- networkList
       r$versionsUI      <- versionsUI
+      #the scenario card to open on. Picked up from the app the same way as the
+      #two lists above, because step 5 may have changed it since this module
+      #last ran - mirrors step5_server.R's enter(), which does the same for the
+      #same reason. Without this, generateVersionButtons() below resolves
+      #against whatever this page's OWN r$selectedVersion was left at on the
+      #previous visit (or NULL on the first one) instead of what step 5 just
+      #selected.
+      r$selectedVersion <- selectedVersion
       r$DULN            <- DULN
       r$mapPoints       <- NULL
       r$trigger         <- 1
