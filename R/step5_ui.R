@@ -107,10 +107,38 @@ background: url('infoIcon.png');  background-size: cover; background-position: c
                                 tags$style(
                                   ".leaflet .legend { text-align: left;font-size: 15px;}"
                                 )),
+                              #The map container is STATIC and lives here for the life of the
+                              #session. It used to be emitted from inside `mapArea_UI`, a
+                              #renderUI in step5_server.R, and that is what broke every
+                              #leafletProxy() call after a re-entry: leaflet finds a map by
+                              #`$(el).data("leaflet-map")` - jQuery data on the ELEMENT, attached
+                              #once inside renderValue() - so re-running the renderUI inserted a
+                              #fresh, unregistered <div id="step5-mapAreaLeaflet"> and every
+                              #proxy call after it logged "Couldn't find map with id
+                              #step5-mapAreaLeaflet" and did nothing. That is the whole of the
+                              #radio buttons and the version cards going dead on the way back in.
+                              #newVersions_ui.R has always had its map static, which is why that
+                              #page never showed the symptom.
+                              #
+                              #The "no simulation yet" placeholder is an OVERLAY on top of the
+                              #map rather than a replacement for it - deliberately not
+                              #shinyjs::hide() on the map itself, because a display:none leaflet
+                              #container has offsetWidth 0, and leaflet then defers its render to
+                              #a resize() callback that only Shiny's own visibility machinery
+                              #fires. z-index 1200 clears leaflet's own highest layer
+                              #(.leaflet-top/.leaflet-bottom at 1000).
                               div(style = "display: flex; justify-content: center;",
-                                  div(style = "width: 884px;height:600px;",
+                                  div(style = "width: 884px;height:600px; position: relative;",
                                     # leaflet::leafletOutput(shiny::NS(id, "pathUsageMap"), height = 500px)
-                                    shiny::uiOutput(NS(id, "mapArea_UI"), height = 500)
+                                    leaflet::leafletOutput(NS(id, "mapAreaLeaflet"),
+                                                           height = 600, width = 884),
+                                    shiny::div(
+                                      id = NS(id, "mapPlaceholder"),
+                                      style = paste("position: absolute; top: 0; left: 0;",
+                                                    "width: 884px; height: 600px;",
+                                                    "z-index: 1200; background-color: #ffffff;"),
+                                      shiny::uiOutput(NS(id, "mapArea_UI"))
+                                    )
                                   )
                               ),
 

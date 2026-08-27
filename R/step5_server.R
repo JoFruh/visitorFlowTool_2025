@@ -741,9 +741,10 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
             #   )))
             # })
             # output$mapArea <- renderUI({return(NULL)})
-            output$mapArea_UI <- renderUI({
-              leaflet::leafletOutput(NS(id, "mapAreaLeaflet"), height = 600, width = 884)
-            })
+            #the leafletOutput used to be emitted HERE, from mapArea_UI. It is
+            #static in step5_ui.R now - see the note there - and all that is left
+            #to do is uncover it.
+            shinyjs::hide(id = "mapPlaceholder")
 
             #the block is just `map` - the map was built eagerly above - so all the
             #cost here is htmlwidgets turning it into JSON, which happens outside
@@ -768,9 +769,9 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
             #     'document.getElementById("step5-mapArea").style.width="0px";'
             #   )))
             # })
-            output$mapArea_UI <- renderUI({
-                leaflet::leafletOutput(NS(id, "mapAreaLeaflet"), height = 600, width = 884)
-            })
+            #see the sibling site above: the container is static in step5_ui.R,
+            #so uncovering it is the whole job.
+            shinyjs::hide(id = "mapPlaceholder")
             #see the note at the sibling site above
             output$mapAreaLeaflet <- vftTimeRender("step5:mapAreaLeaflet",
                                                    leaflet::renderLeaflet({
@@ -834,12 +835,18 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
         #rather than asking the browser for a file that is not there.
         noSimLang <- if(isTRUE(r$currentLang %in% c("de", "fr", "en"))) r$currentLang else "de"
 
+        #`mapArea_UI` is the OVERLAY now, not the map container - it fills
+        ##mapPlaceholder, which sits on top of the static leafletOutput. The map
+        #underneath is left alone on purpose: hiding it would take its
+        #offsetWidth to 0 and leave leaflet waiting for a resize() it will not
+        #get. See step5_ui.R.
         output$mapArea_UI <- renderUI({
           shiny::tags$img(src    = paste0("noSimYet_", noSimLang, ".png"),
                           width  = 884,
                           height = 600,
                           alt    = i18n()$t("Noch keine Simulation"))
         })
+        shinyjs::show(id = "mapPlaceholder")
 
           r$mapPresent <- FALSE
       }
