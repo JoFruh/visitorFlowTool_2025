@@ -84,8 +84,19 @@ VFT_PROVIDERS <- list(
       #afterwards: every consumer transforms it to 4326 itself, which is what
       #step 1's shapefile branch already produced and what sf_to_tidygraph3()
       #has always been handed.
-      list(shapeLarger = sf::st_as_sfc(
-        sf::st_buffer(sf::st_transform(vals$shape, "EPSG:3857"), dist = 1000)))
+      buf <- sf::st_buffer(sf::st_transform(vals$shape, "EPSG:3857"), dist = 1000)
+
+      #st_as_sfc() is here to drop the attribute columns an `sf` carries, which
+      #is the form step 1 hands over and the form every consumer expects. It has
+      #no method for a bare `sfc` and ABORTS on one rather than passing it
+      #through - and unlike step 1, which knows it built an `sf` two lines
+      #earlier, this reads whatever a save file happens to hold. `r$shape` is an
+      #sf today (it is `r$polygonsList`, or a shapefile read), so this branch is
+      #not known to have fired; asking costs nothing and not asking would take
+      #out the one provider the whole restore path is built on - with nothing
+      #derivable afterwards, every restore would be stuck at step 2.
+      if(!inherits(buf, "sfc")) buf <- sf::st_as_sfc(buf)
+      list(shapeLarger = buf)
     }
   ),
 

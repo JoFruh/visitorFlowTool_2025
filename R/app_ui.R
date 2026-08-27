@@ -49,10 +49,7 @@ app_ui <- function(){
                      ),
                      shiny::tabPanel("tab_newVersions",
                                      newVersions_ui("newVersions", i18n = i18n)
-                     ),
-                     shiny::tabPanel("tab_finalStep",
-
-                                     lastStep_ui("finalStep"))
+                     )
   )
 )
 }
@@ -72,8 +69,8 @@ app_ui <- function(){
 # distinct outputs and Shiny sweeps ALL of them, testing each for suspension, on
 # every single input message batch - 11% of sampled time. Six of those outputs
 # were banner renderUIs producing one static <img> each, and deleting them was
-# the largest single item in Stage 1. Putting a seven-button bar back as an
-# output would hand most of that saving straight back.
+# the largest single item in Stage 1. Putting the bar back as an output would
+# hand most of that saving straight back.
 #
 # So the markup is built once, here, with the buttons literally in the page.
 # Nothing about it is reactive. The only things that change at runtime are the
@@ -88,7 +85,7 @@ app_ui <- function(){
 #'
 #' Everything except step 1 ships disabled: at session start step 1 is the only
 #' step whose `needs` are met, and starting from the correct state means the user
-#' never sees a frame of seven live buttons before the first flush corrects them.
+#' never sees a frame of live buttons before the first flush corrects them.
 #'
 #' The tooltip is static too. `needs` and VFT_KEY_SOURCE are both compile-time
 #' constants, so "which step would I have to do first" can be answered while the

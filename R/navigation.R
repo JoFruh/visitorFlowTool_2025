@@ -32,9 +32,9 @@
 VFT_BANNER_STEPS <- c(A = "step1", B = "step2", C = "step3", D = "step4", E = "step5")
 
 #' Rank of a step for the purpose of "is this letter a step backwards".
-#' newVersions has no banner back-navigation, so it is not listed.
-VFT_BANNER_RANK <- c(step1 = 1L, step2 = 2L, step3 = 3L, step4 = 4L, step5 = 5L,
-                     finalStep = 6L)
+#' newVersions has no banner back-navigation, so it is not listed - nor is there
+#' anything after step 5 to be listed: the Resultate page was removed 2026-08-27.
+VFT_BANNER_RANK <- c(step1 = 1L, step2 = 2L, step3 = 3L, step4 = 4L, step5 = 5L)
 
 #' Create the per-step navigation triggers for this session.
 #'
@@ -285,11 +285,11 @@ vftGoBack <- function(r, confirm, from, bannerId, session = shiny::getDefaultRea
 #'    button is a hint to the user, not a security boundary, because the input
 #'    can be fired from the browser console.
 #'
-#' 2. ONE `observe()` for the state of the whole bar. It reads the `needs` of all
-#'    seven steps, so it re-runs whenever any of those keys changes - but it only
+#' 2. ONE `observe()` for the state of the whole bar. It reads the `needs` of
+#'    every step, so it re-runs whenever any of those keys changes - but it only
 #'    sends a message to the client for the buttons whose state actually moved.
-#'    Without that filter a single change to `r` would push seven toggleState
-#'    calls plus two class changes down the socket, and every message batch the
+#'    Without that filter a single change to `r` would push one toggleState call
+#'    per step plus two class changes down the socket, and every message batch the
 #'    client answers costs another full manageHiddenOutputs() sweep, which is the
 #'    overhead Stage 1 just spent itself removing.
 #'

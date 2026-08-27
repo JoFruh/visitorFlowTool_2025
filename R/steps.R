@@ -23,9 +23,15 @@
 #' `tab` is the tabPanel value in the hidden tabsetPanel built by `app_ui()`.
 #'
 #' `code` is what gets written to `r$step`, which is the number the save file
-#' records and the restore path switches on. It is NOT the position in this
-#' list: `newVersions` is a side trip off step 5 and deliberately leaves
-#' `r$step` alone, so that a save taken there restores to step 5.
+#' records and the restore path resolves back to a step name through
+#' vftStepForCode(). It is NOT the position in this list: `newVersions` is a side
+#' trip off step 5 and deliberately leaves `r$step` alone, so that a save taken
+#' there restores to step 5 - and loses nothing by it, because what that page
+#' produces is mirrored into `networkList` / `versionsUI` as it is made.
+#'
+#' newVersions is now the LAST step. `finalStep` - the "Resultate" page, module
+#' lastStep_server - was removed on 2026-08-27: it had gone non-functional. Its
+#' code 6 is not reissued; see vftStepForCode() for what a save carrying it does.
 #'
 #' `label` is the nav bar button text. Plain German rather than i18n$t(): the
 #' bar is static markup built once per session (that is the point of it - see
@@ -57,11 +63,7 @@ VFT_STEPS <- list(
   newVersions = list(tab = "tab_newVersions", code = NA_integer_,
                      label = "Neue Versionen",
                      needs = c("networkList", "SM_pres", "SMcolors",
-                               "finalPolygons", "DULN", "shape")),
-  finalStep   = list(tab = "tab_finalStep",   code = 6L,
-                     label = "Resultate",
-                     needs = c("networkList", "versionsUI",
-                               "SM_pres", "shape", "finalPolygons"))
+                               "finalPolygons", "DULN", "shape"))
 )
 
 #' Which step produces each key.
@@ -204,15 +206,16 @@ vftNavAllows <- function(step){
 #' area of interest back into `r$`: observed live as two "Original" scenarios in
 #' step 5, one simulated against an area that was no longer on screen.
 #'
-#' **As of 2026-08-26 the list is complete: all seven modules are converted**,
-#' so nothing takes the unconverted branch any more. The branch is kept rather
-#' than deleted - it is what makes vftModuleOnce() safe to read, and removing a
-#' step from this vector is still the way to isolate one if a conversion has to
-#' be backed out.
+#' **As of 2026-08-26 the list is complete: every module is converted**, so
+#' nothing takes the unconverted branch any more. The branch is kept rather than
+#' deleted - it is what makes vftModuleOnce() safe to read, and removing a step
+#' from this vector is still the way to isolate one if a conversion has to be
+#' backed out.
 #'
 #' Conversion order was smallest first - step3, step4, step2, step5, step1,
 #' newVersions, lastStep - so the mechanism was proved on 400 lines before it
-#' was applied to 3900.
+#' was applied to 3900. lastStep is gone (2026-08-27, non-functional); the six
+#' that are left are the six steps there are.
 #'
 #' step1 was taken out of turn because the user asked for the return, and it is
 #' the odd one: its module is built at SESSION START by its own
@@ -227,7 +230,7 @@ vftNavAllows <- function(step){
 #' converted. Both ends of that bounce are singletons now, which closes the last
 #' rebuild on the busiest path in the app.
 VFT_REENTRANT_STEPS <- c("step1", "step2", "step3", "step4", "step5",
-                         "newVersions", "finalStep")
+                         "newVersions")
 
 #' May the nav bar return to this step after it has been built once?
 vftStepReentrant <- function(step){
@@ -290,7 +293,7 @@ vftStepReachable <- function(r, step){
 #' step 5's rank because it is a side trip off it in both directions, and moving
 #' between the two must never count as going back.
 VFT_STEP_RANK <- c(step1 = 1L, step2 = 2L, step3 = 3L, step4 = 4L,
-                   step5 = 5L, newVersions = 5L, finalStep = 6L)
+                   step5 = 5L, newVersions = 5L)
 
 #' Is `to` behind `from`?
 vftStepIsBack <- function(from, to){
@@ -299,6 +302,79 @@ vftStepIsBack <- function(from, to){
   if(!(from %in% names(VFT_STEP_RANK)) || !(to %in% names(VFT_STEP_RANK)))
     return(FALSE)
   VFT_STEP_RANK[[to]] < VFT_STEP_RANK[[from]]
+}
+
+#### The restore path ####
+
+# Stage 6. A save file records one number - `envBase_step`, which is whatever
+# `code` the step the user was on carries - and restoring used to be an if/else
+# ladder of five hand-written branches, one per number, with no branch at all for
+# the last step and one branch (`r$step == 1`) that bumped a reactiveVal nothing
+# observed. The two functions below replace the ladder: one turns the number back
+# into a step name, the other decides whether that step can actually be entered.
+#
+# The second question is the one the ladder never asked. A save is a snapshot of
+# `r`, and the registry already says, per step, which keys have to be in `r`
+# before it can run - so "resume where you were" and "resume somewhere the module
+# will not read NULL" are different answers, and only the second one is safe.
+# Getting it wrong is not a caught error: the module is built, reads NULL, and
+# fails somewhere in the middle.
+
+#' The step a save file's `r$step` code means, or NULL if it means nothing.
+#'
+#' Codes are the `code` field of VFT_STEPS, NOT positions - see the note there.
+#' newVersions has no code, so nothing ever resolves to it: a save taken on that
+#' page carries step 5's code, which is what it should resume at anyway.
+#'
+#' A code ABOVE the highest one issued resolves to the last step rather than to
+#' NULL. That is not an old-file concession - those are off the table - it is the
+#' honest answer to "the user was as far on as it is possible to be": codes 6, 7
+#' and 8 were the Resultate page and its variants, which no longer exist, and the
+#' furthest a session can now get is step 5. Resolving to NULL instead would send
+#' someone who had finished a simulation back to step 1.
+vftStepForCode <- function(code){
+  if(length(code) != 1L) return(NULL)
+  code <- suppressWarnings(as.integer(code))
+  if(is.na(code)) return(NULL)
+
+  codes <- vapply(VFT_STEPS, function(s) s$code, integer(1))
+  codes <- codes[!is.na(codes)]
+  if(!length(codes)) return(NULL)
+
+  hit <- names(codes)[codes == code]
+  if(length(hit)) return(hit[[1]])
+  if(code > max(codes)) return(names(codes)[[which.max(codes)]])
+  NULL
+}
+
+#' Where a restored session should actually resume.
+#'
+#' The step the save NAMES, if its inputs are there or can be derived; otherwise
+#' the furthest step before it that can be. Reachable rather than available on
+#' purpose, and that is the whole of the new capability Stage 6 buys: a save
+#' carrying nothing but `shape` names step 2, step 2 needs only `shape`, and
+#' everything past it - the buffered perimeter, the attractiveness crop, the path
+#' network - is derived by the provider layer when a step that reads it is
+#' entered rather than rebuilt eagerly on the way in.
+#'
+#' Only steps with a `code` are candidates: newVersions is a side trip and is
+#' reached from step 5, never restored into.
+#'
+#' Reads `r`. Call it from an isolated context (the restore handler is one).
+vftRestoreStep <- function(r){
+  walk <- names(VFT_STEPS)[
+    !vapply(VFT_STEPS, function(s) is.na(s$code), logical(1))]
+  if(!length(walk)) return(NULL)
+
+  target <- vftStepForCode(shiny::isolate(r$step))
+  if(is.null(target) || !(target %in% walk)) return(walk[[1]])
+
+  #back down the walk from the named step until one can be entered. step 1 needs
+  #nothing, so this always terminates with an answer.
+  for(i in rev(seq_len(match(target, walk)))){
+    if(vftStepReachable(r, walk[[i]])) return(walk[[i]])
+  }
+  walk[[1]]
 }
 
 #' The steps that have to be done before this one, as labels.

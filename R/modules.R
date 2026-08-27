@@ -11,18 +11,19 @@
 #
 # So: build a step's module the first time it is entered, and reuse it. Not
 # eagerly at session start - output registration happens at construction, and
-# building all seven up front takes the registered-output sweep from ~6 to ~31
-# from t=0, which is a 5x regression on the exact metric Stage 1 existed to
+# building every module up front takes the registered-output sweep from ~6 to
+# ~31 from t=0, which is a 5x regression on the exact metric Stage 1 existed to
 # improve. First touch, then cached.
 #
 # THE SWITCH IS `VFT_REENTRANT_STEPS` IN R/steps.R, and it now means three things
 # at once: the nav bar offers the step, vftGoToStep() allows the return, and the
 # module is reused rather than rebuilt. Adding a step to that vector is the whole
 # act of converting it, which is what makes this safe to do one module at a time:
-# an unconverted step keeps the old rebuild-per-visit behaviour exactly, because
-# the paths that still rely on it - the restore ladder - are unchanged until its
-# turn comes. As of 2026-08-26 all seven are converted and nothing takes that
-# branch any more; it stays as the way to back one out.
+# an unconverted step keeps the old rebuild-per-visit behaviour exactly. As of
+# 2026-08-26 every module is converted and nothing takes that branch any more;
+# it stays as the way to back one out. (The restore path used to be the thing
+# that relied on the rebuild; since Stage 6 it goes through vftGoToStep() like
+# everything else - see vftRestoreStep() in R/steps.R.)
 #
 # A converted module owes two things:
 #

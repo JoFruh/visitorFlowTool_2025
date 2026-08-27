@@ -812,10 +812,13 @@ an explicit reactive nudge or a return visit shows the previous visit's picture.
 1→5→1→5→newVersions→5 and read `vftReport()`: **every** module must be exactly 1 — there are no
 exempt ones left.
 
-**Next is Stage 6, the restore path**, below. Two things Stage 5 leaves on its doorstep: step 5 has
-no live `confirmButton5` observer (the block is commented out at `step5_server.R:2193`), so
+~~**Next is Stage 6, the restore path**, below. Two things Stage 5 leaves on its doorstep: step 5
+has no live `confirmButton5` observer (the block is commented out at `step5_server.R:2193`), so
 `app_server`'s step5 → finalStep branch has never been reachable and the nav bar is the only way to
-Resultate; and the `r$step == 6` branch of the restore ladder still does not exist.
+Resultate; and the `r$step == 6` branch of the restore ladder still does not exist.~~
+**Closed 2026-08-27.** Both doorstep items were answered by removing the step they were about:
+Resultate is gone, so the dead confirm branch went with it and there is no code 6 to add a branch
+for. Stage 6 is built — see "As built" under it.
 
 ---
 
@@ -841,14 +844,83 @@ The restore path work itself is unchanged:
 
 - `app_server.R:360-361`: the `r$step == 1` branch calls `triggerStep1(1)` which nothing observes —
   correct for free under `vftGoToStep()`.
-- Add the missing `r$step == 6` branch routing to `finalStep`.
-- Replace the `if/else` ladder with `vftGoToStep(r, names(VFT_STEPS)[r$step])`.
+- ~~Add the missing `r$step == 6` branch routing to `finalStep`.~~ **Retired 2026-08-27:** there is
+  no step 6 any more. `vftStepForCode()` resolves a file that carries one to the last step there is.
+- Replace the `if/else` ladder with `vftGoToStep(r, names(VFT_STEPS)[r$step])`. **Done, but by
+  `code` rather than by position** — the two agree today and positional indexing would break
+  silently the next time a step is added or removed, which is exactly what just happened.
 - A save containing only `shape` becomes a legal state: resume at step 2 and lazily rebuild
   everything else. New capability — and no longer one that has to be reconciled with anything.
+  **Done, and generalised:** any save resumes at the furthest step it can actually reach.
 
 One thing the save rewrite will want to know: `r$pathUsage` is now mirrored out of step 5 as it is
 produced (`vftMirror()`), so a save taken at step 5 carries the simulation. The slot and the
 restore read were always there; what changed is that they are now populated.
+
+### As built (2026-08-27) — Stage 6 is complete, and `finalStep` is gone
+
+**The user removed the last step before this stage ran.** `finalStep` — the "Resultate" page,
+`lastStep_server()` / `lastStep_ui()` — had gone non-functional, so it and its nav bar button are
+deleted rather than restored to. **`newVersions` is now the last step.** What that took:
+
+- `R/lastStep_server.R` and `R/lastStep.ui.R` deleted; the `tab_finalStep` tabPanel, the
+  `finalStep` entry in `VFT_STEPS` / `VFT_STEP_RANK` / `VFT_REENTRANT_STEPS` / `VFT_BANNER_RANK`,
+  the `lastStep-banner` seed and the whole "GO TO FINAL STEP" observer with them.
+- step 5's confirm handler loses its forward branch and keeps only `vftGoBack()`. That branch was
+  never reachable — `step5return$confirm` is `r$confirm`, and the only line that would have set it
+  from `confirmButton5` has been commented out at `step5_server.R:2196` all along — **so the third
+  autosave checkpoint ("the finished simulation") has never fired either.** Where a finished
+  simulation gets written is now explicitly the save rewrite's call; do not re-add the
+  `shinyjs::click("downloadSave")` without deciding it.
+- codes 7 and 8 dropped from `downloadSave`'s name map. The map is left otherwise **untouched on
+  purpose**: `switch()` on an integer selects by POSITION and ignores the names, so what the names
+  say and what the code does disagree, and the positional answer is both what users have been
+  getting and the one that reads sensibly. Decide it in the save rewrite, not here — there is a
+  comment at the site saying so.
+
+**The restore path itself, as planned, plus one thing the plan did not ask for.** Two new functions
+in `R/steps.R` replace the five-branch ladder:
+
+- `vftStepForCode(code)` — the number in the file back to a step name, off `VFT_STEPS$code` rather
+  than by position. A code **above** the highest issued resolves to the last step instead of NULL,
+  which is what a file carrying the old 6/7/8 does. That is not an old-file concession: it is the
+  honest reading of "as far on as it is possible to be", and the alternative sends someone who had
+  finished a simulation back to step 1.
+- `vftRestoreStep(r)` — the step the save names **if it can be entered**, else the furthest one
+  before it that can. The ladder never asked the second question, and honouring a file that names
+  step 5 with no `species` in it meant building step 5, reading NULL and failing in the middle.
+  Falling back says so, once, in a notification naming where it landed.
+
+`REACHABLE`, not available, is what buys the plan's new capability: a save carrying nothing but
+`shape` names step 2, step 2 needs only `shape`, and the perimeter / crop / network are derived
+when a step that reads them is entered. Verified at runtime, not by inspection — a save with only
+`shape` restores to step 2 with `r$network` and `r$DULN_all` still NULL, and one that names step 5
+with only `shape` lands on step 3 having derived `shapeLarger` and `DULN_all` on the way.
+
+**One defect found and fixed while testing.** The `shapeLarger` provider — which exists *only* for
+the restore path — called `sf::st_as_sfc()` unconditionally on the buffered result. That has no
+method for a bare `sfc` and **aborts** rather than passing it through, and with the perimeter
+provider dead nothing downstream is derivable at all, so every restore would have been stuck at
+step 2. `r$shape` is an `sf` today so the branch is not known to have fired; it is guarded now.
+
+**Not a code defect but it will waste an hour: a machine-level `PROJ_LIB` pointing at PostgreSQL's
+PostGIS copy** (`C:\Program Files\PostgreSQL\18\share\contrib\postgis-3.6\proj`) shadows terra's
+own, and `terra::crs(x) <- "epsg:4326"` — which the restore path runs on every save file carrying
+a sensitivity matrix — fails with `[rast] empty srs`. `sf` is unaffected, so it looks selective.
+Tests override it to `.../win-library/4.5/terra/proj`.
+
+**Verify (done, 2026-08-27):** 681 assertions green across 30 suites in the session scratchpad
+(the 31st, `stage3_nocontext_unfixed.R`, is the negative control and must fail), of which
+`stage6_registry.R` (37) and `stage6_live.R` (26) are this stage's. `stage6_live.R` drives the real
+`app_server` under `testServer` with real `.RData` fixtures and every module server stubbed —
+routing is what changed, and a live step 2 only contributes a `maptiles` fetch. Two traps in it
+worth restating: step 1's `confirm` must START at 0 and MOVE to -1, because app_server's handler is
+`ignoreInit = TRUE` and a constant is swallowed; and a deferred navigation settles on `later()`'s
+loop, which `testServer` does not pump, so the pending slot has to be run down by hand.
+
+**Still requires the live app:** the acceptance walk. `vftPerfInit()` is called from
+`inst/app/global.R`, so `testServer(app_server)` proves nothing about the module tally. Walk
+1→5→1→5→newVersions→5 and read `vftReport()`: every module exactly 1, and now six of them.
 
 ---
 

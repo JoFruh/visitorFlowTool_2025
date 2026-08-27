@@ -22,8 +22,7 @@ app_server <- function(input, output, session){
     "Shiny.setInputValue('step2-banner', 'O');",
     "Shiny.setInputValue('step3-banner', 'O');",
     "Shiny.setInputValue('step4-banner', 'O');",
-    "Shiny.setInputValue('step5-banner', 'O');",
-    "Shiny.setInputValue('lastStep-banner', 'O');"
+    "Shiny.setInputValue('step5-banner', 'O');"
   ))
 
   #one visit counter per step, in session$userData. Everything that moves the
@@ -67,14 +66,29 @@ app_server <- function(input, output, session){
       #save version of SM that will need to be uploaded
       # if(r$step == 4){r$SMdateTime <- dateTime}
       #stepName not same name as programming name
+      #
+      #READ THIS BEFORE CHANGING IT, and preferably decide it in the save
+      #rewrite rather than here. `r$step` is an INTEGER (VFT_STEPS' `code`), and
+      #switch() on a number selects BY POSITION and ignores the names entirely -
+      #so "2", "3", ... are decoration and what actually happens is
+      #stepName <- c(...)[r$step]. It is not obvious which of the two readings
+      #was meant, and they disagree: the two checkpoints that still fire are the
+      #step-2 confirm (r$step is 3 by then) and the step-4 confirm (r$step is 5),
+      #and positionally those come out "3_schnell" and "5_simulation" while the
+      #names would make them "ignore" and "4_genau". The positional answer is the
+      #one users have been getting and the one that reads sensibly, so it is left
+      #exactly as it was.
+      #
+      #Codes 6-8 were the Resultate page and its variants and are gone with it
+      #(2026-08-27); nothing can write them, so the two entries are dropped. The
+      #five that remain cover positions 1-5, which is every value `code` now
+      #takes.
       stepName <- switch(r$step,
         "2" = "2_SM",
         "3" = "ignore",
         "4" = "3_schnell",
         "5" = "4_genau",
-        "6" = "5_simulation",
-        "7" = "finalStep",
-        "8" = "finalStep+"
+        "6" = "5_simulation"
       )
 #"2_SM","4_ZG_genau"
 
@@ -416,21 +430,46 @@ app_server <- function(input, output, session){
           }
         }
 
-        #trigger the correct step. r$step == 1 used to bump a reactiveVal that
-        #nothing observed; it routes for free now that every step is reached the
-        #same way. There is still no branch for r$step == 6 (a save taken after
-        #the simulation) - that is Stage 6's job, along with this ladder.
-        if(r$step == 1){
-          vftGoToStep(r, "step1", session)
-        }else if(r$step == 2){
-          vftGoToStep(r, "step2", session)
-        }else if(r$step == 3){
-          vftGoToStep(r, "step3", session)
-        }else if(r$step == 4){
-          vftGoToStep(r, "step4", session)
-        }else if(r$step == 5){
-          vftGoToStep(r, "step5", session)
+        #### STAGE 6: resume ####
+        #
+        #This was five hand-written branches, one per step code, with no branch
+        #at all for the last step and one (`r$step == 1`) that bumped a
+        #reactiveVal nothing observed - so a save taken at step 1 restored its
+        #data and then sat on whatever tab was already showing. All of it is two
+        #calls now, and neither of them is a list of steps: vftRestoreStep()
+        #reads the registry, so a step added or removed there needs nothing here.
+        #
+        #It answers a question the ladder never asked. The number in the file
+        #says where the user WAS; whether that step can be entered is a question
+        #about what else the file carried, and the registry already knows. A save
+        #that names step 5 but has no `species` in it used to be honoured: step 5
+        #was built, read NULL, and failed somewhere in the middle. It now resumes
+        #at the furthest step that can actually run and says so.
+        #
+        #REACHABLE, not available, which is the capability this buys: a save
+        #carrying nothing but `shape` is a legal file now. It names step 2, step 2
+        #needs only `shape`, and the buffered perimeter, the attractiveness crop
+        #and the path network are derived by the provider layer when a step that
+        #reads them is entered - not rebuilt eagerly on the way in. vftGoToStep()
+        #holds the navigation until they land, with the progress bar showing.
+        wanted <- vftStepForCode(r$step)
+        resume <- vftRestoreStep(r)
+
+        if(!is.null(wanted) && !identical(wanted, resume)){
+          vftDbg(paste0("RESTORE: save names ", wanted, ", resuming at ", resume,
+                        " (missing: ",
+                        paste(vftStepMissing(r, wanted), collapse = ", "), ")"))
+          #Said out loud rather than logged only: landing somewhere other than
+          #where the file was taken is confusing enough to be worth a line, and
+          #the alternative the ladder took - honour the number and let the module
+          #fail - is worse.
+          try(shiny::showNotification(
+            paste0("Die Datei reicht nur bis \u201e", VFT_STEPS[[resume]]$label,
+                   "\u201c - dort geht es weiter."),
+            type = "warning", duration = 8, session = session), silent = TRUE)
         }
+
+        vftGoToStep(r, resume, session)
       }
     }, ignoreInit = TRUE)
 
@@ -869,33 +908,23 @@ app_server <- function(input, output, session){
 
 
 
-    #From step5, go to Last Step
+    #Step 5's banner. There is nothing forward of here any more: the Resultate
+    #page (module lastStep_server) was removed on 2026-08-27 as non-functional,
+    #and step 5 - or its side trip to Neue Versionen - is where the walk ends.
+    #
+    #So this handler carries banner letters only, which is all it has ever
+    #actually carried: `confirm` is r$confirm inside step5_server, and the one
+    #line that would have set it from confirmButton5 has been commented out at
+    #step5_server.R:2196 for as long as the file has existed. The forward branch
+    #that used to be here - go to finalStep, then click downloadSave - was
+    #therefore never once reached, which is also what became of the third
+    #autosave checkpoint. Where the finished simulation gets written is the save
+    #rewrite's to decide; do not re-add a click here without deciding it.
     shiny::observeEvent(step5return$confirm(), {
-      #button indirectly triggers step 5, to allow for program intervention
-      if(is.integer(step5return$confirm()) & step5return$confirm() > 0){
-        # shinyjs::runjs("Shiny.onInputChange('step5-confirmButton5', 0);")
-        shinyjs::reset(id = "step5-confirmButton5")
-
-        #Check if simulations need to be run,
-        #if so, run all simulations before going to last step
-
-        #calculate time for 1 simulation, assume time for X simulations,
-        #show over current timeframe
-
-        #CONFIRM SIMULATIONS
-        #the four saves that used to be here are vftMirror()'s job now, and have
-        #already happened - see the note above.
-        #vftGoToStep sets r$step, which downloadSave reads to name the file, so
-        #it has to come before the click.
-        vftGoToStep(r, "finalStep", session)
-        shinyjs::click("downloadSave", asis = FALSE)
-
-      }else{
-        #a banner letter, meaning "go back to an earlier step". See
-        #vftGoBack() in R/navigation.R.
-        vftGoBack(r, step5return$confirm(), from = "step5",
-                  bannerId = "step5-banner", session = session)
-      }
+      #a banner letter, meaning "go back to an earlier step". See
+      #vftGoBack() in R/navigation.R.
+      vftGoBack(r, step5return$confirm(), from = "step5",
+                bannerId = "step5-banner", session = session)
     }, ignoreInit = TRUE)
 
     step5return
@@ -931,7 +960,7 @@ app_server <- function(input, output, session){
                                             isFirstRun    = shiny::reactive(r$newVersionsFirstRun),
                                             DULN          = shiny::reactive(r$DULN),
                                             #the step-1 perimeter, for cropping the land cover under the
-                                            #paint. step5_server and lastStep_server already take it this way
+                                            #paint. step5_server takes it the same way
                                             shape         = shiny::reactive(r$shape),
                                             i18n = shiny::reactive(i18n),
                                             currentLang   = shiny::reactive(r$currentLang))
@@ -1015,48 +1044,11 @@ app_server <- function(input, output, session){
   }, ignoreInit = TRUE)
 
 
-  #GO TO FINAL STEP ####
-
-
-  shiny::observeEvent(vftStepTrigger(session, "finalStep"), {
-    vftDbg("BUILD FINAL STEP")
-    #FIRST-TOUCH SINGLETON (Stage 5, seventh and last module). Every input is a
-    #REACTIVE; the module snapshots them in enter(). This step is downstream of
-    #everything, so its inputs are exactly what changes when a user goes back,
-    #edits and comes forward again - a networkList frozen at the first visit was
-    #the whole defect here.
-    vftModuleOnce(session, "finalStep", function(){
-    finalStepReturn <- lastStep_server("finalStep",
-                                       networkList   = shiny::reactive(r$networkList),
-                                       versionsUI    = shiny::reactive(r$versionsUI),
-                                       SM_pres       = shiny::reactive(r$SM_pres),
-                                       shape         = shiny::reactive(r$shape),
-                                       finalPolygons = shiny::reactive(r$finalPolygons))
-
-    #No vftMirror() here, and that is not an omission: this module produces
-    #nothing the app reads back. Its only return is `confirm`, which carries a
-    #banner letter, and its map is display-only.
-
-    shiny::observeEvent( finalStepReturn$confirm() , {
-      vftDbg("REACTIVE::: FINALSTEPRETURN$CONFIRM")
-      #button indirectly triggers step 2, to allow for program intervention
-      if(is.integer(finalStepReturn$confirm()) & finalStepReturn$confirm() > 0){
-        #the last step has nowhere forward to go; its confirm button does nothing.
-
-      }else{
-        #a banner letter, meaning "go back to an earlier step". See
-        #vftGoBack() in R/navigation.R.
-        vftGoBack(r, finalStepReturn$confirm(), from = "finalStep",
-                  bannerId = "lastStep-banner", session = session)
-      }
-      #`once = TRUE` had to go with the rebuild it existed for: with one
-      #instantiation it would mean this step could answer exactly once per
-      #session and then never again.
-    }, ignoreInit = TRUE)
-
-    finalStepReturn
-    })
-  })
+  #The "GO TO FINAL STEP" observer that used to be here is gone, with the step
+  #itself: `finalStep` - the Resultate page, module lastStep_server, R/lastStep_ui
+  #and R/lastStep_server.R - was removed on 2026-08-27 because it had gone
+  #non-functional. newVersions is the last step, and nothing in the registry,
+  #the nav bar or the restore path names a step 6 any more.
 
 
   # #### TRIGGERS WHEN CHANGING TABS
