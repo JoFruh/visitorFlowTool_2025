@@ -28,6 +28,11 @@
 #'     trip: newVersions writes them back into the app's `r` and step 5 must pick
 #'     them up.
 #'   * the "Original" scenario, created when `isFirstRun_stp6` says so.
+#'   * the SELECTION. `r$selectedVersion` names the scenario the user last
+#'     clicked - here or on the newVersions page, which shares the key - and
+#'     generateVersionImages() resolves it back to a card. Everything a click on
+#'     that card would set has to be set on the way in too, or the green border
+#'     is the only part of "selected" that is true.
 #'
 #' No observer destroys its siblings any more. They did that so a REBUILT module's
 #' handlers would not stack on the live ones; with one instantiation, destroying
@@ -38,7 +43,10 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
                          triggerStp6 = shiny::reactive(0),
                          needHelp = shiny::reactive(FALSE),
                          species = shiny::reactive(NULL),
-                         minCutThresh = shiny::reactive(NULL)){
+                         minCutThresh = shiny::reactive(NULL),
+                         #the scenario card to come back with selected, shared with the
+                         #newVersions page through r$selectedVersion
+                         selectedVersion = shiny::reactive(NULL)){
 
   #count this instantiation. A module server should be created once per
   #session; this app re-calls it from an observeEvent on a trigger, so any
@@ -55,7 +63,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
               shape = shape, currentLang = currentLang,
               isFirstRun_stp6 = isFirstRun_stp6, finalPolygons = finalPolygons,
               versionsUI = versionsUI, needHelp = needHelp, species = species,
-              minCutThresh = minCutThresh)
+              minCutThresh = minCutThresh, selectedVersion = selectedVersion)
 
   shiny::moduleServer(id, function(input, output, session) {
 
@@ -72,6 +80,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
     needHelp        <- NULL
     species         <- NULL
     minCutThresh    <- NULL
+    selectedVersion <- NULL
 
     #the protected-areas layer, and what it was last clipped for. See the note at
     #its assignment in enter(): this is display-only geometry keyed on the
@@ -369,9 +378,36 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
 
     # lastSelectedImage <- NULL
     #internal function to generate version selection boxes
-    updateVersions <- function(name, inputId_select, id_ui_name, position){
+    updateVersions <- function(name, inputId_select, id_ui_name, position,
+                               selected = FALSE){
 
       vftDbgCat("TEST9")
+
+      #A card carries two independent states, and both are DATA rather than
+      #decoration:
+      #
+      #  * withSim / noSim  - does this scenario have a simulation behind it,
+      #  * selected / notSelected - is it the one the map is currently showing.
+      #
+      #Both are baked into the markup here instead of being applied afterwards
+      #with shinyjs, and that is not a style choice: insertUI() is deferred to the
+      #end of the flush while addClass() is sent immediately, so a class added
+      #after this call would reach the browser BEFORE the card it names exists and
+      #be dropped. The green border on the entry path has to come from here.
+      #
+      #`selected` is the CALLER's decision, and it used to be `name == "Original"`
+      #here: whatever the user had been working on, the page came back showing the
+      #original - and a scenario the user happened to call "Original" further down
+      #the list came back wearing the green border as well. generateVersionImages()
+      #resolves it from the remembered selection now. The guard on
+      #length(networkList) is for the same reason as the one in the select observer
+      #below: versionsUI and networkList are written by two different modules and a
+      #short networkList would abort enter() from inside insertUI().
+      hasSim <- position <= length(r$networkList) &&
+                !is.null(r$networkList[[position]]$pathUsage)
+
+      vftDbgCat(paste0("TEST9a card ", position, " ",
+                       if(hasSim) "withSim" else "noSim"))
 
       shiny::insertUI(
         selector = '#placeholder_step5',
@@ -379,50 +415,22 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
         ui = shiny::tags$div(id = paste0("step5", id_ui_name),
                       shiny::div(style = "height: 5px"),
 
-                      vftDbgCat("TEST9a"),
+                      shiny::actionButton(inputId = shiny::NS(id, inputId_select),
+                                          label = name,
+                                          width = "120px",
+                                          style = "height: 120px; position: relative; text-align: center; ",
+                                          class = paste(if(isTRUE(selected)) "selected" else "notSelected",
+                                                        if(hasSim) "withSim" else "noSim")),
 
-                      if(name == "Original" ){
-                        if(is.null(r$networkList[[position]]$pathUsage) ){
-                          vftDbgCat("TEST9b")
-                          shiny::actionButton(inputId = shiny::NS(id, inputId_select), label =  name, width = "120px",  style = "height: 120px; position: relative; text-align: center; ",
-                                       class = "selected noSim" )
-
-
-                        }else{
-                          vftDbgCat("TEST9c")
-
-                          shiny::actionButton(inputId = shiny::NS(id, inputId_select), label =  name, width = "120px",  style = "height: 120px; position: relative; text-align: center; ",
-                                       class = "selected withSim" )
-
-
-                        }
-                      }else{
-                        if(is.null(r$networkList[[position]]$pathUsage)){
-                          vftDbgCat("TEST9d")
-
-                          shiny::actionButton(inputId = shiny::NS(id, inputId_select), label = name, width = "120px",  style = "height: 120px; position: relative; text-align: center; ",
-                                       class = "notSelected noSim" )
-
-
-                          #tags$div(
-                          # tags$img(src = "noSim.png", height = "120px") ,
-                          # tags$text(name, style = "position: absolute;top: 50%;left: 50%;transform: translate(-50%, -50%);"),
-                          # width = "120px",  style = "height: 120px; position: relative; text-align: center; ",
-                          # class = "notSelected")
-                        }else{
-                          vftDbgCat("TEST9e")
-
-                          shiny::actionButton(inputId = shiny::NS(id, inputId_select), label = name, width = "120px",  style = "height: 120px; position: relative; text-align: center; ",
-                                       class = "notSelected withSim" )
-                        }
-                      },
                       shiny::div(style = "height: 5px")
         )
 
       )
 
-      #record Original as selected
-      r$lastSelectedImage <- 1
+      #`r$lastSelectedImage <- 1` used to sit here - an integer where every reader
+      #passes the value straight to shinyjs::addClass() as an inputId. It was
+      #harmless only because generateVersionImages() overwrites it with the real
+      #inputId immediately after this loop, which is where it belongs.
 
       vftDbgCat("TEST10")
 
@@ -436,8 +444,38 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
 
 
       #OBSERVER FOR SELECT VERSION ####
+      #
+      #`ignoreInit` AND THE `> 0` GUARD ARE BOTH LOAD-BEARING ON THE RETURN PATH.
+      #This observer is created fresh on every visit (enter() destroys the
+      #previous visit's set), but `input$versionBtnN` is NOT: removeUI() takes the
+      #card out of the DOM and leaves the input value on the server, so a card the
+      #user clicked last visit still reads 1, 2, 3... when the new observer is
+      #built. Without ignoreInit an observeEvent fires on its FIRST evaluation, so
+      #every card re-selected itself the moment enter() rebuilt it - and it did so
+      #from inside flushReact(), i.e. BEFORE the deferred insertUI() had put the
+      #cards back in the DOM, so the shinyjs class changes below addressed
+      #elements that did not exist yet and were dropped. What survived was the
+      #half that does not touch the DOM: `selectedNetwork_position` and the map.
+      #
+      #That is the "Original is highlighted but the map is somebody else's"
+      #report exactly. The border came from the markup updateVersions() inserts;
+      #the map came from whichever card had a non-zero count. Leave with the
+      #original selected and the two happen to agree, which is why it only showed
+      #up after selecting another card first.
+      #
+      #The second fire is the re-inserted button reporting its own initial value:
+      #a fresh actionButton starts at 0, so the count drops (1 -> 0) and that is a
+      #change like any other. ignoreInit does not cover it - it is the second
+      #evaluation, not the first - hence the guard. An actionButton at 0 has not
+      #been clicked since it was inserted, and a click is the only thing this
+      #observer is for.
       r$obsEventSelList[[length(r$obsEventSelList)+1]] <- list(
           shiny::observeEvent(input[[inputId_select]], {
+
+        if(!isTRUE(shiny::isolate(input[[inputId_select]]) > 0)){
+          vftDbg(paste0("SELECT ignored (not a click): ", inputId_select))
+          return(invisible(NULL))
+        }
 
         vftDbg("SELECTED")
         vftDbg(r$versionsUI)
@@ -447,7 +485,13 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
 
         vftDbg(paste0("lastSelectedImage: ", r$lastSelectedImage))
 
-        if(!is.null(r$lastSelectedImage)){
+        #grey the card that WAS selected - unless that is this one. Re-clicking
+        #the selected card used to add "notSelected" to the same button two lines
+        #after "selected" was added to it, and `.notSelected` is declared after
+        #`.selected` in step5_ui.R, so equal specificity handed the border to
+        #grey: the card the map was showing went grey when you clicked it again.
+        if(!is.null(r$lastSelectedImage) &&
+           !identical(r$lastSelectedImage, inputId_select)){
           shinyjs::addClass(r$lastSelectedImage, "notSelected")
         }
 
@@ -474,6 +518,12 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
           #keep track position to easily insert results in networkList
           selectedNetwork_position <<- x
 
+          #remember the choice for the next visit - to this step and to the
+          #newVersions page, which draws the same scenarios and reads the same
+          #key. By NAME, because the newVersions page can delete a version and
+          #move every position after it; see vftVersionPosition() in R/modules.R.
+          r$selectedVersion <- r$versionsUI[[x]]$name
+
         }else{
           vftDbg("ERROR: less networks than version buttons")
 
@@ -487,7 +537,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
 
 
 
-      })
+      }, ignoreInit = TRUE)
         )
 
     }
@@ -2251,34 +2301,72 @@ vftDbgCat("FINISHED TIFF\n")
     #Per VISIT: every entry in versionsUI gets a card insertUI'd into
     ##placeholder_step5 and an observer of its own. enter() clears both before
     #calling this, or a second visit shows every version twice.
+    #
+    #It also SELECTS a card, and that half is the point of the function rather
+    #than an afterthought. The card is inserted wearing the green border
+    #(updateVersions(), above), so everything a click on it would have done has to
+    #happen here too or the border is the only thing that is true: the module
+    #comes back with `selectedNetwork_position` pointing somewhere else and the
+    #map still showing whatever it showed last, which is what "selected but not
+    #really" looked like on the way back into this step.
+    #
+    #Same order and same writes as the select observer in updateVersions() - the
+    #network, the position, the result, the two caches - and then ONE
+    #plotPathUsage(). enter() used to call plotPathUsage() itself before this
+    #function ran, which made two draws per entry: the first built a whole new
+    #leaflet widget (r$mapPresent is NULL at that point) and the second, finding
+    #r$mapPresent TRUE again, went down the leafletProxy branch and cleared and
+    #re-added the network on a map that Shiny was replacing in the same flush.
+    #The draw that survived was the one whose WebGL layer had been attached to a
+    #container the browser had not yet sized - a base map and a legend with no
+    #simulation on them. There is one draw now, and with r$mapPresent left NULL by
+    #enter() it is a full render rather than a proxy update.
     generateVersionImages <- function(){
     if(length(r$versionsUI) > 0){
 
+      #which card to come back with selected. r$selectedVersion is the scenario
+      #the user last clicked, HERE or on the newVersions page - the two share the
+      #key - and it resolves to the first card when it names a version that is no
+      #longer in the list. Clamped to networkList as well: the select observer
+      #refuses a position it cannot find a network for, and so must this.
+      pos <- vftVersionPosition(r$versionsUI, r$selectedVersion)
+      if(pos > length(r$networkList)){
+        vftDbg("ERROR: less networks than version buttons - falling back to the original")
+        pos <- 1
+      }
+
       for(i in 1:length(r$versionsUI) ){
-        updateVersions(r$versionsUI[[i]]$name, r$versionsUI[[i]]$inputId_select, r$versionsUI[[i]]$id_ui_name, position = i)
+        updateVersions(r$versionsUI[[i]]$name, r$versionsUI[[i]]$inputId_select, r$versionsUI[[i]]$id_ui_name,
+                       position = i, selected = (i == pos))
 
 
 
       }
 
+      #the network the rest of the module works against
+      selectedNetwork_position <<- pos
 
-      #select original network
-      r$selectedNetwork_r( list(r$networkList[[1]]$network) )
-      r$result$pathUsage <- r$networkList[[1]]$pathUsage
+      #the card whose border is green, for the select observer to un-green when
+      #the user picks another one. Set BEFORE the draw, so that an observer woken
+      #by plotPathUsage() cannot read the NULL enter() left here.
+      r$lastSelectedImage <- r$versionsUI[[pos]]$inputId_select
+
+      #write the resolved name back: `pos` may be the fallback rather than what
+      #was remembered, and leaving a name that no longer exists in the key would
+      #hand the newVersions page the same dead reference to resolve again.
+      r$selectedVersion <- r$versionsUI[[pos]]$name
+
+      r$selectedNetwork_r( list(r$networkList[[pos]]$network) )
+      r$result$pathUsage <- r$networkList[[pos]]$pathUsage
+      r$result$dayPop    <- r$networkList[[pos]]$dayPop
       #pathUsage (re)assigned: invalidate cached passageTable + starting points
       r$passageTable <- NULL
       r$startingPointsSf <- NULL
 
-      plotPathUsage()
-
-
-
-      #automatically plot original
-      r$lastSelectedImage <- r$versionsUI[[1]]$inputId_select
-
-      vftDbg("determine last selected image")
-      vftDbg(r$versionsUI[[1]]$inputId_select)
+      vftDbg(paste0("ENTER: selecting version ", pos, " (", r$versionsUI[[pos]]$name, ")"))
       vftDbg(r$lastSelectedImage)
+
+      plotPathUsage()
     }
     }
 
@@ -2309,6 +2397,7 @@ vftDbgCat("FINISHED TIFF\n")
       needHelp        <<- .rx$needHelp()
       species         <<- .rx$species()
       minCutThresh    <<- .rx$minCutThresh()
+      selectedVersion <<- .rx$selectedVersion()
 
       #--- 2. tear down the previous visit's version cards and their observers.
       #One observer per card, created by updateVersions(), and the cards are
@@ -2343,6 +2432,11 @@ vftDbgCat("FINISHED TIFF\n")
       #is where step 5 picks them up.
       r$networkList        <- networkList
       r$versionsUI         <- versionsUI
+      #the scenario card to open on. Picked up from the app the same way as the
+      #two lists above, because the newVersions page may have changed it since
+      #this module last ran - and NOT reset below with the rest of this visit's
+      #state, which is the whole point of it.
+      r$selectedVersion    <- selectedVersion
       r$needHelp           <- needHelp
       r$currentLang        <- currentLang
       r$triggerStp6        <- 0
@@ -2368,11 +2462,29 @@ vftDbgCat("FINISHED TIFF\n")
         shp_PA <<- vftTime("step5:protectedAreas", vftProtectedAreas(shape))
       }
 
-      #--- 6. the map, then the "Original" scenario if this is a first run, then
-      #the cards. Same order as the construction-time code this replaces.
-      plotPathUsage()
+      #--- 6. the "Original" scenario if this is a first run, then the cards -
+      #and the map exactly once, from inside generateVersionImages(), after the
+      #selection it draws is settled.
+      #
+      #The bare plotPathUsage() that used to lead this block is gone. It ran
+      #before the cards existed and before anything had been selected, and
+      #generateVersionImages() then drew a SECOND time; see the note there for
+      #what the second draw did to the first one's map. Nothing between here and
+      #that call reads r$result or touches the map - createOriginalVersion() only
+      #adds an entry to r$versionsUI, updateVersions() only reads
+      #r$networkList[[i]]$pathUsage - so removing it costs the entry path nothing.
       createOriginalVersion()
       generateVersionImages()
+
+      #createOriginalVersion() guarantees at least one entry, so the branch below
+      #is unreachable in practice. It is here because the map is now drawn from
+      #inside generateVersionImages(), and a version list that somehow came back
+      #empty would otherwise leave the previous visit's map on screen with no card
+      #claiming it - which is the failure this section is fixing, in reverse.
+      if(!length(r$versionsUI)){
+        vftDbg("ENTER: no versions to select - drawing the map on its own")
+        plotPathUsage()
+      }
 
       vftDbg("RETURNING STEP 6")
       vftDbg(r$lastSelectedImage)
@@ -2382,6 +2494,7 @@ vftDbgCat("FINISHED TIFF\n")
     enter()
 
     return(list(pathUsage = shiny::reactive(r$result$pathUsage), networkList = shiny::reactive(r$networkList), confirm = shiny::reactive({r$confirm}), newVersions = shiny::reactive(input$newVersionsButton), trigger = shiny::reactive(r$triggerStp6), versionsUI = shiny::reactive(r$versionsUI),
+                selectedVersion = shiny::reactive(r$selectedVersion),
                 currentLang = shiny::reactive(i18n()$get_translation_language()), shp_PA = shiny::reactive( shp_PA),
                 enter = enter) )
 

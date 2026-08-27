@@ -31,6 +31,10 @@
 #'   * `r$networkList` and `r$versionsUI`, which is the whole point of the side
 #'     trip in this direction: step 5 writes them back into the app's `r` (through
 #'     vftMirror) and newVersions has to pick them up.
+#'   * the SELECTION. `r$selectedVersion` names the scenario the user last
+#'     clicked - here or in step 5, which shares the key - and
+#'     generateVersionButtons() resolves it back to a card, setting the border,
+#'     `r$lastSelectedButton` and `r$position` together.
 #'   * the `isFirstRun` initialisation, which is re-asked every visit because
 #'     vftInvalidate() re-arms `r$newVersionsFirstRun` whenever the saved versions
 #'     are discarded.
@@ -50,7 +54,10 @@ newVersions_server <- function(id, networkList, i18n, currentLang, isFirstRun,
                                finalPolygons = shiny::reactive(NULL),
                                versionsUI = shiny::reactive(list()), trigger = 0,
                                DULN = shiny::reactive(NULL),
-                               shape = shiny::reactive(NULL)){
+                               shape = shiny::reactive(NULL),
+                               #the scenario card to come back with selected, shared with step 5
+                               #through r$selectedVersion
+                               selectedVersion = shiny::reactive(NULL)){
 
   #count this instantiation. A module server should be created once per
   #session; this app re-calls it from an observeEvent on a trigger, so any
@@ -66,7 +73,8 @@ newVersions_server <- function(id, networkList, i18n, currentLang, isFirstRun,
   .rx <- list(networkList = networkList, currentLang = currentLang,
               isFirstRun = isFirstRun, SM_pres = SM_pres, SMcolors = SMcolors,
               shp_PA = shp_PA, finalPolygons = finalPolygons,
-              versionsUI = versionsUI, DULN = DULN, shape = shape)
+              versionsUI = versionsUI, DULN = DULN, shape = shape,
+              selectedVersion = selectedVersion)
 
   # r$mapRefresh <- 0
   shiny::moduleServer(id, function(input, output, session) {
@@ -83,6 +91,7 @@ newVersions_server <- function(id, networkList, i18n, currentLang, isFirstRun,
     versionsUI    <- list()
     DULN          <- NULL
     shape         <- NULL
+    selectedVersion <- NULL
 
     # RENDER UI
     # if(currentLang == "de"){
@@ -1362,7 +1371,20 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
       #creates version buttons using insertUI.
       #requires name for version and IDs for removal and select button.
       #versionNb allows to keep track of which nb button is created, determines Id nb
-      appendVersion <- function(name, inputId_removal, inputId_select, id_ui_name, isStart = TRUE){
+      #`selected` is the CALLER's decision, and it used to be `name == "Original"`
+      #here: whatever scenario the user had been editing, this page came back
+      #showing the original. generateVersionButtons() resolves it from the
+      #remembered selection now - the same key step 5 reads, so the two pages open
+      #on the same card. It has to be baked into the markup rather than applied
+      #afterwards with shinyjs, because insertUI() is deferred to the end of the
+      #flush while addClass() is sent immediately: a class added after this call
+      #would reach the browser before the card it names exists.
+      #
+      #The removal button below stays keyed on the NAME. That is not the same
+      #question - the original scenario is the one that cannot be deleted, whether
+      #or not it happens to be the one selected.
+      appendVersion <- function(name, inputId_removal, inputId_select, id_ui_name, isStart = TRUE,
+                                selected = FALSE){
 
         shiny::insertUI(
           selector = '#placeholder',
@@ -1370,7 +1392,7 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
           ui = shiny::tags$div(id = id_ui_name,
                         shiny::div(style = "height: 5px"),
 
-                        if(name == "Original"){
+                        if(isTRUE(selected)){
                           if(isStart == TRUE){
                             shinyjs::disabled(
                               shiny::actionButton(inputId = shiny::NS(id, inputId_select), label = name, width = "100px", style = "height: 100px", class = "selected")
@@ -1438,13 +1460,45 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
             #keep track of removed UI
             r$versionsUI[[name]] <- NULL
 
+            #the card that was just deleted cannot be the one either page opens
+            #on. vftVersionPosition() would fall back to the first card anyway,
+            #but leaving the dead name in the key means step 5 resolves it a
+            #second time and writes the fallback back - so clear it here, where
+            #what happened is still known.
+            if(identical(shiny::isolate(r$selectedVersion), name)){
+              r$selectedVersion <- NULL
+            }
+
           }, ignoreInit = TRUE, once = TRUE)
           )
         }
 
         #OBSERVER FOR SELECT VERSION ####
+        #
+        #The `> 0` guard is the same one step 5's select observer carries, for the
+        #same reason. This observer is rebuilt on every visit (enter() destroys
+        #the previous visit's set) but `input$versionBtnN` is not: removeUI()
+        #takes the card out of the DOM and leaves the input value on the server.
+        #`ignoreInit` covers the first evaluation, where the count is still what
+        #the user last clicked it to; it does NOT cover the second, where the
+        #re-inserted button reports its own initial value and the count drops
+        #(1 -> 0) - a change like any other. Either one fires this handler from
+        #inside flushReact(), i.e. BEFORE the deferred insertUI() has put the
+        #cards back, so the shinyjs class changes below address elements that do
+        #not exist yet and are dropped while `r$position` and the map move: the
+        #page comes back highlighting one scenario and editing another.
+        #
+        #`r$lastSelectedButton != inputId_select` does not stand in for this. It
+        #stops the card that IS selected from re-selecting itself and nothing
+        #else, so any other card's spurious fire goes straight through.
         r$appendedObservers[[length(r$appendedObservers) + 1]] <- list(
           shiny::observeEvent(input[[inputId_select]], {
+
+            if(!isTRUE(shiny::isolate(input[[inputId_select]]) > 0)){
+              vftDbg(paste0("SELECT ignored (not a click): ", inputId_select))
+              return(invisible(NULL))
+            }
+
             #do something ONLY if version clicked is NOT last selection
             if(r$lastSelectedButton != inputId_select){
 
@@ -1485,6 +1539,12 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
                 # selectedNetwork_position <- x
 
                 r$position <- x
+
+                #remember the choice for the next visit - to this page and to
+                #step 5, which draws the same scenarios and reads the same key.
+                #By NAME, because a version deleted here moves every position
+                #after it; see vftVersionPosition() in R/modules.R.
+                r$selectedVersion <- r$versionsUI[[x]]$name
 
                 vftDbg("POSITION AND NETWORK")
                 vftDbg(r$position)
@@ -1590,6 +1650,13 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
       #r$appendedObservers. enter() destroys those observers and empties the
       #placeholder before calling this, or a second visit shows every version
       #twice and one click on a card runs its handler twice.
+      #
+      #It also SELECTS one of them, and all three of the things a click sets have
+      #to be set here or they disagree: the green border (baked into the markup by
+      #appendVersion), `r$lastSelectedButton` (which the select observer
+      #dereferences on every click, and which applyFirstRun() blanks), and
+      #`r$position` (the scenario the map and every edit on this page work
+      #against). This used to hard-code the original for all three.
       generateVersionButtons <- function(){
       if(length(r$versionsUI) != 0){
 
@@ -1599,20 +1666,42 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
         # id_ui_name <- paste0('version_', btn)
         # inputId_select <- paste0("versionBtn", versionBtn_nb)
 
+        #which card to come back with selected. r$selectedVersion is the scenario
+        #the user last clicked, HERE or in step 5 - the two share the key - and it
+        #resolves to the first card when it names a version that is no longer in
+        #the list. Clamped to networkList as well, for the same reason the select
+        #observer refuses a position it has no network for.
+        pos <- vftVersionPosition(r$versionsUI, r$selectedVersion)
+        if(pos > length(r$networkList)){
+          vftDbg("ERROR: less networks than version buttons - falling back to the original")
+          pos <- 1
+        }
+
         for(i in 1:length(r$versionsUI) ){
           vftDbg("appended removal details::")
 
           appendVersion(name = r$versionsUI[[i]]$name,
                          inputId_select = r$versionsUI[[i]]$inputId_select,
                          inputId_removal = r$versionsUI[[i]]$inputId_removal,
-                         id_ui_name = r$versionsUI[[i]]$id_ui_name)
-
-          if(r$versionsUI[[i]]$name == "Original"){
-            #make original button lastSelectedButton (unselected when another button is clicked)
-            r$lastSelectedButton <- r$versionsUI[[i]]$inputId_select
-
-          }
+                         id_ui_name = r$versionsUI[[i]]$id_ui_name,
+                         selected = (i == pos))
         }
+
+        #the button the select observer un-greens when another card is clicked.
+        #Blanked by applyFirstRun() on a first run, so this is the only thing that
+        #puts a value back.
+        r$lastSelectedButton <- r$versionsUI[[pos]]$inputId_select
+
+        #the scenario this page edits. enter() seeds it to 1 with the rest of the
+        #visit's state; this is where it becomes the remembered one.
+        r$position <- pos
+
+        #write the resolved name back: `pos` may be the fallback rather than what
+        #was remembered, and leaving a dead name in the key would hand step 5 the
+        #same dead reference to resolve again.
+        r$selectedVersion <- r$versionsUI[[pos]]$name
+
+        vftDbg(paste0("ENTER: selecting version ", pos, " (", r$versionsUI[[pos]]$name, ")"))
 
         for(btn in r$versionsUI){
           shinyjs::disable(btn$inputId_select)
@@ -3875,6 +3964,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
       versionsUI    <<- .rx$versionsUI()
       DULN          <<- .rx$DULN()
       shape         <<- .rx$shape()
+      selectedVersion <<- .rx$selectedVersion()
 
       #--- 2. tear down the previous visit's version cards and their observers.
       #One or two observers per card, created by appendVersion(), and the cards
@@ -3954,6 +4044,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
     enter()
 
     return(list(networkList = shiny::reactive({r$networkList}), confirm = shiny::reactive({input$newVersionsConfirmButton}, label = "TESTLABEL"), trigger_1 = shiny::reactive(r$trigger), versionsUI =  shiny::reactive(r$versionsUI),
+                selectedVersion = shiny::reactive(r$selectedVersion),
                 enter = enter) )
 
   })

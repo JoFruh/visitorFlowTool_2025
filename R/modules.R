@@ -182,3 +182,38 @@ vftMirror <- function(r, key, get){
     r[[key]] <- val
   })
 }
+
+
+#' Which version card a page should come back with selected.
+#'
+#' Step 5 and the newVersions page draw the same list of scenarios as cards, and
+#' both used to open on the first one whatever the user had been working on.
+#' `r$selectedVersion` is the shared memory of the choice, and this resolves it
+#' to a position in `versionsUI`.
+#'
+#' It is carried as the scenario's NAME rather than as a position, because
+#' `versionsUI` is a named list that BOTH pages write to: deleting a version on
+#' the newVersions page shifts every position after it, while the name is the
+#' list key and does not move. A name that is no longer there - the version was
+#' deleted, or step 4 was re-confirmed and the whole list rebuilt - falls back to
+#' the first card, which is the original scenario. That fallback is the reason
+#' this never needs a "does the remembered card still exist" check at the call
+#' sites.
+#'
+#' Matches on `$name` rather than on `names(versionsUI)`: the two agree today
+#' (both pages key the list by the name they store in the element), and the
+#' element is the one of the two that every writer sets.
+#'
+#' @param versionsUI the shared list of version cards.
+#' @param name the remembered scenario name, or NULL.
+#' @return an integer position into `versionsUI`, or NULL if there are none.
+vftVersionPosition <- function(versionsUI, name){
+  n <- length(versionsUI)
+  if(!n) return(NULL)
+  if(length(name) == 1L && is.character(name) && !is.na(name)){
+    hit <- which(vapply(versionsUI,
+                        function(v) identical(v$name, name), logical(1)))
+    if(length(hit)) return(hit[[1]])
+  }
+  1L
+}

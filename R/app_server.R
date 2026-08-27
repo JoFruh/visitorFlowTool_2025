@@ -843,7 +843,8 @@ app_server <- function(input, output, session){
                                 species         = shiny::reactive(r$species),
                                 i18n            = shiny::reactive(i18n),
                                 currentLang     = shiny::reactive(r$currentLang),
-                                minCutThresh    = shiny::reactive(r$minCutThresh)))
+                                minCutThresh    = shiny::reactive(r$minCutThresh),
+                                selectedVersion = shiny::reactive(r$selectedVersion)))
 
     #### step 5's results, published into `r` as they are produced ####
     #
@@ -869,6 +870,10 @@ app_server <- function(input, output, session){
     #true.
     vftMirror(r, "networkList", step5return$networkList)
     vftMirror(r, "versionsUI",  step5return$versionsUI)
+    #which scenario card the two pages open on. Shared rather than per-page: the
+    #newVersions page is a side trip off this step and the user is working on ONE
+    #scenario across both. See vftVersionPosition() in R/modules.R.
+    vftMirror(r, "selectedVersion", step5return$selectedVersion)
     vftMirror(r, "pathUsage",   step5return$pathUsage)
     vftMirror(r, "shp_PA",      step5return$shp_PA)
 
@@ -896,6 +901,13 @@ app_server <- function(input, output, session){
         # }
 
         r$triggerNewVersions_nr <- 1
+
+        #the card the newVersions page should open on. Explicit for the same
+        #reason as the writes in that page's confirm handler: vftGoToStep() calls
+        #the destination's enter() in this same tick, ahead of the mirror.
+        if(length(step5return$selectedVersion() ) > 0){
+          r$selectedVersion <- step5return$selectedVersion()
+        }
 
         vftGoToStep(r, "newVersions", session)
 
@@ -963,7 +975,8 @@ app_server <- function(input, output, session){
                                             #paint. step5_server takes it the same way
                                             shape         = shiny::reactive(r$shape),
                                             i18n = shiny::reactive(i18n),
-                                            currentLang   = shiny::reactive(r$currentLang))
+                                            currentLang   = shiny::reactive(r$currentLang),
+                                            selectedVersion = shiny::reactive(r$selectedVersion))
 
     #### this page's results, published into `r` as they are produced ####
     #
@@ -979,6 +992,7 @@ app_server <- function(input, output, session){
     #identical() guard inside vftMirror() makes the second write free.
     vftMirror(r, "networkList", newVersionsReturn$networkList)
     vftMirror(r, "versionsUI",  newVersionsReturn$versionsUI)
+    vftMirror(r, "selectedVersion", newVersionsReturn$selectedVersion)
 
     shiny::observeEvent(newVersionsReturn$confirm(), {
 
@@ -995,6 +1009,15 @@ app_server <- function(input, output, session){
 
       if(length(newVersionsReturn$versionsUI() ) > 0){
         r$versionsUI <- newVersionsReturn$versionsUI()
+      }
+
+      #and the card step 5 should open on, for the same reason as the two above:
+      #this handler reaches step 5's enter() in the SAME tick, so the mirror is
+      #too late. It has to travel WITH the version list it names - a name written
+      #a flush later than the list it belongs to is a name step 5 resolves against
+      #the wrong list.
+      if(length(newVersionsReturn$selectedVersion() ) > 0){
+        r$selectedVersion <- newVersionsReturn$selectedVersion()
       }
 
       vftDbg("From new versions, return to step 5")

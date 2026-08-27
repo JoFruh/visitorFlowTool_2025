@@ -286,6 +286,13 @@ VFT_DERIVED_FROM <- list(
   #simulated.
   pathUsage       = "networkList",
   versionsUI      = c("networkList", "pathUsage"),
+  #which scenario card step 5 and the newVersions page come back with selected,
+  #held as a NAME - see vftVersionPosition() in R/modules.R. A name outliving its
+  #version is harmless (it resolves to the first card), so this edge is hygiene
+  #rather than a guard: a rebuilt version list has no business carrying the old
+  #one's selection, and there is no label for it in VFT_KEY_LABEL because
+  #"you will lose which card was highlighted" is not worth a line in the warning.
+  selectedVersion = "versionsUI",
   shp_PA          = "shape"
 )
 
