@@ -44,6 +44,11 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
                          needHelp = shiny::reactive(FALSE),
                          species = shiny::reactive(NULL),
                          minCutThresh = shiny::reactive(NULL),
+                         #the step-3 attractiveness threshold. Needed because the
+                         #attractivity-weighted edge distances are computed when a
+                         #simulation is first launched now, not at step 4's
+                         #confirm. See R/prepare_network.R.
+                         minThresh = shiny::reactive(NULL),
                          #the scenario card to come back with selected, shared with the
                          #newVersions page through r$selectedVersion
                          selectedVersion = shiny::reactive(NULL)){
@@ -63,7 +68,8 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
               shape = shape, currentLang = currentLang,
               isFirstRun_stp6 = isFirstRun_stp6, finalPolygons = finalPolygons,
               versionsUI = versionsUI, needHelp = needHelp, species = species,
-              minCutThresh = minCutThresh, selectedVersion = selectedVersion)
+              minCutThresh = minCutThresh, minThresh = minThresh,
+              selectedVersion = selectedVersion)
 
   shiny::moduleServer(id, function(input, output, session) {
 
@@ -80,6 +86,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
     needHelp        <- NULL
     species         <- NULL
     minCutThresh    <- NULL
+    minThresh       <- NULL
     selectedVersion <- NULL
 
     #the protected-areas layer, and what it was last clipped for. See the note at
@@ -1259,8 +1266,31 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
 
         vftDbg("LAUNCH SIMULATION")
 
-        #use selected network to launch simulation
-        network <- r$selectedNetwork_r()[[1]]
+        #THE PREPARED NETWORK ####
+        #
+        #This is the first read, in the whole app, of anything step 4's confirm
+        #handler used to build: the AOI letters on the nodes, the parking
+        #capacity distributed across them, and the attractivity-weighted edge
+        #distances. generatePopulation() wants the first two, determineShortestPath()
+        #the third. So the ~30s that used to be spent by every user who confirmed
+        #their areas of interest is spent here, by the ones who actually simulate.
+        #
+        #Once per SCENARIO, not once per launch: vftPrepareThen() tests the
+        #graph's own attribute names and writes the result back into
+        #r$networkList[[pos]], so a second simulation on the same card goes
+        #straight through, in this same tick. See R/prepare_network.R.
+        vftPrepareThen(r, selectedNetwork_position, finalPolygons, minThresh,
+                       label  = "Wegnetz wird vorbereitet...",
+                       enable = "launchSim",
+                       then   = function(){
+
+        #use selected network to launch simulation. Read from the SCENARIO
+        #rather than from r$selectedNetwork_r(), and read it here rather than
+        #above the call: vftPrepareThen() has just written the prepared graph
+        #into r$networkList, and the reactiveVal is the older copy taken when the
+        #card was clicked. Kept in step below so nothing else reads a stale one.
+        network <- shiny::isolate(r$networkList[[selectedNetwork_position]]$network)
+        r$selectedNetwork_r(list(network))
 
         #vftProgress, not ipc::AsyncProgress: this was the worst site in the app -
         #385 MB of session state serialised into the ABM worker, against 3.6 MB
@@ -1290,7 +1320,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
         progress$close()
 
         results
-        }, seed = TRUE)%...>%(function(results){
+        }, seed = TRUE, progress = progress)%...>%(function(results){
 
         ## TREAT PROMISE RESULT ####
 
@@ -1362,6 +1392,8 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
         shinyjs::enable("launchSim")
 
         })%...!%(vftAsyncError(progress, "Agent-Based Model", "launchSim"))
+
+        })  #end vftPrepareThen(then = ...)
 
       }, ignoreInit = TRUE)
 
@@ -2397,6 +2429,7 @@ vftDbgCat("FINISHED TIFF\n")
       needHelp        <<- .rx$needHelp()
       species         <<- .rx$species()
       minCutThresh    <<- .rx$minCutThresh()
+      minThresh       <<- .rx$minThresh()
       selectedVersion <<- .rx$selectedVersion()
 
       #--- 2. tear down the previous visit's version cards and their observers.
@@ -2495,6 +2528,21 @@ vftDbgCat("FINISHED TIFF\n")
 
     return(list(pathUsage = shiny::reactive(r$result$pathUsage), networkList = shiny::reactive(r$networkList), confirm = shiny::reactive({r$confirm}), newVersions = shiny::reactive(input$newVersionsButton), trigger = shiny::reactive(r$triggerStp6), versionsUI = shiny::reactive(r$versionsUI),
                 selectedVersion = shiny::reactive(r$selectedVersion),
+                #the parking table, once vftPrepareThen() has produced it. The
+                #scenario holds the authoritative copy; this is what keeps the
+                #app-level r$parking - the key the save file records - in step.
+                #
+                #Guarded rather than a bare [[ ]]: vftMirror() wraps this in an
+                #observe() that re-runs on every change to r$networkList, and
+                #the list is briefly empty while an invalidation rebuilds it and
+                #briefly SHORTER than this position while the newVersions page
+                #deletes a scenario. A subscript error there would not return
+                #NULL, it would kill the mirror for the rest of the session.
+                parking = shiny::reactive({
+                  nl <- r$networkList
+                  if(is.null(nl) || selectedNetwork_position > length(nl)) return(NULL)
+                  nl[[selectedNetwork_position]]$parking
+                }),
                 currentLang = shiny::reactive(i18n()$get_translation_language()), shp_PA = shiny::reactive( shp_PA),
                 enter = enter) )
 

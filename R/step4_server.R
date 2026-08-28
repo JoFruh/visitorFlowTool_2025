@@ -109,7 +109,7 @@ step4_server <- function(id, network, minThresh, i18n, currentLang,
     # polygonsList <- new.env(parent = emptyenv())
 
 
-    # (r$finalPolygons, r$confirm and r$newNetwork are seeded by enter(), at the
+    # (r$finalPolygons and r$confirm are seeded by enter(), at the
     #  bottom of this function, so that a return to this step starts from the
     #  same state a first arrival does.)
 
@@ -818,8 +818,7 @@ step4_server <- function(id, network, minThresh, i18n, currentLang,
 
         # shinyjs::enable("banner")
 
-        return(list(finalPolygons = shiny::reactive({r$finalPolygons}), network = shiny::reactive(newNetwork), confirm = shiny::reactive({r$confirm}),  needHelp = shiny::reactive(r$needHelp),
-                    parking = shiny::reactive(r$parking),
+        return(list(finalPolygons = shiny::reactive({r$finalPolygons}), confirm = shiny::reactive({r$confirm}),  needHelp = shiny::reactive(r$needHelp),
                     currentLang = shiny::reactive(i18n()$get_translation_language())) )
 
         #trigger return to past (return with specific confirm value?)
@@ -834,301 +833,48 @@ step4_server <- function(id, network, minThresh, i18n, currentLang,
         #check if there are polygons, give a warning otherwise
         if(length(r$polygonsList) > 0){
 
-        # PROMISE - POLYGONS AND PARKING ####
+        # CONFIRM ####
+        #
+        #This used to be a ~300 line future: AOI letters onto every node, the
+        #parking shapefile read and distributed across nodes, seventy
+        #attractivity-weighted edge columns and a rebuilt tbl_graph - about
+        #thirty seconds, behind a progress bar reading "Loading Parking
+        #information...", at the end of the step whose job is drawing polygons.
+        #
+        #It has moved to vftPrepareNetwork() in R/prepare_network.R and now runs
+        #when a simulation is first launched (or when the newVersions page needs
+        #it), because that is where the first READ of any of it happens. See the
+        #note at the top of that file.
+        #
+        #What is left is what step 4 actually produces.
 
         #from reactive to normal variable
         finalPolygons <- r$polygonsList
-        parking <- r$parking
 
-        #vftProgress, not ipc::AsyncProgress: 120 MB of session state was crossing
-        #into the worker from this site - the largest of the two step-4 dispatches
-        #and 4.8s of blocked main thread. See R/async_helpers.R.
-        progress2 <- vftProgress(message = "Loading Parking information...",
-                                 detail = paste0("Dies sollte weniger als ", 30, "Sekunden dauern"),
-                                 queue = ipc::shinyQueue(),
-                                 millis = 1000)
-        vftFuture({
-          vftDbg("CONFIRM5")
-          vftDbgCat("TEST1\n")
-          # cat(file = stderr(), paste0("polygonEnv is made of : ", ls(polygonEnv)))
+        #The one line of the old job that stayed. It is
+        #LETTERS702[1:nrow(finalPolygons)] - deterministic, and microseconds -
+        #while determineAgentCharacteristics() reads finalPolygons$AOI beside
+        #$DULN and $area. Keeping it here means r$finalPolygons has exactly the
+        #shape every consumer already expects, and vftPrepareNetwork() can take
+        #the letters as given rather than having to agree on them separately.
+        finalPolygons$AOI <- LETTERS702[1:nrow(finalPolygons)]
 
+        r$finalPolygons <- finalPolygons
 
-          # finalPolygons2 <- polygonEnv:polygonsList
-          finalPolygons$AOI <- LETTERS702[1:nrow(finalPolygons)]
+        #The five destroy() calls that used to sit here are gone. They were
+        #there because confirming meant leaving for good and a REBUILT module
+        #would have stacked a second set of map handlers on the live one;
+        #enter() has torn them down on every visit since Stage 5, so this copy
+        #was redundant - and it was actively harmful now that the confirm can
+        #be answered with "cancel": tearing the step down before app_server has
+        #decided whether the write goes ahead would leave a cancelling user on
+        #a frozen map they could neither edit nor confirm again.
+        shinyjs::reset("confirmButton4")
+        shinyjs::enable("confirmButton4")
+        shinyjs::enable("resetButton")
 
-          vertices <- sf::st_as_sf(dplyr::as_tibble(tidygraph::activate(network, nodes)))
-          vertices <- sf::st_transform(vertices, 4326)
-          # node_points <- as_tibble( network_Tbl_allCH|>activate("nodes") )
-          vertices_vect <- terra::vect(vertices)
+        r$confirm <- input$confirmButton4
 
-          vftDbgCat("TEST2")
-          #sample raster with nodes
-          vftDbgCat(paste0("finalPolygons are: ", str(finalPolygons)))
-          vftDbgCat(paste0("x is: ", str(terra::vect(finalPolygons))))
-          vftDbgCat(paste0("vertices_vect is: ", class(vertices_vect) ) )
-          vftDbgCat("TEST2b" )
-
-          vertices_AOI_data <- terra::extract(terra::vect(finalPolygons["AOI"]), vertices_vect)
-          vftDbgCat(paste0("vertices_AOI_data is: ", class(vertices_AOI_data) ) )
-
-          #add node_DULN data to original nodes
-          newvertices <- vertices
-          newvertices$AOI <- vertices_AOI_data$AOI
-          newvertices$AOI[is.na(newvertices$AOI)] <- 0
-
-
-
-          vftDbgCat("TEST3")
-          #TODO:
-          #somewhere here: for every polygon-extracted nodes, check if they form a single component, otherwise keep largest component
-          #cycle through every AOI letter
-          for(letter in LETTERS702[1:nrow(finalPolygons)]){
-            #get nodes with this letter
-            letternode <- newvertices$nodeID[newvertices$AOI == letter]
-            #determine components
-            subnetwork <- igraph::subgraph(network, letternode)
-            comp <- igraph::components(subnetwork, "strong")
-
-            #restored but potential ERROR, keep an eye out
-            # as large AOIs would have only one part active
-            #keep largest components as is
-            #smaller components: replace letter with "0"
-            smllerCompIDs <- igraph::V(subnetwork)$nodeID[comp$membership %in% which(comp$csize != max(comp$csize))]
-            #apply a "0" to all vertices in smaller components
-            newvertices$AOI[newvertices$nodeID %in% smllerCompIDs] <- "0"
-
-            #get largest comp and add letter to neighbouring nodes (buffer)
-            largestCompID <- igraph::V(subnetwork)$nodeID[comp$membership %in% which(comp$csize == max(comp$csize))]
-            #assign current letter to all neighbhood nodes around current AOI (buffer zone)
-            newvertices$AOI[unique(unlist(igraph::neighborhood(network, 1, nodes = largestCompID)))] <- letter
-          }
-
-          vftDbgCat("TEST4")
-
-          #add edge AOICol column for Debugging agent movement
-          newedges <- sf::st_as_sf(dplyr::as_tibble(tidygraph::activate(network, edges)))
-          newedges <- sf::st_transform(newedges, 4326)
-
-
-          #DULN_WALK_ serves as DULN_ALL
-          # Not using AOICol, removed
-          # newedges$AOICol <- ifelse(newedges$DULN_WALK_ > minThresh, 1, 0)
-
-          # #correct edge Table geometry name
-          # newEdgesTbl <- as_tibble(newedges)
-          # newEdgesTbl <- rename(newEdgesTbl, geometry = `_ogr_geometry_`)
-          vftDbgCat("TEST5")
-
-          # finalPolygons2 <<- finalPolygons
-
-          vftDbgCat("TEST6")
-
-
-
-          if(is.null(parking)){
-            # progress <- shiny::Progress$new()
-            # Make sure it closes when we exit this reactive, even if there's an error
-            # on.exit(progress$close())
-
-            #increment 1: loading paths
-            progress2$inc(1/2, detail = "Loading parking info...")
-            #LOAD / FILTER PARKING ####
-            #filter out all parkings that are not in proximity to an AOI (further than 100m)
-            wkt <- sf::st_as_text(sf::st_transform(sf::st_union( sf::st_buffer(sf::st_transform(finalPolygons, 2056), 100) ), "epsg:4326"  ))
-            #retrieve parking areas and crop
-            parking <- sf::st_read(vftData("maps/parking/parkingShapes.shp"),
-                                   query = 'SELECT * FROM "parkingShapes"',
-                                   wkt_filter = wkt
-            )
-            if(!is.null(parking )){
-              parking <-  parking |>
-                dplyr::rename(polygons = .data$`_ogr_geometry_`) |>
-                dplyr::select(.data$polygons)
-              parking$id <- 1:nrow(parking)
-              parking$isNew <- 0
-
-              #PARKING DATA ####
-              #similar to residential, but sampling parkingPolygons
-              #populate nodes with 0s in $parking
-              newvertices$parking <- 0
-              newvertices$parkingAttr <- 0
-              newvertices$newResidential <- 0
-
-              #problematic to use filtered nodes, use all nodes instead? or buffered areas around parking
-              filteredNodes <- sf::st_filter(newvertices, sf::st_buffer(parking, 50) )
-
-              # Pre-compute all spatial relationships ONCE before the loop instead of once per iteration:
-              # 1. Area / agentNb for every parking polygon (vectorised)
-              polyAreas    <- as.numeric(sf::st_area(parking)) / 30
-              # 2. Nearest AOI for every parking polygon (vectorised, single call)
-              nearestAOIs  <- sf::st_nearest_feature(parking, finalPolygons)
-              parkingAttrs <- finalPolygons$DULN[nearestAOIs]
-              # 3. Which filteredNodes fall within each parking polygon (one spatial op for all polygons)
-              nodesInParkings <- sf::st_contains(parking, filteredNodes, sparse = TRUE)
-
-              progress2$inc(1 / 2, detail = "Determining parking potential...")
-
-              #cycle through parking polygons
-              for(polyNb in seq_len(nrow(parking))){
-
-                nodeIndices <- nodesInParkings[[polyNb]]
-                nodeCount   <- length(nodeIndices)
-                agentNb     <- polyAreas[[polyNb]]
-                nearestAttr <- parkingAttrs[[polyNb]]
-
-                if(nodeCount > 0){
-                  #add number of agents a parking can hold (per node within parking)
-                  filteredNodes$parking[nodeIndices]    <- filteredNodes$parking[nodeIndices] + (agentNb / nodeCount)
-                  filteredNodes$parkingAttr[nodeIndices] <- nearestAttr
-
-                }else{
-                  #CAPTURE EXCEPTION : no nodes in polygon
-                  #in this case, find a single closest node outside polygon
-                  nearestNodeIdx <- sf::st_nearest_feature(parking[polyNb,], sf::st_as_sf(filteredNodes))
-
-                  if(!is.na(nearestNodeIdx)){
-                    filteredNodes$parking[[nearestNodeIdx]]    <- filteredNodes$parking[[nearestNodeIdx]] + agentNb
-                    filteredNodes$parkingAttr[[nearestNodeIdx]] <- nearestAttr
-                  }
-                }
-              }
-              #
-              #transfer parking info back to network
-              newvertices$parking[newvertices$nodeID %in% filteredNodes$nodeID] <- filteredNodes$parking
-              newvertices$parkingAttr[newvertices$nodeID %in% filteredNodes$nodeID] <- filteredNodes$parkingAttr
-
-            }
-          }
-
-          # DETERMINE ATTR WEIGHTED DISTANCES ####
-          # determine new distances that are weighted by attractivity
-          # ex: walkNat, walkNat_attr, walkNat_ATTR => slightly, moderately, heavily weighted by attractivity
-          # bigger the attractivity, shorter the "distance".
-          # 0 and negatives create problems, thus add min()+1
-
-          #Removed min()+1, as these change weight of various DULNs.
-          #Instead, added single value (min(all DULN)) to all DULNs at creation, to bring all values to positive
-
-          #divide distance in a way that, attr values close to the minimum threshold (for AoIs), are halved for ATTR, reduced by 0.25 for attr, and reduced by 0.125 for distance
-          #(minThresh has 24.11 added to avoid 0s and negatives in attractivity maps)
-
-          xDist <- 8/(34.2423 + minThresh)
-          xattr <- 4/(34.2423 + minThresh)
-          xATTR <- 2/(34.2423 + minThresh)
-
-          newedges$SHAPE_Leng_walkNat_ATTR <- newedges$SHAPE_Leng * (1-(1/(xATTR*newedges$DULN_WALK_ ))) #+ abs(min(newedges$DULN_WALK_)) + 1
-          newedges$SHAPE_Leng_walkSoc_ATTR <- newedges$SHAPE_Leng * (1-(1/(xATTR*newedges$DULN_WALK1 )))
-          newedges$SHAPE_Leng_dogNat_ATTR <- newedges$SHAPE_Leng * (1-(1/(xATTR*newedges$DULN_DOG_N )))
-          newedges$SHAPE_Leng_dogProx_ATTR <- newedges$SHAPE_Leng * (1-(1/(xATTR*newedges$DULN_DOG_P )))
-          newedges$SHAPE_Leng_ebikeNat_ATTR <- newedges$SHAPE_Leng * (1-(1/(xATTR*newedges$DULN_EBIKE)))
-          newedges$SHAPE_Leng_bikeSport_ATTR <- newedges$SHAPE_Leng * (1-(1/(xATTR*newedges$DULN_BIKER )))
-          newedges$SHAPE_Leng_jogger_ATTR <- newedges$SHAPE_Leng * (1-(1/(xATTR*newedges$DULN_JOGGE )))
-
-          newedges$SHAPE_Leng_walkNat_attr <- newedges$SHAPE_Leng * (1-(1/(xattr*newedges$DULN_WALK_ )))
-          newedges$SHAPE_Leng_walkSoc_attr <- newedges$SHAPE_Leng * (1-(1/(xattr*newedges$DULN_WALK1 )))
-          newedges$SHAPE_Leng_dogNat_attr <- newedges$SHAPE_Leng * (1-(1/(xattr*newedges$DULN_DOG_N )))
-          newedges$SHAPE_Leng_dogProx_attr <- newedges$SHAPE_Leng * (1-(1/(xattr*newedges$DULN_DOG_P )))
-          newedges$SHAPE_Leng_ebikeNat_attr <- newedges$SHAPE_Leng * (1-(1/(xattr*newedges$DULN_EBIKE )))
-          newedges$SHAPE_Leng_bikeSport_attr <- newedges$SHAPE_Leng * (1-(1/(xattr*newedges$DULN_BIKER )))
-          newedges$SHAPE_Leng_jogger_attr <- newedges$SHAPE_Leng * (1-(1/(xattr*newedges$DULN_JOGGE )))
-
-          newedges$SHAPE_Leng_walkNat <- newedges$SHAPE_Leng* (1-(1/(xDist*newedges$DULN_WALK_ )))
-          newedges$SHAPE_Leng_walkSoc <- newedges$SHAPE_Leng* (1-(1/(xDist*newedges$DULN_WALK1 )))
-          newedges$SHAPE_Leng_dogNat <- newedges$SHAPE_Leng* (1-(1/(xDist*newedges$DULN_DOG_N )))
-          newedges$SHAPE_Leng_dogProx <- newedges$SHAPE_Leng* (1-(1/(xDist*newedges$DULN_DOG_P )))
-          newedges$SHAPE_Leng_ebikeNat <- newedges$SHAPE_Leng* (1-(1/(xDist*newedges$DULN_EBIKE )))
-          newedges$SHAPE_Leng_bikeSport <- newedges$SHAPE_Leng* (1-(1/(xDist*newedges$DULN_BIKER )))
-          newedges$SHAPE_Leng_jogger <- newedges$SHAPE_Leng * (1-(1/(xDist*newedges$DULN_JOGGE )))
-
-          #make sure max distance is not increased
-          newedges$SHAPE_Leng_walkNat[newedges$SHAPE_Leng_walkNat > newedges$SHAPE_Leng] <- newedges$SHAPE_Leng[newedges$SHAPE_Leng_walkNat > newedges$SHAPE_Leng]
-          newedges$SHAPE_Leng_walkSoc[newedges$SHAPE_Leng_walkSoc > newedges$SHAPE_Leng] <- newedges$SHAPE_Leng[newedges$SHAPE_Leng_walkSoc > newedges$SHAPE_Leng]
-          newedges$SHAPE_Leng_dogNat[newedges$SHAPE_Leng_dogNat > newedges$SHAPE_Leng] <- newedges$SHAPE_Leng[newedges$SHAPE_Leng_dogNat > newedges$SHAPE_Leng]
-          newedges$SHAPE_Leng_dogProx[newedges$SHAPE_Leng_dogProx > newedges$SHAPE_Leng] <- newedges$SHAPE_Leng[newedges$SHAPE_Leng_dogProx > newedges$SHAPE_Leng]
-          newedges$SHAPE_Leng_ebikeNat[newedges$SHAPE_Leng_ebikeNat > newedges$SHAPE_Leng] <- newedges$SHAPE_Leng[newedges$SHAPE_Leng_ebikeNat > newedges$SHAPE_Leng]
-          newedges$SHAPE_Leng_bikeSport[newedges$SHAPE_Leng_bikeSport > newedges$SHAPE_Leng] <- newedges$SHAPE_Leng[newedges$SHAPE_Leng_bikeSport > newedges$SHAPE_Leng]
-          newedges$SHAPE_Leng_jogger[newedges$SHAPE_Leng_jogger > newedges$SHAPE_Leng] <- newedges$SHAPE_Leng[newedges$SHAPE_Leng_jogger > newedges$SHAPE_Leng]
-
-          newedges$SHAPE_Leng_walkNat_attr[newedges$SHAPE_Leng_walkNat_attr > newedges$SHAPE_Leng] <- newedges$SHAPE_Leng[newedges$SHAPE_Leng_walkNat_attr > newedges$SHAPE_Leng]
-          newedges$SHAPE_Leng_walkSoc_attr[newedges$SHAPE_Leng_walkSoc_attr > newedges$SHAPE_Leng] <- newedges$SHAPE_Leng[newedges$SHAPE_Leng_walkSoc_attr > newedges$SHAPE_Leng]
-          newedges$SHAPE_Leng_dogNat_attr[newedges$SHAPE_Leng_dogNat_attr > newedges$SHAPE_Leng] <- newedges$SHAPE_Leng[newedges$SHAPE_Leng_dogNat_attr > newedges$SHAPE_Leng]
-          newedges$SHAPE_Leng_dogProx_attr[newedges$SHAPE_Leng_dogProx_attr > newedges$SHAPE_Leng] <- newedges$SHAPE_Leng[newedges$SHAPE_Leng_dogProx_attr > newedges$SHAPE_Leng]
-          newedges$SHAPE_Leng_ebikeNat_attr[newedges$SHAPE_Leng_ebikeNat_attr > newedges$SHAPE_Leng] <- newedges$SHAPE_Leng[newedges$SHAPE_Leng_ebikeNat_attr > newedges$SHAPE_Leng]
-          newedges$SHAPE_Leng_bikeSport_attr[newedges$SHAPE_Leng_bikeSport_attr > newedges$SHAPE_Leng] <- newedges$SHAPE_Leng[newedges$SHAPE_Leng_bikeSport_attr > newedges$SHAPE_Leng]
-          newedges$SHAPE_Leng_jogger_attr[newedges$SHAPE_Leng_jogger_attr > newedges$SHAPE_Leng] <- newedges$SHAPE_Leng[newedges$SHAPE_Leng_jogger_attr > newedges$SHAPE_Leng]
-
-          newedges$SHAPE_Leng_walkNat_ATTR[newedges$SHAPE_Leng_walkNat_ATTR > newedges$SHAPE_Leng] <- newedges$SHAPE_Leng[newedges$SHAPE_Leng_walkNat_ATTR > newedges$SHAPE_Leng]
-          newedges$SHAPE_Leng_walkSoc_ATTR[newedges$SHAPE_Leng_walkSoc_ATTR > newedges$SHAPE_Leng] <- newedges$SHAPE_Leng[newedges$SHAPE_Leng_walkSoc_ATTR > newedges$SHAPE_Leng]
-          newedges$SHAPE_Leng_dogNat_ATTR[newedges$SHAPE_Leng_dogNat_ATTR > newedges$SHAPE_Leng] <- newedges$SHAPE_Leng[newedges$SHAPE_Leng_dogNat_ATTR > newedges$SHAPE_Leng]
-          newedges$SHAPE_Leng_dogProx_ATTR[newedges$SHAPE_Leng_dogProx_ATTR > newedges$SHAPE_Leng] <- newedges$SHAPE_Leng[newedges$SHAPE_Leng_dogProx_ATTR > newedges$SHAPE_Leng]
-          newedges$SHAPE_Leng_ebikeNat_ATTR[newedges$SHAPE_Leng_ebikeNat_ATTR > newedges$SHAPE_Leng] <- newedges$SHAPE_Leng[newedges$SHAPE_Leng_ebikeNat_ATTR > newedges$SHAPE_Leng]
-          newedges$SHAPE_Leng_bikeSport_ATTR[newedges$SHAPE_Leng_bikeSport_ATTR > newedges$SHAPE_Leng] <- newedges$SHAPE_Leng[newedges$SHAPE_Leng_bikeSport_ATTR > newedges$SHAPE_Leng]
-          newedges$SHAPE_Leng_jogger_ATTR[newedges$SHAPE_Leng_jogger_ATTR > newedges$SHAPE_Leng] <- newedges$SHAPE_Leng[newedges$SHAPE_Leng_jogger_ATTR > newedges$SHAPE_Leng]
-
-          #make sure min distance is not 0 or negative
-          newedges$SHAPE_Leng_walkNat[newedges$SHAPE_Leng_walkNat < 10] <- 10
-          newedges$SHAPE_Leng_walkSoc[newedges$SHAPE_Leng_walkSoc < 10] <- 10
-          newedges$SHAPE_Leng_dogNat[newedges$SHAPE_Leng_dogNat < 10] <- 10
-          newedges$SHAPE_Leng_dogProx[newedges$SHAPE_Leng_dogProx < 10] <- 10
-          newedges$SHAPE_Leng_ebikeNat[newedges$SHAPE_Leng_ebikeNat < 10] <-10
-          newedges$SHAPE_Leng_bikeSport[newedges$SHAPE_Leng_bikeSport < 10] <- 10
-          newedges$SHAPE_Leng_jogger[newedges$SHAPE_Leng_jogger < 10] <- 10
-
-          newedges$SHAPE_Leng_walkNat_attr[newedges$SHAPE_Leng_walkNat_attr < 10] <- 10
-          newedges$SHAPE_Leng_walkSoc_attr[newedges$SHAPE_Leng_walkSoc_attr < 10] <- 10
-          newedges$SHAPE_Leng_dogNat_attr[newedges$SHAPE_Leng_dogNat_attr < 10] <- 10
-          newedges$SHAPE_Leng_dogProx_attr[newedges$SHAPE_Leng_dogProx_attr < 10] <- 10
-          newedges$SHAPE_Leng_ebikeNat_attr[newedges$SHAPE_Leng_ebikeNat_attr < 10] <- 10
-          newedges$SHAPE_Leng_bikeSport_attr[newedges$SHAPE_Leng_bikeSport_attr < 10] <- 10
-          newedges$SHAPE_Leng_jogger_attr[newedges$SHAPE_Leng_jogger_attr < 10] <- 10
-
-          newedges$SHAPE_Leng_walkNat_ATTR[newedges$SHAPE_Leng_walkNat_ATTR < 10] <- 10
-          newedges$SHAPE_Leng_walkSoc_ATTR[newedges$SHAPE_Leng_walkSoc_ATTR < 10] <-10
-          newedges$SHAPE_Leng_dogNat_ATTR[newedges$SHAPE_Leng_dogNat_ATTR < 10] <-10
-          newedges$SHAPE_Leng_dogProx_ATTR[newedges$SHAPE_Leng_dogProx_ATTR < 10] <- 10
-          newedges$SHAPE_Leng_ebikeNat_ATTR[newedges$SHAPE_Leng_ebikeNat_ATTR < 10] <- 10
-          newedges$SHAPE_Leng_bikeSport_ATTR[newedges$SHAPE_Leng_bikeSport_ATTR < 10] <-10
-          newedges$SHAPE_Leng_jogger_ATTR[newedges$SHAPE_Leng_jogger_ATTR < 10] <-10
-
-          #create tbl_graph
-          newNetwork <- tidygraph::tbl_graph( nodes = dplyr::as_tibble(newvertices), edges = dplyr::as_tibble(newedges), directed = FALSE )
-          # #try to give a buffer zone to nodes neighbouring AOIs
-          # # select all nodes not == 0
-          # # increase neighbourhood by 1
-          # nbhd <- igraph::neighborhood(newNetwork[igraph::V(newNetwork)$AOI != "0",], 1)
-          # # give them a recognizable character ex: '~'
-          # igraph::N(nbhd)$AOI <- "~"
-
-          newNetworkParkingFinalP <- list(newNetworkParking = list(newNetwork = newNetwork, parking = parking), finalPolygons = finalPolygons )
-
-          progress2$close()
-
-          newNetworkParkingFinalP
-        }, seed = TRUE)%...>%(function(newNetworkParkingFinalP){
-
-          shinyjs::reset("confirmButton4")
-          shinyjs::enable("confirmButton4")
-          shinyjs::enable("resetButton")
-
-          #The five destroy() calls that used to sit here are gone. They were
-          #there because confirming meant leaving for good and a REBUILT module
-          #would have stacked a second set of map handlers on the live one;
-          #enter() has torn them down on every visit since Stage 5, so this copy
-          #was redundant - and it was actively harmful now that the confirm can
-          #be answered with "cancel": tearing the step down before app_server has
-          #decided whether the write goes ahead would leave a cancelling user on
-          #a frozen map they could neither edit nor confirm again.
-          r$confirm <- input$confirmButton4
-
-          #transfer network and parking back to local variables
-          r$newNetwork <- newNetworkParkingFinalP$newNetworkParking$newNetwork
-          r$parking <- newNetworkParkingFinalP$newNetworkParking$parking
-          r$finalPolygons <- newNetworkParkingFinalP$finalPolygons
-          return(list(finalPolygons = shiny::reactive({r$finalPolygons}), network = shiny::reactive(r$newNetwork), confirm = shiny::reactive({r$confirm}), needHelp = shiny::reactive(r$needHelp),
-                      parking = shiny::reactive(r$parking),
-                      currentLang = shiny::reactive(i18n()$get_translation_language())) )
-
-        })%...!%(vftAsyncError(progress2, "Parking areas", c("confirmButton4", "resetButton")))
         }else{
           shinyjs::enable("confirmButton4")
           shinyjs::enable("resetButton")
@@ -1268,7 +1014,6 @@ step4_server <- function(id, network, minThresh, i18n, currentLang,
       r$promiseFinished  <- NULL
       r$finalPolygons    <- finalPolygons
       r$confirm          <- NULL
-      r$newNetwork       <- NULL
 
       #the buttons the confirm handler disabled on the way out
       shinyjs::enable("confirmButton4")
@@ -1363,7 +1108,7 @@ step4_server <- function(id, network, minThresh, i18n, currentLang,
             progress1$close()
             finalAOI
 
-          }, seed = TRUE) %...>% (function(finalAOI){
+          }, seed = TRUE, progress = progress1) %...>% (function(finalAOI){
 
 
             #create a local version of the global variable to plot it
@@ -1418,8 +1163,11 @@ step4_server <- function(id, network, minThresh, i18n, currentLang,
 
     enter()
 
-    return(list(finalPolygons = shiny::reactive({r$finalPolygons}), network = shiny::reactive(r$newNetwork), confirm = shiny::reactive({r$confirm}), needHelp = shiny::reactive(r$needHelp),
-                parking = shiny::reactive(r$parking),
+    #`network` and `parking` are gone from this list. They were the output of the
+    #job that has moved to R/prepare_network.R, and the app-level r$network is
+    #the step-1 provider's key - step 4 was overwriting it with an AOI-annotated
+    #copy that nothing but the simulation ever wanted.
+    return(list(finalPolygons = shiny::reactive({r$finalPolygons}), confirm = shiny::reactive({r$confirm}), needHelp = shiny::reactive(r$needHelp),
                 currentLang = shiny::reactive(i18n()$get_translation_language()),
                 enter = enter) )
 
