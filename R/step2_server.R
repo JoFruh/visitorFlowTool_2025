@@ -663,7 +663,7 @@ step2_server <- function(id, fshape, i18n,
 
         list(df_spInfo, terra::wrap(sdmLayer))
 
-      }, seed = TRUE) %...>% (function(allResults){
+      }, seed = TRUE, progress = progress) %...>% (function(allResults){
 
         vftDbgCat(paste0("PROMISE COMPLETED" ) )
 

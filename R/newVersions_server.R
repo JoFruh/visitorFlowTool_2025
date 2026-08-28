@@ -55,6 +55,10 @@ newVersions_server <- function(id, networkList, i18n, currentLang, isFirstRun,
                                versionsUI = shiny::reactive(list()), trigger = 0,
                                DULN = shiny::reactive(NULL),
                                shape = shiny::reactive(NULL),
+                               #the step-3 attractiveness threshold. This page can be
+                               #the first to need the prepared network - see the
+                               #context observer below and R/prepare_network.R.
+                               minThresh = shiny::reactive(NULL),
                                #the scenario card to come back with selected, shared with step 5
                                #through r$selectedVersion
                                selectedVersion = shiny::reactive(NULL)){
@@ -74,7 +78,7 @@ newVersions_server <- function(id, networkList, i18n, currentLang, isFirstRun,
               isFirstRun = isFirstRun, SM_pres = SM_pres, SMcolors = SMcolors,
               shp_PA = shp_PA, finalPolygons = finalPolygons,
               versionsUI = versionsUI, DULN = DULN, shape = shape,
-              selectedVersion = selectedVersion)
+              minThresh = minThresh, selectedVersion = selectedVersion)
 
   # r$mapRefresh <- 0
   shiny::moduleServer(id, function(input, output, session) {
@@ -91,6 +95,7 @@ newVersions_server <- function(id, networkList, i18n, currentLang, isFirstRun,
     versionsUI    <- list()
     DULN          <- NULL
     shape         <- NULL
+    minThresh     <- NULL
     selectedVersion <- NULL
 
     # RENDER UI
@@ -1330,19 +1335,41 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
 
         r$context <- input$contextChoice
 
-        # if original version
-        if(r$position == 1){
-          if( (r$oldContext == 1 & r$context == 2) |
-              (r$oldContext == 2 & r$context == 1) ){
-            #avoid rendering map again
-            # shiny::isolate(r$toRender <- FALSE)
+        # THE PREPARED NETWORK ####
+        #
+        #Contexts 1 ("Wegen/Strassen") and 3 ("Parken/Wohnen") are the two that
+        #read what step 4's confirm handler used to build: context 3 draws
+        #r$networkList[[pos]]$parking - and calls nrow() on it, which errors on
+        #NULL - while its paintbrush writes the node-level `parking` attribute,
+        #and context 1 edits the edge table that carries the weighted distances.
+        #So they trigger the preparation; context 4 ("Hitzeminderung") does NOT,
+        #deliberately, so that a direct route into it can skip the path and
+        #parking load altogether.
+        #
+        #The render trigger is bumped from INSIDE the callback rather than here:
+        #output$versionMap reads r$networkList[[r$position]]$network, so bumping
+        #first would draw the unprepared scenario and then draw it again.
+        #vftPrepareThen() calls back in this same tick when the scenario is
+        #already prepared, which is every context switch after the first.
 
-            #do not render
-            return()
-          }else{
-            r$updateRender <- r$updateRender + 1
-          }
+        #The "nothing to redraw" case first, unchanged: on the original scenario
+        #a switch between contexts 1 and 2 leaves this observer entirely, before
+        #the disable block below. isTRUE() around it because a NULL r$oldContext
+        #makes the comparison logical(0) and `if` abort on that; context 2 is not
+        #among the radio button's choices any more, so this is dead in practice.
+        if(isTRUE(r$position == 1) &&
+           isTRUE((r$oldContext == 1 & r$context == 2) |
+                  (r$oldContext == 2 & r$context == 1))){
+          #avoid rendering map again
+          return()
+        }
 
+        if(r$context %in% c(1, 3)){
+          vftPrepareThen(r, r$position, finalPolygons, minThresh,
+                         label = "Wegnetz wird vorbereitet...",
+                         then  = function(){
+                           r$updateRender <- r$updateRender + 1
+                         })
         }else{
           r$updateRender <- r$updateRender + 1
         }
@@ -3964,6 +3991,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
       versionsUI    <<- .rx$versionsUI()
       DULN          <<- .rx$DULN()
       shape         <<- .rx$shape()
+      minThresh     <<- .rx$minThresh()
       selectedVersion <<- .rx$selectedVersion()
 
       #--- 2. tear down the previous visit's version cards and their observers.
@@ -4032,10 +4060,28 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
       #--- 6. redraw. output$versionMap reads r$updateRender and
       #r$updateNetworkPlot() and nothing else reactive - the network itself is a
       #plain local - so a return visit has nothing to re-render it without this.
+      #
+      #The preparation is asked for HERE as well as in the context observer, and
+      #it has to be: part 4 above set r$context to 1, so this entry IS a choice
+      #of context 1, and obsContext will not fire for it - the radio button
+      #already reads "1" from the previous visit and an unchanged input does not
+      #invalidate. Without this, a second visit would draw an unprepared network.
+      #(When a direct route into context 4 exists, set r$context there and this
+      #branch will skip the load, which is the point of asking r$context rather
+      #than always preparing.)
       shinyjs::disable("versionBtn0")
       vftDbg("UPDATE NETWORK 4")
       r$updateNetworkPlot(r$updateNetworkPlot() + 1)
-      r$updateRender <- r$updateRender + 1
+
+      if(r$context %in% c(1, 3)){
+        vftPrepareThen(r, r$position, finalPolygons, minThresh,
+                       label = "Wegnetz wird vorbereitet...",
+                       then  = function(){
+                         r$updateRender <- r$updateRender + 1
+                       })
+      }else{
+        r$updateRender <- r$updateRender + 1
+      }
 
       shinyjs::disable("newVersionsConfirmButton")
       shinyjs::disable("addVersionButton")
@@ -4053,6 +4099,22 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
 
     return(list(networkList = shiny::reactive({r$networkList}), confirm = shiny::reactive({input$newVersionsConfirmButton}, label = "TESTLABEL"), trigger_1 = shiny::reactive(r$trigger), versionsUI =  shiny::reactive(r$versionsUI),
                 selectedVersion = shiny::reactive(r$selectedVersion),
+                #the parking table, once vftPrepareThen() has produced it. This
+                #page can be the first to run the preparation, so it publishes
+                #parking the same way step 5 does - see the mirrors in
+                #app_server(). The scenario holds the authoritative copy.
+                #
+                #Guarded for the same reason as step 5's copy: vftMirror() reads
+                #this from an observe() that re-runs whenever r$networkList
+                #changes, and this page is where scenarios are DELETED - so the
+                #list really does go shorter than r$position, and a subscript
+                #error would take the mirror down for the session.
+                parking = shiny::reactive({
+                  nl  <- r$networkList
+                  pos <- r$position
+                  if(is.null(nl) || is.null(pos) || pos > length(nl)) return(NULL)
+                  nl[[pos]]$parking
+                }),
                 enter = enter) )
 
   })

@@ -11,6 +11,15 @@ app_server <- function(input, output, session){
   i18n <- shiny.i18n::Translator$new(translation_csvs_path = vftData("tables"), separator_csv = ";" )
   i18n$set_translation_language('de')
 
+  #Park the translator where code without an `i18n` in scope can reach it. The
+  #queue display in R/async_helpers.R is driven from providers.R and
+  #prepare_network.R, neither of which is handed one, and threading it through
+  #five signatures for a caption is not worth it. userData is shared with every
+  #module proxy (the same property .vftBusyStore() relies on), and the Translator
+  #is an R6 object the language observers mutate in place, so a language switch
+  #reaches it with no further wiring. See .vftT().
+  session$userData$vftI18n <- i18n
+
   r <- shiny::reactiveValues()
 
   #give banners an original value.
@@ -772,9 +781,6 @@ app_server <- function(input, output, session){
         r$needHelp <- step4return$needHelp()
         r$currentLang <- step4return$currentLang()
 
-        newNetwork <- step4return$network()
-        newParking <- step4return$parking()
-
         #CREATE NETWORK LIST ####
         #Package together all aspects that can be altered and results (network,
         #usage, parking, attractivity..). This list IS the simulation's input, so
@@ -782,14 +788,28 @@ app_server <- function(input, output, session){
         #goes through vftCommit() with everything else step 4 confirms rather
         #than being assigned here. If the user has simulations or saved versions,
         #this is the write that asks them first.
-        newList <- list(list(network = newNetwork, pathUsage = NULL,
-                             parking = newParking, residential = NULL,
+        #
+        #The network in it is the RAW one the step-1 provider derived, and
+        #`parking` is NULL. Both used to be step 4's own output, from the ~30s
+        #job that has moved to R/prepare_network.R - it now runs when the first
+        #simulation is launched, which is where the first read of either happens.
+        #Everything between here and there works on the raw network: the scenario
+        #cards are labelled buttons, the map before a simulation is a static
+        #placeholder, and every display checkbox that would want the prepared
+        #columns is disabled until a pathUsage exists.
+        newList <- list(list(network = r$network, pathUsage = NULL,
+                             parking = NULL, residential = NULL,
                              newAttr = NULL))
 
+        #`network` and `parking` are no longer committed here. r$network is the
+        #step-1 provider's key and step 4 was overwriting it with an
+        #AOI-annotated copy; r$parking is now filled by whichever page ran the
+        #preparation, through vftMirror() below. Invalidation is unchanged -
+        #`parking` and `networkList` are both dependents of `finalPolygons`
+        #(R/providers.R), so confirming CHANGED areas of interest still asks
+        #before it discards simulations and saved versions.
         vftCommit(r,
                   list(finalPolygons = step4return$finalPolygons(),
-                       network       = newNetwork,
-                       parking       = newParking,
                        networkList   = newList),
                   session, step = "step4",
                   then = function(){
@@ -850,6 +870,11 @@ app_server <- function(input, output, session){
                                 i18n            = shiny::reactive(i18n),
                                 currentLang     = shiny::reactive(r$currentLang),
                                 minCutThresh    = shiny::reactive(r$minCutThresh),
+                                #the step-3 attractiveness threshold. New here:
+                                #the attractivity-weighted edge distances are
+                                #computed at the simulation launch now, not at
+                                #step 4's confirm. See R/prepare_network.R.
+                                minThresh       = shiny::reactive(r$minThresh),
                                 selectedVersion = shiny::reactive(r$selectedVersion)))
 
     #### step 5's results, published into `r` as they are produced ####
@@ -882,6 +907,11 @@ app_server <- function(input, output, session){
     vftMirror(r, "selectedVersion", step5return$selectedVersion)
     vftMirror(r, "pathUsage",   step5return$pathUsage)
     vftMirror(r, "shp_PA",      step5return$shp_PA)
+    #the parking table, once the preparation this page triggers has produced it.
+    #Step 4 used to commit it; the job moved to R/prepare_network.R and the
+    #scenario carries the authoritative copy, so this only keeps the app-level
+    #key - which is what the save file records - in step with it.
+    vftMirror(r, "parking",     step5return$parking)
 
     #From step 5, go to New Versions
     shiny::observeEvent(step5return$newVersions(), {
@@ -982,6 +1012,11 @@ app_server <- function(input, output, session){
                                             shape         = shiny::reactive(r$shape),
                                             i18n = shiny::reactive(i18n),
                                             currentLang   = shiny::reactive(r$currentLang),
+                                            #the step-3 threshold, for the same
+                                            #reason step 5 now takes it: this
+                                            #page can be the first to need the
+                                            #prepared network. R/prepare_network.R.
+                                            minThresh     = shiny::reactive(r$minThresh),
                                             selectedVersion = shiny::reactive(r$selectedVersion))
 
     #### this page's results, published into `r` as they are produced ####
@@ -999,6 +1034,9 @@ app_server <- function(input, output, session){
     vftMirror(r, "networkList", newVersionsReturn$networkList)
     vftMirror(r, "versionsUI",  newVersionsReturn$versionsUI)
     vftMirror(r, "selectedVersion", newVersionsReturn$selectedVersion)
+    #this page can be the first to run the preparation - see the context
+    #observer in newVersions_server.R - so it publishes parking too.
+    vftMirror(r, "parking",     newVersionsReturn$parking)
 
     shiny::observeEvent(newVersionsReturn$confirm(), {
 

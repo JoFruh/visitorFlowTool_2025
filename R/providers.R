@@ -120,7 +120,7 @@ VFT_PROVIDERS <- list(
                            sf::st_transform(shapeLarger, "epsg:4326"))
         progress$close()
         terra::wrap(out)
-      }, seed = TRUE)
+      }, seed = TRUE, progress = progress)
 
       promises::then(p, function(packed){
         list(DULN_all = terra::unwrap(packed))
@@ -163,7 +163,7 @@ VFT_PROVIDERS <- list(
         progress$inc(1/3)
         progress$close()
         res
-      }, seed = TRUE)
+      }, seed = TRUE, progress = progress)
 
       promises::then(p, function(res){
         list(network  = res[[1]][[1]],

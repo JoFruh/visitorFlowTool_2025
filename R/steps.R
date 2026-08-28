@@ -56,14 +56,19 @@ VFT_STEPS <- list(
                      label = "4 Wegnetz",
                      needs = c("shape", "network", "networkNodes",
                                "DULN", "DULN_all", "minThresh")),
+  #`minThresh` is new on both of these. The attractivity-weighted edge distances
+  #used to be baked into the network by step 4's confirm; they are computed when
+  #a simulation is first launched now (R/prepare_network.R), so both pages
+  #genuinely read the threshold. VFT_KEY_READY$minThresh below already answers
+  #TRUE on step 3's skip path, so adding it darkens nothing.
   step5       = list(tab = "tab_step5",       code = 5L,
                      label = "5 Simulation",
                      needs = c("networkList", "SM_pres", "SMcolors",
-                               "shape", "species", "minCutThresh")),
+                               "shape", "species", "minCutThresh", "minThresh")),
   newVersions = list(tab = "tab_newVersions", code = NA_integer_,
                      label = "Neue Versionen",
                      needs = c("networkList", "SM_pres", "SMcolors",
-                               "finalPolygons", "DULN", "shape"))
+                               "finalPolygons", "DULN", "shape", "minThresh"))
 )
 
 #' How the nav bar groups its buttons, left to right.

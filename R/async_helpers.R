@@ -1,3 +1,408 @@
+#### The cross-session job queue ####
+#
+# With VFT_WORKERS=1 every heavy job in the app runs one at a time, and the
+# waiting happens inside mirai's dispatcher where the app cannot see it: a second
+# user clicking "launch simulation" gets a progress bar that opens at 0% and then
+# does not move for as long as somebody else's job takes. Nothing tells them they
+# are waiting rather than running. mirai::status()$awaiting gives a queue DEPTH
+# and nothing else - not whose job is where, not how far the running one has got
+# - so position has to be tracked here.
+#
+# One ticket per vftFuture() dispatch, in dispatch order. mirai's dispatcher is
+# FIFO, so rank in this registry IS queue position: with n workers the first n
+# live tickets are running and everything after them is waiting. Each progress
+# bar publishes its own value back into its ticket, which is what lets a QUEUED
+# session paint itself with the RUNNING job's percentage.
+#
+# Everything in here is best-effort and wrapped: this is a display feature, and a
+# display feature must never be the reason a job fails to dispatch.
+
+#' The shared queue record, in .GlobalEnv for the same reason as .vftPerfState.
+#'
+#' load_all() or a reinstall builds a fresh namespace, and a registry living in
+#' that namespace would split the queue in two - which defeats the entire point,
+#' since the whole feature rests on every session in the process counting against
+#' one list. See .vftP() in R/perf_helpers.R for the longer version.
+.vftQ <- function(){
+  st <- .GlobalEnv$.vftQState
+  if(is.null(st)){
+    st <- new.env(parent = emptyenv())
+    #monotonic dispatch counter; a ticket's seq is its place in the FIFO
+    st$seq  <- 0L
+    #id -> ticket list
+    st$jobs <- new.env(parent = emptyenv())
+    #job label -> the last few observed durations, in seconds, for the estimate
+    st$hist <- new.env(parent = emptyenv())
+    .GlobalEnv$.vftQState <- st
+  }
+  st
+}
+
+#' How many past runs of a label to keep. Enough for a median to be meaningful,
+#' few enough that a machine that has got slower is reflected within a session.
+VFT_QUEUE_HIST_N <- 10L
+
+#' A ticket that is created but never dispatched is a progress bar somebody
+#' opened and then abandoned. It must not sit in the queue counting against
+#' everyone else's position, so it lapses.
+VFT_QUEUE_NEW_TTL_S <- 30
+
+#' And nothing at all survives this. A promise that never settles - the dead
+#' daemon case .vftEnsureDaemons() exists for - would otherwise pin a queue
+#' position for the life of the process. Deliberately far longer than any real
+#' job, so it can only ever catch something already broken.
+VFT_QUEUE_MAX_S <- 2 * 3600
+
+#' A session identity that is always a character scalar.
+#'
+#' Only ever compared for equality, so a bar can say "your own job" instead of
+#' "another user's" - it is never displayed and never leaves the process. NULL is
+#' a real case, not defensive padding: a job dispatched outside a session has no
+#' token, and NULL propagating into the comparison is an error rather than a
+#' FALSE.
+.vftQueueToken <- function(session){
+  tok <- tryCatch(session$token, error = function(e) NULL)
+  if(!is.character(tok) || length(tok) != 1L || is.na(tok)) NA_character_ else tok
+}
+
+#' Take a ticket. State "new" until vftFuture() actually dispatches it.
+#'
+#' @param label human-readable job name - the progress bar's `message`. Fixed at
+#'   creation on purpose: the ABM rewrites its message mid-run, and the duration
+#'   history is keyed by this, so a mutating label would fragment the history.
+#' @param session used only for `$token`, so a bar can tell "my own job" from
+#'   "somebody else's" without ever reading another session's data.
+.vftQueueTicket <- function(label = NULL, session = NULL){
+  tryCatch({
+    q  <- .vftQ()
+    id <- basename(tempfile("vftJob_"))
+    ok <- is.character(label) && length(label) == 1L && !is.na(label) && nzchar(label)
+    q$jobs[[id]] <- list(
+      id        = id,
+      label     = if(ok) label else "Hintergrundaufgabe",
+      token     = .vftQueueToken(session),
+      state     = "new",
+      seq       = NA_integer_,
+      createdAt = Sys.time(),
+      startedAt = NULL,
+      value     = NA_real_
+    )
+    id
+  }, error = function(e) NULL)
+}
+
+#' Join the FIFO. Called from vftFuture() at the moment of dispatch, so the
+#' sequence number reflects the order the users actually clicked in.
+.vftQueueEnqueue <- function(id){
+  if(is.null(id)) return(invisible(NULL))
+  tryCatch({
+    q  <- .vftQ()
+    tk <- q$jobs[[id]]
+    if(is.null(tk)) return(invisible(NULL))
+    q$seq        <- q$seq + 1L
+    tk$seq       <- q$seq
+    tk$state     <- "queued"
+    q$jobs[[id]] <- tk
+    #recompute ranks now, so whatever is at the front is stamped as started even
+    #if it has no progress bar and nobody is ticking on its behalf
+    .vftQueueList()
+  }, error = function(e) NULL)
+  invisible(NULL)
+}
+
+#' Publish where a running job has got to, so queued sessions can display it.
+.vftQueueReport <- function(id, value = NA_real_){
+  if(is.null(id)) return(invisible(NULL))
+  tryCatch({
+    q  <- .vftQ()
+    tk <- q$jobs[[id]]
+    if(is.null(tk)) return(invisible(NULL))
+    #a report is proof the job is executing, whatever the rank arithmetic says
+    if(!identical(tk$state, "running")){
+      tk$state <- "running"
+      if(is.null(tk$startedAt)) tk$startedAt <- Sys.time()
+    }
+    if(length(value) == 1L && is.finite(value)) tk$value <- max(0, min(1, value))
+    q$jobs[[id]] <- tk
+  }, error = function(e) NULL)
+  invisible(NULL)
+}
+
+#' Give up the position, and remember how long the job took.
+#'
+#' Called from vftFuture()'s finally(), NOT from the progress bar's close(): the
+#' ticket's lifetime is the job's, and several call sites close their bar inside
+#' the worker or in a then() before the promise has settled.
+.vftQueueDone <- function(id){
+  if(is.null(id)) return(invisible(NULL))
+  tryCatch({
+    q  <- .vftQ()
+    tk <- q$jobs[[id]]
+    if(is.null(tk)) return(invisible(NULL))
+    if(!is.null(tk$startedAt)){
+      d <- as.numeric(difftime(Sys.time(), tk$startedAt, units = "secs"))
+      if(is.finite(d) && d > 0){
+        h <- c(q$hist[[tk$label]], d)
+        if(length(h) > VFT_QUEUE_HIST_N) h <- h[seq.int(length(h) - VFT_QUEUE_HIST_N + 1L, length(h))]
+        q$hist[[tk$label]] <- h
+      }
+    }
+    if(!is.null(q$jobs[[id]])) rm(list = id, envir = q$jobs)
+    #the job behind this one has just reached the front; stamp its start
+    .vftQueueList()
+  }, error = function(e) NULL)
+  invisible(NULL)
+}
+
+#' The live tickets in dispatch order, swept, with the front ones promoted.
+#'
+#' This is the one place that decides who is running: the first
+#' .vftWorkerCount() dispatched tickets are, everything behind them is waiting.
+#' Promotion happens here rather than in the caller so that a job with no
+#' progress bar still gets a startedAt - which is what the duration history and
+#' the wait estimate are built from.
+.vftQueueList <- function(){
+  tryCatch({
+    q   <- .vftQ()
+    ids <- ls(q$jobs, all.names = TRUE)
+    if(!length(ids)) return(list())
+    now  <- Sys.time()
+    jobs <- lapply(ids, function(i) q$jobs[[i]])
+
+    age  <- vapply(jobs, function(tk)
+      as.numeric(difftime(now, tk$createdAt, units = "secs")), numeric(1))
+    drop <- (vapply(jobs, function(tk) identical(tk$state, "new"), logical(1)) &
+               age > VFT_QUEUE_NEW_TTL_S) | age > VFT_QUEUE_MAX_S
+    if(any(drop)){
+      rm(list = vapply(jobs[drop], function(tk) tk$id, character(1)), envir = q$jobs)
+      jobs <- jobs[!drop]
+    }
+
+    #a ticket that has not been dispatched yet occupies no position
+    jobs <- jobs[!vapply(jobs, function(tk) identical(tk$state, "new"), logical(1))]
+    if(!length(jobs)) return(list())
+
+    jobs <- jobs[order(vapply(jobs, function(tk) tk$seq, integer(1)))]
+
+    n <- .vftWorkerCount()
+    for(i in seq_along(jobs)){
+      if(i <= n && identical(jobs[[i]]$state, "queued")){
+        jobs[[i]]$state        <- "running"
+        jobs[[i]]$startedAt    <- now
+        q$jobs[[jobs[[i]]$id]] <- jobs[[i]]
+      }
+    }
+    jobs
+  }, error = function(e) list())
+}
+
+#' Typical duration of a label, or NA before anything of that kind has finished.
+.vftQueueMedian <- function(label){
+  h <- tryCatch(.vftQ()$hist[[label]], error = function(e) NULL)
+  if(!length(h)) return(NA_real_)
+  stats::median(h)
+}
+
+#' Seconds still to run on a job that has already started.
+#'
+#' Prefer its own reported percentage - that reflects THIS run on THIS machine -
+#' and only fall back to the historical median while the percentage is too small
+#' to extrapolate from. Below 5% the linear projection is wild: at 1% after two
+#' seconds it predicts 198 more.
+.vftQueueRemaining <- function(tk){
+  st <- tk$startedAt
+  if(is.null(st)) return(NA_real_)
+  el <- as.numeric(difftime(Sys.time(), st, units = "secs"))
+  v  <- tk$value
+  if(length(v) == 1L && is.finite(v) && v >= 0.05) return(max(0, el * (1 - v) / v))
+  m <- .vftQueueMedian(tk$label)
+  if(is.finite(m)) return(max(0, m - el))
+  NA_real_
+}
+
+#' How long until the ticket at position `k` starts: what is left of the jobs in
+#' front of it. NA when nothing ahead can be estimated at all, which is the case
+#' on a freshly restarted process before the running job has reported 5%.
+#'
+#' A job ahead with no history contributes nothing rather than blocking the whole
+#' estimate, so this can under-report. That is the right way round: "at least
+#' this long" is useful, and a missing number is better than a made-up one.
+.vftQueueEta <- function(jobs, k){
+  if(k <= 1L) return(NA_real_)
+  tot <- 0; have <- FALSE
+  for(i in seq_len(k - 1L)){
+    tk <- jobs[[i]]
+    s  <- if(identical(tk$state, "running")) .vftQueueRemaining(tk)
+          else .vftQueueMedian(tk$label)
+    if(length(s) == 1L && is.finite(s)){ tot <- tot + s; have <- TRUE }
+  }
+  if(have) tot else NA_real_
+}
+
+#' m:ss, for "running since".
+.vftFmtElapsed <- function(secs){
+  if(!length(secs) || !is.finite(secs)) return(NA_character_)
+  secs <- max(0, round(secs))
+  sprintf("%d:%02d", secs %/% 60, secs %% 60)
+}
+
+#' This session's translator, or identity when there is none.
+#'
+#' app_server() parks the shiny.i18n Translator on session$userData, which module
+#' proxies share (the same property .vftBusyStore() relies on). That is what lets
+#' code down here - providers.R and prepare_network.R have no i18n in scope -
+#' translate without five new function signatures. The Translator is an R6 object
+#' mutated in place by the language observers, so a language switch is picked up
+#' by the next call with no extra wiring.
+#'
+#' Keys are German, matching the `or` column of the translation CSVs, so a
+#' deployment whose CSVs have not been updated degrades to readable German rather
+#' than to a bare key.
+.vftT <- function(session = NULL){
+  tr <- tryCatch(session$userData$vftI18n, error = function(e) NULL)
+  if(is.null(tr)) return(function(x) x)
+  function(x) tryCatch(tr$t(x), error = function(e) x)
+}
+
+#' Paint one queued progress bar with the running job's numbers.
+#'
+#' @param sp the real shiny::Progress - we are on the main thread, so drive it
+#'   directly, exactly as the queue consumer below does
+#' @param jobs the ordered live tickets from .vftQueueList()
+#' @param k this bar's index in `jobs`
+.vftQueuePaint <- function(sp, sess, pid, jobs, k, first = FALSE){
+  tr    <- .vftT(sess)
+  me    <- jobs[[k]]
+  run   <- jobs[[1L]]
+  total <- length(jobs)
+
+  if(isTRUE(first))
+    tryCatch(sess$sendCustomMessage("vft-progress-class",
+                                   list(id = pid, cls = "vft-queued", add = TRUE)),
+             error = function(e) NULL)
+
+  msg <- tryCatch(sprintf(tr("In Warteschlange – Position %d von %d"), k, total),
+                  error = function(e) "In Warteschlange")
+
+  #Only the LABEL of the job in front is ever shown, never anything belonging to
+  #the user running it. And a ticket with no session cannot be claimed as yours,
+  #so NA reads as "someone else" - the safe way round, since the point of the
+  #line is to stop a user blaming a colleague for their own queued job.
+  mine <- !is.na(me$token) && identical(run$token, me$token)
+  who  <- if(mine) tr("Ihr eigener Auftrag") else tr("Auftrag eines anderen Nutzers")
+  det <- paste0(who, ": ", run$label)
+
+  if(length(run$value) == 1L && is.finite(run$value))
+    det <- paste0(det, " – ", round(run$value * 100), " %")
+
+  el <- if(is.null(run$startedAt)) NA_character_ else
+    .vftFmtElapsed(as.numeric(difftime(Sys.time(), run$startedAt, units = "secs")))
+  if(!is.na(el)) det <- paste0(det, " (", sprintf(tr("seit %s"), el), ")")
+
+  eta <- .vftQueueEta(jobs, k)
+  if(length(eta) == 1L && is.finite(eta))
+    det <- paste0(det, " – ",
+                  sprintf(tr("noch ca. %d Min."), max(1L, as.integer(round(eta / 60)))))
+
+  val <- if(length(run$value) == 1L && is.finite(run$value)) run$value else 0
+  tryCatch(sp$set(value = val, message = msg, detail = det), error = function(e) NULL)
+  invisible(NULL)
+}
+
+#' Watch this bar's place in the queue and paint it red until its turn comes.
+#'
+#' Returns two callbacks for vftProgress() to wire up: `handOver()`, called from
+#' the queue consumer when the worker itself reports (which is proof the job is
+#' executing), and `stop()`.
+#'
+#' The ticker is a self-rescheduling later::later(), not an observe(): it must run
+#' from a promise callback and from later()'s own event loop, where there is no
+#' reactive domain - the trap documented at R/providers.R#845. ipc's consumer does
+#' exactly the same thing one layer down, and drives the same shiny::Progress from
+#' it, so this is the established path rather than a new one.
+.vftQueueWatch <- function(sp, tid, message0 = NULL, detail0 = NULL){
+  noop <- list(handOver = function(closed = FALSE) invisible(NULL),
+               stop     = function() invisible(NULL))
+  if(is.null(sp) || is.null(tid)) return(noop)
+
+  priv <- tryCatch(sp$.__enclos_env__$private, error = function(e) NULL)
+  if(is.null(priv)) return(noop)
+  sess <- priv$session; pid <- priv$id
+  if(is.null(sess) || is.null(pid)) return(noop)
+
+  st <- new.env(parent = emptyenv())
+  st$stopped <- FALSE
+  #have we ever taken the bar over? nothing is restored if we never touched it
+  st$painted <- FALSE
+  #has the worker reported? if so its caption wins and must not be overwritten
+  st$handed  <- FALSE
+
+  release <- function(){
+    if(st$stopped) return(invisible(NULL))
+    st$stopped <- TRUE
+    if(st$painted){
+      tryCatch(sess$sendCustomMessage("vft-progress-class",
+                                     list(id = pid, cls = "vft-queued", add = FALSE)),
+               error = function(e) NULL)
+      #put the caller's own caption back, but only if nothing real has arrived to
+      #overwrite it - otherwise we would undo the worker's first message.
+      if(!st$handed)
+        tryCatch(sp$set(value = 0, message = message0, detail = detail0),
+                 error = function(e) NULL)
+    }
+    invisible(NULL)
+  }
+
+  tick <- function(){
+    if(st$stopped) return(invisible(NULL))
+    again <- tryCatch({
+      tk <- .vftQ()$jobs[[tid]]
+      if(is.null(tk)){
+        FALSE                                   #finished, or swept
+      }else if(identical(tk$state, "new")){
+        TRUE                                    #dispatch has not happened yet
+      }else{
+        jobs <- .vftQueueList()
+        k    <- which(vapply(jobs, function(j) identical(j$id, tid), logical(1)))
+        if(!length(k) || k[1L] <= .vftWorkerCount()){
+          FALSE                                 #our turn - hand the bar back
+        }else{
+          .vftQueuePaint(sp, sess, pid, jobs, k[1L], first = !st$painted)
+          st$painted <- TRUE
+          TRUE
+        }
+      }
+    }, error = function(e) FALSE)
+
+    if(isTRUE(again)) later::later(tick, 1) else release()
+    invisible(NULL)
+  }
+  later::later(tick, 1)
+
+  #A session that leaves mid-wait keeps its queue position - the job is still
+  #running in a daemon and still delays everybody behind it - but there is no
+  #longer a bar to paint, so stop ticking at it. ipc's shinyQueue registers its
+  #own onEnded on this same session for the same reason.
+  tryCatch(sess$onSessionEnded(function() release()), error = function(e) NULL)
+
+  list(
+    handOver = function(closed = FALSE){
+      st$handed <- TRUE
+      if(!isTRUE(closed)){
+        v <- tryCatch({
+          gv <- sp$getValue(); mn <- sp$getMin(); mx <- sp$getMax()
+          if(is.null(gv) || !is.finite(mx - mn) || mx <= mn) NA_real_
+          else (gv - mn) / (mx - mn)
+        }, error = function(e) NA_real_)
+        .vftQueueReport(tid, value = v)
+      }
+      release()
+    },
+    stop = release
+  )
+}
+
+
 #' A progress bar a worker can drive without dragging the session with it.
 #'
 #' `ipc::AsyncProgress` is built to be passed into a future, but it cannot be
@@ -47,6 +452,16 @@ vftProgress <- function(..., millis = 1000){
   q      <- progress$.__enclos_env__$private$queue
   signal <- basename(tempfile("vftProgress_"))
 
+  #### the queue display ####
+  #Every bar takes a ticket here, one call before vftFuture() joins it to the
+  #FIFO. It has to happen at THIS end and not at the dispatch, because the bar is
+  #what has the session, the shiny::Progress id, and the label to show.
+  dots  <- list(...)
+  tid   <- .vftQueueTicket(label = dots$message,
+                           session = tryCatch(sp$.__enclos_env__$private$session,
+                                              error = function(e) NULL))
+  watch <- .vftQueueWatch(sp, tid, message0 = dots$message, detail0 = dots$detail)
+
   #This closure captures `target` and therefore the session - which is fine and
   #intended: it lives in the consumer, on this side, and is never serialised.
   q$consumer$addHandler(function(sig, obj, e){
@@ -55,6 +470,11 @@ vftProgress <- function(..., millis = 1000){
                     set   = do.call(target$set, obj$args),
                     inc   = do.call(target$inc, obj$args),
                     close = target$close()),
+             error = function(err) NULL)
+    #a message from the worker is proof the job is executing: stop the queue
+    #ticker before it can overwrite what the worker just wrote, and republish the
+    #new value so sessions waiting behind this job can display it.
+    tryCatch(watch$handOver(closed = identical(obj$op, "close")),
              error = function(err) NULL)
     NULL
   }, signal)
@@ -80,7 +500,14 @@ vftProgress <- function(..., millis = 1000){
     close = function()
       .prod$fire(.sig, list(op = "close", args = list()))
   )
-  lapply(handle, function(f){ environment(f) <- e; f })
+  handle <- lapply(handle, function(f){ environment(f) <- e; f })
+
+  #the ticket id, so vftFuture() can join THIS bar to the job it is about to
+  #dispatch. A character scalar on the outside of the list: it adds nothing to
+  #what crosses to the worker, so the "capture only the producer" rule above
+  #still holds.
+  attr(handle, "vftTicket") <- tid
+  handle
 }
 
 #' Where a dispatch came from, for the payload log.
@@ -824,7 +1251,11 @@ vftSessionBusy <- function(session = shiny::getDefaultReactiveDomain()){
 #' @param expr the expression to evaluate remotely, as for future::future()
 #' @param ... accepted for call-site compatibility; `seed = TRUE` is honoured
 #' @param envir environment the expression's globals are collected from
-vftFuture <- function(expr, ..., envir = parent.frame()){
+#' @param progress the vftProgress() handle belonging to this job, if it has one.
+#'   Only used to join the bar to its queue ticket, so the bar can show where in
+#'   the queue the job is; passing nothing costs the job nothing but its own
+#'   display. See the queue section at the top of this file.
+vftFuture <- function(expr, ..., envir = parent.frame(), progress = NULL){
   ex   <- substitute(expr)
   args <- list(...)
   #`envir` MUST be forced here. As a lazy default it would first evaluate at the
@@ -837,6 +1268,14 @@ vftFuture <- function(expr, ..., envir = parent.frame()){
   #settle handlers do not, and getDefaultReactiveDomain() is not reliable by then.
   jobSession <- shiny::getDefaultReactiveDomain()
   .vftJobStart(jobSession)
+
+  #Join the FIFO HERE, before the promise body, so the sequence number is the
+  #order the users clicked in rather than the order the promise bodies happened
+  #to run. A job with no progress bar still takes a ticket: it still occupies the
+  #daemon, so it still delays everybody behind it and must still be counted.
+  qid <- attr(progress, "vftTicket")
+  if(is.null(qid)) qid <- .vftQueueTicket(label = NULL, session = jobSession)
+  .vftQueueEnqueue(qid)
 
   p <- promises::promise(function(resolve, reject){
     tryCatch({
@@ -941,5 +1380,9 @@ vftFuture <- function(expr, ..., envir = parent.frame()){
   #and the "19 | Connection reset" that prompted this guard is a rejection. The
   #returned promise settles exactly as `p` does, so every existing %...>% /
   #%...!% call site is unaffected.
-  promises::finally(p, function() .vftJobEnd(jobSession))
+  #The ticket is released HERE and nowhere else. Several call sites close their
+  #progress bar inside the worker or in a then() that runs before the promise has
+  #settled, so the bar's lifetime is shorter than the job's - and it is the job
+  #that holds the daemon and the queue position.
+  promises::finally(p, function(){ .vftQueueDone(qid); .vftJobEnd(jobSession) })
 }

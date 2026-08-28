@@ -14,6 +14,25 @@ app_ui <- function(){
   #resource path in .onLoad (R/zzz.R).
   shiny::tags$script(src = "www/vft-shim.js"),
 
+  #A queued progress bar goes red and shows the RUNNING job's percentage instead
+  #of its own, so the user can see they are waiting and roughly for how long. The
+  #class is toggled on one bar at a time rather than restyled globally, because a
+  #session can have a red queued bar and a normal running bar on screen together.
+  #`.shiny-progress-notification` is the notification style shiny renders by
+  #default; the second selector covers style = "old", which uses `.bar`.
+  #See .vftQueueWatch() in R/async_helpers.R for what sends the message.
+  shiny::tags$style(shiny::HTML("
+    .shiny-progress-notification.vft-queued .progress-bar,
+    .shiny-progress.vft-queued .bar { background-color:#c0392b; }
+  ")),
+  shiny::tags$script(shiny::HTML("
+    Shiny.addCustomMessageHandler('vft-progress-class', function(m){
+      var el = document.getElementById('shiny-progress-' + m.id)
+            || document.getElementById(m.id);
+      if(el) el.classList[m.add ? 'add' : 'remove'](m.cls);
+    });
+  ")),
+
   shinyjs::hidden( shiny::downloadButton("downloadSave") ),
   # shinyjs::hidden( shiny::downloadButton("downloadSaveRaster") ),
 
