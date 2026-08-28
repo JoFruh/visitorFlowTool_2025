@@ -66,6 +66,33 @@ VFT_STEPS <- list(
                                "finalPolygons", "DULN", "shape"))
 )
 
+#' How the nav bar groups its buttons, left to right.
+#'
+#' Purely cosmetic - a thick white separator (see vftStepNav() in R/app_ui.R)
+#' goes between these groups and nowhere else. Steps 3-5 sit together because
+#' they all work the same perimeter once it exists.
+VFT_NAV_GROUPS <- list("step1", "step2", c("step3", "step4", "step5"), "newVersions")
+
+#' Which hidden per-module input each step's banner controls actually are.
+#'
+#' The nav bar's language select / help / info controls are unnamespaced and
+#' rendered once, at app level - see vftStepNav(). Each step's own server still
+#' listens for its OWN namespaced languageSelect_N / helpButtonN / infoButtonN,
+#' completely unchanged; this map is what lets vftNavBannerProxyServer() (in
+#' R/navigation.R) find the right hidden proxy to drive for whichever step is
+#' current. The suffixes themselves are not a pattern (newVersions is
+#' `languageSelect_7` but `helpButton6` / `infoButton6`) because they were never
+#' meant to be read as one - they are just what each step module happened to be
+#' called historically.
+VFT_BANNER_PROXY <- list(
+  step1       = list(lang = "languageSelect_1", help = "helpButton1", info = "infoButton1"),
+  step2       = list(lang = "languageSelect_2", help = "helpButton2", info = "infoButton2"),
+  step3       = list(lang = "languageSelect_3", help = "helpButton3", info = "infoButton3"),
+  step4       = list(lang = "languageSelect_4", help = "helpButton4", info = "infoButton4"),
+  step5       = list(lang = "languageSelect_5", help = "helpButton5", info = "infoButton5"),
+  newVersions = list(lang = "languageSelect_7", help = "helpButton6", info = "infoButton6")
+)
+
 #' Which step produces each key.
 #'
 #' Only used to write the nav bar tooltips ("... benoetigt: 3 Interessengebiete"),

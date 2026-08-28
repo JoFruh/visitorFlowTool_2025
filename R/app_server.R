@@ -35,6 +35,12 @@ app_server <- function(input, output, session){
   #(which r$ keys each step needs) is in R/steps.R.
   vftNavBarServer(r, input, session)
 
+  #the single visible language-select/help/info controls now live in the nav
+  #bar itself (it doubles as the page banner - see vftStepNav()); this is what
+  #forwards a click or a selection there to whichever step's own, still
+  #unchanged, hidden proxy input belongs to r$navStep. See R/navigation.R.
+  vftNavBannerProxyServer(r, input, session)
+
   #the lazy data layer: one observe that derives whatever a step is about to
   #need, and completes a navigation that was waiting for it. Nothing is computed
   #because of where the user has been, only because something is about to read

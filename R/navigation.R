@@ -52,6 +52,53 @@ vftNavInit <- function(session){
   invisible(NULL)
 }
 
+#' Forward the single app-level banner controls to whichever step is current.
+#'
+#' The banner used to be six copies, one per step, each wired to that step's
+#' own languageSelect_N / helpButtonN / infoButtonN and the (large, per-step)
+#' behaviour hanging off them - zoom warnings, HTML re-rendered in the chosen
+#' language, and so on. Rewriting all of that into one shared implementation
+#' was judged too large and risky to bundle with hoisting the banner to app
+#' level (decided 2026-08-27), so instead every step keeps its own input,
+#' just hidden - see the six steps' *_ui.R - and this is what drives whichever
+#' one belongs to `r$navStep`, as if the user had clicked it there directly.
+#' Nothing about the six steps' own server code had to change for this.
+#'
+#' Fully-qualified ids (`shiny::NS(step, ...)`), not module-relative ones:
+#' this observer runs at app level, outside every module namespace, the same
+#' way app_server() already talks to `step2-banner` etc. directly.
+#'
+#' `current()` falls back to step1 before any navigation has happened (or for
+#' an unrecognised step, which should not occur) rather than doing nothing -
+#' step1 is always live from session start, so the language selector and
+#' help/info buttons work immediately.
+vftNavBannerProxyServer <- function(r, input, session = shiny::getDefaultReactiveDomain()){
+  if(!vftNavEnabled()) return(invisible(NULL))
+
+  current <- function(){
+    step <- shiny::isolate(r$navStep)
+    if(is.null(step) || is.null(VFT_BANNER_PROXY[[step]])) "step1" else step
+  }
+
+  shiny::observeEvent(input$languageSelect, {
+    step <- current()
+    shiny::updateSelectInput(session, inputId = shiny::NS(step, VFT_BANNER_PROXY[[step]]$lang),
+                             selected = input$languageSelect)
+  }, ignoreInit = TRUE)
+
+  shiny::observeEvent(input$helpButton, {
+    step <- current()
+    shinyjs::click(id = shiny::NS(step, VFT_BANNER_PROXY[[step]]$help))
+  }, ignoreInit = TRUE)
+
+  shiny::observeEvent(input$infoButton, {
+    step <- current()
+    shinyjs::click(id = shiny::NS(step, VFT_BANNER_PROXY[[step]]$info))
+  }, ignoreInit = TRUE)
+
+  invisible(NULL)
+}
+
 #' The visit counter for one step, as a reactive read.
 #'
 #' Meant to be the expression of the `observeEvent()` that builds that step:
@@ -367,6 +414,12 @@ vftNavBarServer <- function(r, input, session = shiny::getDefaultReactiveDomain(
       if(!identical(ok, sent[[s]])){
         shinyjs::toggleState(id = vftNavInputId(s), condition = ok)
         sent[[s]] <<- ok
+        #the click-time "NAV BLOCKED (missing: ...)" message only ever fires
+        #for a button that WAS enabled, so it says nothing about why one stays
+        #disabled. This is the same information at the other end of that gap.
+        if(!ok && !busy)
+          vftDbg(paste0("NAV GREY -> ", s, " (missing: ",
+                        paste(vftStepMissing(r, s), collapse = ", "), ")"))
       }
     }
 

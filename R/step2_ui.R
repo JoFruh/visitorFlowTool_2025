@@ -4,41 +4,19 @@ step2_ui <- function(id, i18n){
     #activate translation for this ui
     shiny.i18n::usei18n(i18n),
 
-    shiny::fluidRow( style = "display: flex; align-items:center;background-color:#006268; height: 100px; color: #ffffff; ",
-                     shinyjs::useShinyjs(),
-                     shiny::column(4, align = "left",  style = "font-family: 'franklin gothic'",
-                                   shiny::HTML("<title>Visitor Flow Tool</title>"),
-                                   shiny::div(style = "margin-top: 2px"),
-                                   shiny::selectInput(inputId = shiny::NS(id, "languageSelect_2"), label = NULL, choices = c("Deutsch" = "de", "Français" = "fr", "English" = "en"),
-                                                      selected = i18n$get_translation_language(), width = 100 ),
-                                   shiny::div(style = "margin-top:-25px"),
-                                   shiny::h2(i18n$t("Besucherlenkungs-Tool: ") )                     ),
-
-                     shiny::column(4,align = "center",
-                                   # shiny::h1("Schritt 1")
-                                   vftBannerImg(id, "www/step2_wsl.png")
-
-
-                     ),
-                     shiny::column(4, align = "right",
-                                   shiny::column(10, align = "right",
-                                                 div(
-                                                   shiny::HTML("
-                                          <img src ='www/BiodivCenterLogo_w.png' style = 'align: right; width: 200px; height:75%;object-fit:contain;'>
-                                          ")
-                                                 )),
-                                   shiny::column(2, align = "right", style = "margin-top: 10px",
-                                                 shiny::actionButton(inputId = shiny::NS(id, "helpButton2"), label = "", style = "width: 30px; height: 30px;
-background: url('helpIcon.png');  background-size: cover; background-position: center; border:none"),
-                                                 shiny::div(style = "margin-top:5px"),
-                                                 shiny::actionButton(inputId = NS(id, "infoButton2"), label = "", style = "width: 30px; height: 30px;
-background: url('infoIcon.png');  background-size: cover; background-position: center; border: none")
-                                   )
-                     )
+    shinyjs::useShinyjs(),
+    #the page banner (language select, title, logo, help/info) now lives once
+    #in the nav bar - see vftStepNav() in R/app_ui.R. These three inputs stay,
+    #just hidden: this step's server still listens for its own
+    #languageSelect_2 / helpButton2 / infoButton2 unchanged, and
+    #vftNavBannerProxyServer() drives them from the nav bar's single visible
+    #control while this step is current.
+    shinyjs::hidden(
+      shiny::selectInput(inputId = shiny::NS(id, "languageSelect_2"), label = NULL, choices = c("Deutsch" = "de", "Français" = "fr", "English" = "en"),
+                         selected = i18n$get_translation_language(), width = 100 ),
+      shiny::actionButton(inputId = shiny::NS(id, "helpButton2"), label = ""),
+      shiny::actionButton(inputId = shiny::NS(id, "infoButton2"), label = "")
     ),
-    shiny::fluidRow(column(12, align = "left", style = "display:inline-block;height:1px;color:#006268; font-family: 'franklin gothic';margin-top:-10px;margin-left:-13px ",
-                           shiny::h5(i18n$t("app designer/contact: johan.frueh@wsl.ch"), href = "mailto:'johan.frueh@wsl.ch'")
-    )),
     shiny::fluidRow(
       shiny::column(12, align = "center",
       shiny::h3(shiny::strong(i18n$t("Bestimmen die Sensitivit\u00E4tsmatrix")))
