@@ -568,55 +568,97 @@ step2_server <- function(id, fshape, i18n,
 
         #vftProgress, not ipc::AsyncProgress: 78 MB of session state was crossing
         #into the worker from this site. See R/async_helpers.R.
+        #10, not the 30 this used to promise: after the re-encode below the scan
+        #is 0.1-0.2s for a typical perimeter and ~4s for one larger than the tool
+        #is meant for. 30 now overstates the wait by two orders of magnitude for
+        #most users, which reads as the app being slow rather than reassuring.
         progress <- vftProgress(message = i18n()$t(":aufbereitung:"),
-                                detail = paste0(i18n()$t("Dies sollte weniger als "), 30, i18n()$t(" Sekunden dauern")),
+                                detail = paste0(i18n()$t("Dies sollte weniger als "), 10, i18n()$t(" Sekunden dauern")),
                                 queue = ipc::shinyQueue(),
                                 millis = 1000)
 
       vftFuture({
 
-        # if(is.null(df_spInfo_old)){
+        # ── Decompression is the whole cost of this job ─────────────────────────────
+        #The scan is one big read of one COG: 667 bands of 3999x1756, DEFLATE.
+        #Everything after the read - minmax, global(), the subsets - measured at
+        #under 0.5s even for a Swiss-canton-sized perimeter, while the read alone
+        #was 1.2-5.8s. So the only two levers that matter are how many bytes GDAL
+        #has to inflate and how fast it inflates them.
+        #
+        #This is the second lever: DEFLATE is single-threaded per block by
+        #default, and with 667 bands there are always plenty of blocks to spread
+        #over cores. Worth ~35% (30 km box: 2.60s -> 1.73s). It is a per-process
+        #GDAL setting, so it is set here, inside the worker, rather than in
+        #global.R - the mirai daemons do not source global.R.
+        terra::setGDALconfig("GDAL_NUM_THREADS", "ALL_CPUS")
 
-        # ── Load COG and crop once ──────────────────────────────────────────────────
+        # ── Load the stack and crop once ────────────────────────────────────────────
         #200species
         # sdmLayer <- terra::rast(vftData("maps/species_new/SDM/allSDMs_binary_COG.tif"))
         #600+ species (SDMaps_CH)
-        sdmLayer <- terra::rast(vftData("maps/species_new/SDM/SDMapsCH_100m_binary_4326_COG.tif"))
+        #
+        #This is the first lever, and it is the big one - see
+        #data-raw/reencode_SDM_stack.R, which builds this file from the Float32
+        #COG. Same values, same species names, same NoData footprint; only the
+        #encoding differs:
+        #
+        #  - Byte instead of Float32. The data is 0/1; storing it in 4 bytes made
+        #    GDAL inflate 4x more than it had to.
+        #  - 128x128 blocks instead of 512x512. A block is the unit of read, so a
+        #    2 km perimeter (15x15 pixels) was paying to inflate 512x512 cells in
+        #    each of 667 bands to look at 15x15 of them. This is why the old
+        #    timings barely fell as the area shrank.
+        #
+        #Measured on the same boxes, both files with ALL_CPUS. The kept-species
+        #sets come out identical, so this is pure speed, not an approximation:
+        #
+        #    box     old (F32/512)   new (Byte/128)
+        #     2 km        1.14s           0.06s      19x
+        #    10 km        1.17s           0.11s      11x
+        #    30 km        2.01s           0.70s      2.9x
+        #    60 km        4.84s           3.05s      1.6x
+        #
+        #The gain shrinks with area because a big perimeter really does have to
+        #read most of the file; the small perimeters most users draw were paying
+        #almost entirely for blocks they never looked at.
+        sdmLayer <- terra::rast(vftData("maps/species_new/SDM/SDMapsCH_100m_binary_4326_Byte128.tif"))
         # sdmLayer <- sdmLayer[[-116]]                               # remove duplicate
         sdmLayer <- terra::crop(sdmLayer, terra::vect(shp_WGS84), mask = TRUE)
 
-        progress$set(value = 1/4)
+        progress$set(value = 1/2)
 
-        # ── Drop empty layers in one vectorised call ─────────────────────────────────
-        # minmax is already computed over all layers at once — no loop needed
-        non_empty <- terra::minmax(sdmLayer)[2, ] != 0
-        sdmLayer  <- sdmLayer[[non_empty]]
-
-        progress$set(value = 2/4)
-
-        # ── Compute per-layer sums in one vectorised call ────────────────────────────
-        # global() is the idiomatic, fastest way to summarise all layers at once
+        # ── One pass over the cropped data, not two ─────────────────────────────────
+        #There used to be a minmax() pass and a layer subset here before the
+        #global() pass, dropping layers whose max was 0. It was redundant: the
+        #layers are binary and non-negative, so max != 0 and sum > 0 select
+        #exactly the same layers, and the code went on to apply the sum > 0 test
+        #anyway a few lines below. The minmax pass and its subset are gone; the
+        #sum is now the single test.
+        #
+        #na.rm = TRUE is what makes a fully-masked layer sum to NA rather than 0,
+        #so the !is.na() guard is load-bearing: minmax() used to absorb those
+        #layers (NA != 0 is NA, which [[ ]] treats as FALSE), and without it
+        #df_spInfo[NA, ] would splice NA rows into the species table.
         cover_vals <- terra::global(sdmLayer, fun = "sum", na.rm = TRUE)$sum
         names(cover_vals) <- names(sdmLayer)
 
-        progress$set(value = 3/4)
+        keep <- !is.na(cover_vals) & cover_vals > 0
+
+        progress$set(value = 2/2)
 
         # ── Build df_spInfo without a loop ───────────────────────────────────────────
         df_spInfo <- data.frame(
-          species   = gsub("[.]", " ", names(sdmLayer)),
-          sdm       = names(sdmLayer),
-          sdm_cover = cover_vals,
+          species   = gsub("[.]", " ", names(sdmLayer)[keep]),
+          sdm       = names(sdmLayer)[keep],
+          sdm_cover = cover_vals[keep],
           row.names = NULL,
           stringsAsFactors = FALSE
         )
 
-        # Drop species with zero modelled cover
-        df_spInfo <- df_spInfo[df_spInfo$sdm_cover > 0, ]
+        # Drop the layers that carry no presence in this perimeter
+        sdmLayer <- sdmLayer[[keep]]
 
-        # Drop corresponding layers
-        sdmLayer <- sdmLayer[[df_spInfo$sdm]]
-
-        progress$set(value = 4/4)
         progress$close()
 
         list(df_spInfo, terra::wrap(sdmLayer))
