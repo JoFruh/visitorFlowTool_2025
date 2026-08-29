@@ -1017,7 +1017,13 @@ app_server <- function(input, output, session){
                                             #page can be the first to need the
                                             #prepared network. R/prepare_network.R.
                                             minThresh     = shiny::reactive(r$minThresh),
-                                            selectedVersion = shiny::reactive(r$selectedVersion))
+                                            selectedVersion = shiny::reactive(r$selectedVersion),
+                                            #the nav bar's "Hitzeminderung" button writes r$vftContextPreset
+                                            #("4") immediately before navigating here and clears it right
+                                            #after - see vftNavBarServer() in R/navigation.R. Passed in like
+                                            #every other app-level value this module reads, since its own `r`
+                                            #is module-local (see the note above newVersions_server()).
+                                            contextPreset = shiny::reactive(r$vftContextPreset))
 
     #### this page's results, published into `r` as they are produced ####
     #

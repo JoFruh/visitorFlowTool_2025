@@ -133,14 +133,23 @@ app_ui <- function(){
 #'
 #' The four visual groups - Gebiet | Sensibilität | Interessengebiete,
 #' Wegnetz, Simulation | Neue Versionen - are VFT_NAV_GROUPS below; a thick
-#' white separator goes between groups, never inside one.
+#' white separator goes between groups, never inside one. Hitzeminderung is a
+#' fifth group, added by hand after the loop rather than through
+#' VFT_NAV_GROUPS - it is not a VFT_STEPS entry (see the button's own comment
+#' below), so it has nothing for that registry to hold.
 vftStepNav <- function(){
   if(!vftNavEnabled()) return(NULL)
 
-  buttonFor <- function(step){
+  buttonFor <- function(step, chevron = FALSE){
+    lab <- sub("^\\d+\\s*", "", VFT_STEPS[[step]]$label)
+    #a chevron button paints nothing itself: an empty span underneath it carries
+    #the arrow shape, so that the shape and the outline drawn round it can live
+    #on two different elements. See the .vft-nav-shape CSS below for why they
+    #have to. Absolutely positioned, so it costs the label no layout.
+    label <- if(chevron) shiny::tagList(shiny::tags$span(class = "vft-nav-shape"), lab) else lab
     btn <- shiny::actionButton(
       inputId = vftNavInputId(step),
-      label   = sub("^\\d+\\s*", "", VFT_STEPS[[step]]$label),
+      label   = label,
       class   = "vft-nav-btn",
       title   = vftStepTooltip(step)
     )
@@ -161,8 +170,13 @@ vftStepNav <- function(){
     else shiny::tagAppendAttributes(btn, disabled = NA)
   }
 
+  #groups with more than one button (today just step3/step4/step5) get the
+  #chevron treatment - plugged into each other in registry order, like
+  #inst/app/www/step2_wsl.png. A single-button group stays a plain rectangle.
   groupDivs <- lapply(VFT_NAV_GROUPS, function(g){
-    shiny::tags$div(class = "vft-nav-group", lapply(g, buttonFor))
+    chevron <- length(g) > 1
+    cls <- if(chevron) "vft-nav-group vft-nav-group--chevron" else "vft-nav-group"
+    shiny::tags$div(class = cls, lapply(g, buttonFor, chevron = chevron))
   })
   center <- list()
   for(i in seq_along(groupDivs)){
@@ -170,10 +184,45 @@ vftStepNav <- function(){
     center[[length(center) + 1L]] <- groupDivs[[i]]
   }
 
+  #Hitzeminderung: not one of VFT_STEPS - it is a second door into newVersions
+  #(same tab, same module) that arrives with contextChoice preset to 4 instead
+  #of the default 1. See r$vftContextPreset in newVersions_server.R and the
+  #vftNav_hitze observer in vftNavBarServer(). Its own group, its own
+  #separator, so it reads as a 7th destination rather than a fourth member of
+  #the "Neue Versionen" group.
+  #same prerequisites as "Neue Versionen" - it is the same page - but its own
+  #tooltip text rather than vftStepTooltip("newVersions"), which would say
+  #"Neue Versionen – benötigt: ..." under a button labelled "Hitzeminderung".
+  hitzePrereq <- vftStepPrereqLabels("newVersions")
+  hitzeTooltip <- if(length(hitzePrereq) == 0) "Hitzeminderung" else
+    paste0("Hitzeminderung – benötigt: ", paste(hitzePrereq, collapse = ", "))
+
+  center[[length(center) + 1L]] <- shiny::tags$div(class = "vft-nav-sep")
+  center[[length(center) + 1L]] <- shiny::tags$div(class = "vft-nav-group",
+    shiny::tagAppendAttributes(
+      shiny::actionButton(
+        inputId = "vftNav_hitze",
+        label   = "Hitzeminderung",
+        class   = "vft-nav-btn",
+        title   = hitzeTooltip
+      ),
+      disabled = NA
+    )
+  )
+
   shiny::tagList(
     shiny::tags$style(shiny::HTML("
+      /* 'franklin gothic' is not the name of any installed family - Windows
+         ships 'Franklin Gothic Book' / 'Franklin Gothic Medium' and, on this
+         machine, the face the loose match landed on is the family's ITALIC
+         one. That is where the slanted button labels came from: not a
+         font-style rule anywhere (there is none), but the only face the
+         requested family could resolve to, which no font-style:normal can
+         undo. Naming the real families, with a fallback chain, fixes it. */
       #vftNav { display:flex; align-items:center; background-color:#006268;
-                height:100px; color:#ffffff; font-family:'franklin gothic'; }
+                height:100px; color:#ffffff;
+                font-family:'Franklin Gothic Book','Franklin Gothic Medium',
+                            'Libre Franklin','Arial Narrow',Arial,sans-serif; }
       #vftNav .vft-nav-left  { flex: 0 0 auto; padding-left:15px; }
       #vftNav .vft-nav-left h2 { margin-top:-15px; }
       #vftNav .vft-nav-center { flex: 1 1 auto; display:flex; align-items:center;
@@ -185,17 +234,132 @@ vftStepNav <- function(){
          a thick white bar, never placed between two buttons of the same group */
       #vftNav .vft-nav-sep { width:3px; align-self:center; height:32px;
                              background:#ffffff; margin:0 14px; border-radius:2px; }
-      /* height:50px is 50% of the banner's 100px */
+      /* height:50px is 50% of the banner's 100px. font-style:normal is belt
+         and braces only - the italic labels came from the font-family above,
+         not from any font-style rule. border is 2px transparent rather than
+         `none` so [disabled] toggling a real border color does not change
+         the button's box size. */
       #vftNav .vft-nav-btn { height:50px; background-color:#ffffff; color:#006268;
-                             font-weight:700; border:none; border-radius:2px;
-                             padding:0 14px; }
+                             font-weight:700; font-style:normal;
+                             border:2px solid transparent; border-radius:2px;
+                             padding:0 14px; opacity:0.7; box-sizing:border-box; }
       /* [disabled] is the one true state: set in the markup above, and added and
-         removed by shinyjs::toggleState() at runtime. Do not add a class here. */
-      #vftNav .vft-nav-btn[disabled] { opacity:0.4; cursor:not-allowed; }
+         removed by shinyjs::toggleState() at runtime. Do not add a class here.
+         Reachable steps (opacity 0.7 above) sit half way between this dark-teal
+         unreachable look and the fully solid, fully opaque current step -
+         Lagune's white/40%-opacity disabled state is gone, replaced with the
+         Kontur treatment (outline, transparent fill) in the banner's own dark
+         teal rather than white, so an unreachable step recedes into the banner
+         instead of sitting on it as a faded white block. */
+      #vftNav .vft-nav-btn[disabled] {
+        background-color:transparent; color:#00474b; border-color:#00474b;
+        opacity:1; cursor:not-allowed;
+      }
       /* current step: no underline - a thick white outline standing slightly
          proud of the button, via outline-offset rather than a border (a border
-         would eat into the button's own layout box). */
-      #vftNav .vft-nav-current { outline:3px solid #ffffff; outline-offset:3px; }
+         would eat into the button's own layout box). Full opacity - this is
+         the one state .vft-nav-btn's 0.7 default is measured against. */
+      #vftNav .vft-nav-current { outline:3.5px solid #ffffff; outline-offset:3.5px; opacity:1; }
+
+      /* Interessengebiete | Wegnetz | Simulation, plugged into each other like
+         inst/app/www/step2_wsl.png: each button is an arrow pointing right with
+         a matching notch cut into its left edge, nested into the point of the
+         one before it (negative margin). z-index falls left to right so each
+         earlier tip shows through the next button's notch, the way the
+         reference image's chevrons overlap. Everything else about these
+         buttons - fill, text colour, opacity, the [disabled] look - is the
+         plain .vft-nav-btn rule above; the shape is the only thing this group
+         changes. */
+      /* The button paints nothing: no background, no border, no clip-path. It is
+         just the box and the label. Its .vft-nav-shape span - empty, absolutely
+         positioned over that box, z-index:-1 so it lands above the button's own
+         background and below the label - carries the arrow via clip-path on its
+         ::before. That separation is the whole point; see the outline note below. */
+      #vftNav .vft-nav-group--chevron { gap:0; }
+      #vftNav .vft-nav-group--chevron .vft-nav-btn {
+        background-color:transparent; border:none;
+        margin-left:-15px; padding:0 22px 0 30px;
+        position:relative;
+      }
+      #vftNav .vft-nav-shape { position:absolute; inset:0; z-index:-1;
+                               pointer-events:none; }
+      #vftNav .vft-nav-shape::before {
+        content:''; position:absolute; inset:0; background-color:#ffffff;
+        clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 50%,
+                            calc(100% - 16px) 100%, 0 100%, 16px 50%);
+      }
+      /* first: no notch to plug into anything before it */
+      #vftNav .vft-nav-group--chevron .vft-nav-btn:first-child {
+        margin-left:0; padding-left:18px;
+      }
+      #vftNav .vft-nav-group--chevron .vft-nav-btn:first-child .vft-nav-shape::before {
+        clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 50%,
+                            calc(100% - 16px) 100%, 0 100%);
+      }
+      /* last (Simulation today): keeps the notch that plugs into the button
+         before it, but drops the point - nothing plugs into ITS right side,
+         so it has no reason to angle there. Flat-right padding matches the
+         plain (non-chevron) buttons' 14px rather than the point's 22px. */
+      #vftNav .vft-nav-group--chevron .vft-nav-btn:last-child { padding-right:14px; }
+      #vftNav .vft-nav-group--chevron .vft-nav-btn:last-child .vft-nav-shape::before {
+        clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%, 16px 50%);
+      }
+      #vftNav .vft-nav-group--chevron .vft-nav-btn:nth-child(1) { z-index:3; }
+      #vftNav .vft-nav-group--chevron .vft-nav-btn:nth-child(2) { z-index:2; }
+      #vftNav .vft-nav-group--chevron .vft-nav-btn:nth-child(3) { z-index:1; }
+
+      /* ---- outlining the arrow ------------------------------------------
+         Nothing painted outside a clip survives it. `border` and `outline` are
+         geometry of the element's plain rectangular box, so on a chevron they
+         hold on the flat top and bottom and vanish along the diagonals; and
+         `filter: drop-shadow()` is applied BEFORE clipping, so putting one on
+         the clipped element itself just gets the halo cut back off.
+         The fix is the split above: clip-path sits on .vft-nav-shape::before,
+         the filter sits on .vft-nav-shape, which has no clip of its own. A
+         drop-shadow is computed from its subtree's rendered alpha - which by
+         then is exactly the arrow - so the halo follows every edge, diagonals
+         and point included, and nothing clips it away.
+         One drop-shadow smears the shape in one direction; the chain unions
+         them, so the outline is the shape grown by the Minkowski sum of the
+         offsets. Four offset PAIRS at 45 deg to each other (x, y, and the two
+         diagonals) sum to a near-circular octagon: with the diagonal pair at
+         0.707 of the axis pair, the ring thickness varies under 10% with
+         direction, and total thickness is 2.414x the axis offset. That is
+         where these numbers come from - 1.24/0.88 gives a 3px ring, 0.83/0.59
+         a 2px one. Do not just add more directions: every extra pair grows
+         the ring, which is what made the first attempt at this look swollen.
+         Chaining two such stacks nests two rings, so the current step gets
+         white face -> 3px teal gap -> 3px white ring: the same reading as the
+         plain buttons' `outline:3px #fff; outline-offset:3px`, drawn a way
+         clip-path cannot eat. */
+      #vftNav .vft-nav-group--chevron .vft-nav-btn[disabled] .vft-nav-shape::before {
+        background-color:#006268;
+      }
+      #vftNav .vft-nav-group--chevron .vft-nav-btn[disabled] .vft-nav-shape {
+        filter:
+          drop-shadow(0.83px 0 0 #00474b)      drop-shadow(-0.83px 0 0 #00474b)
+          drop-shadow(0 0.83px 0 #00474b)      drop-shadow(0 -0.83px 0 #00474b)
+          drop-shadow(0.59px 0.59px 0 #00474b) drop-shadow(-0.59px -0.59px 0 #00474b)
+          drop-shadow(0.59px -0.59px 0 #00474b) drop-shadow(-0.59px 0.59px 0 #00474b);
+      }
+      /* the ring stands proud of the button, so it would be overlapped by the
+         neighbour plugged into it - the current step is lifted above both its
+         siblings' z-index instead. .vft-nav-btn is in the selector only to
+         match the nth-child rules' specificity; it comes later, so it wins. */
+      #vftNav .vft-nav-group--chevron .vft-nav-btn.vft-nav-current {
+        outline:none; z-index:5;
+      }
+      #vftNav .vft-nav-group--chevron .vft-nav-current .vft-nav-shape {
+        filter:
+          drop-shadow(1.24px 0 0 #006268)      drop-shadow(-1.24px 0 0 #006268)
+          drop-shadow(0 1.24px 0 #006268)      drop-shadow(0 -1.24px 0 #006268)
+          drop-shadow(0.88px 0.88px 0 #006268) drop-shadow(-0.88px -0.88px 0 #006268)
+          drop-shadow(0.88px -0.88px 0 #006268) drop-shadow(-0.88px 0.88px 0 #006268)
+          drop-shadow(1.24px 0 0 #ffffff)      drop-shadow(-1.24px 0 0 #ffffff)
+          drop-shadow(0 1.24px 0 #ffffff)      drop-shadow(0 -1.24px 0 #ffffff)
+          drop-shadow(0.88px 0.88px 0 #ffffff) drop-shadow(-0.88px -0.88px 0 #ffffff)
+          drop-shadow(0.88px -0.88px 0 #ffffff) drop-shadow(-0.88px 0.88px 0 #ffffff);
+      }
     ")),
     shiny::tags$div(id = "vftNav",
       shiny::tags$div(class = "vft-nav-left",

@@ -61,7 +61,10 @@ newVersions_server <- function(id, networkList, i18n, currentLang, isFirstRun,
                                minThresh = shiny::reactive(NULL),
                                #the scenario card to come back with selected, shared with step 5
                                #through r$selectedVersion
-                               selectedVersion = shiny::reactive(NULL)){
+                               selectedVersion = shiny::reactive(NULL),
+                               #"4" when the nav bar's Hitzeminderung button is what sent the user
+                               #here, NULL otherwise. See the contextChoice_ui render below.
+                               contextPreset = shiny::reactive(NULL)){
 
   #count this instantiation. A module server should be created once per
   #session; this app re-calls it from an observeEvent on a trigger, so any
@@ -78,7 +81,8 @@ newVersions_server <- function(id, networkList, i18n, currentLang, isFirstRun,
               isFirstRun = isFirstRun, SM_pres = SM_pres, SMcolors = SMcolors,
               shp_PA = shp_PA, finalPolygons = finalPolygons,
               versionsUI = versionsUI, DULN = DULN, shape = shape,
-              minThresh = minThresh, selectedVersion = selectedVersion)
+              minThresh = minThresh, selectedVersion = selectedVersion,
+              contextPreset = contextPreset)
 
   # r$mapRefresh <- 0
   shiny::moduleServer(id, function(input, output, session) {
@@ -125,6 +129,20 @@ newVersions_server <- function(id, networkList, i18n, currentLang, isFirstRun,
       #selector both write r$currentLang, so it follows both.
       currentLang <- r$currentLang
       if(is.null(currentLang)) return(NULL)
+
+      #r$vftContextPreset here is this module's OWN `r` (see the note above
+      #newVersions_server()), mirrored from the app-level r$vftContextPreset by
+      #enter() on every visit - that is how the nav bar's "Hitzeminderung"
+      #button reaches this render rather than poking the namespaced input
+      #directly. Taking the dependency here (not isolate()) is what makes a
+      #later click reopen this same control with 4 preselected even though the
+      #singleton module built it once already on an earlier visit. Consumed and
+      #cleared in the same pass, so a plain return to newVersions afterwards
+      #renders the ordinary default again.
+      preset <- r$vftContextPreset
+      selectedChoice <- if(!is.null(preset)) preset else 1
+      if(!is.null(preset)) r$vftContextPreset <- NULL
+
       if(currentLang == "de"){
         shiny::radioButtons(
           inputId = NS(id,"contextChoice"),
@@ -136,7 +154,7 @@ newVersions_server <- function(id, networkList, i18n, currentLang, isFirstRun,
             ,
             "Hitzeminderung" = 4  # new option in dev.
           ),
-          selected = 1
+          selected = selectedChoice
         )
       } else if(currentLang == "fr"){
         shiny::radioButtons(
@@ -149,7 +167,7 @@ newVersions_server <- function(id, networkList, i18n, currentLang, isFirstRun,
             ,
             "Attenuation de chaleur" = 4  # new option
           ),
-          selected = 1
+          selected = selectedChoice
         )
       } else if(currentLang == "en"){
         shiny::radioButtons(
@@ -162,7 +180,7 @@ newVersions_server <- function(id, networkList, i18n, currentLang, isFirstRun,
             ,
             "Attenuation de chaleur" = 4  # new option
           ),
-          selected = 1
+          selected = selectedChoice
         )
       }
     })
@@ -4011,6 +4029,12 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
       #--- 3. banner and language
       if(is.null(currentLang)) currentLang <<- "de"
       r$currentLang <- currentLang
+      #the Hitzeminderung nav button's preset, relayed in through the
+      #contextPreset parameter (app-level r$vftContextPreset, set and cleared
+      #around the navigation call in vftNavBarServer()). Mirrored into this
+      #module's own `r` on every entry, same as currentLang above; the
+      #contextChoice_ui render below is what actually consumes and clears it.
+      r$vftContextPreset <- .rx$contextPreset()
       shiny.i18n::update_lang(currentLang)
       shiny::updateSelectInput(inputId = "languageSelect_7", selected = currentLang)
       #this step never set its banner on entry - the old renderUI only ran from

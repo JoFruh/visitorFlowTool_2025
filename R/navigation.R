@@ -379,11 +379,33 @@ vftNavBarServer <- function(r, input, session = shiny::getDefaultReactiveDomain(
     })
   }
 
+  #Hitzeminderung: a second door into newVersions, not a step of its own - see
+  #the button's own comment in vftStepNav(). Gated behind the same rollout
+  #switch as newVersions itself, since it goes nowhere else. r$vftContextPreset
+  #is read once, by newVersions_server.R's contextChoice_ui render, and cleared
+  #there; check = TRUE so it gets the same busy/reentrant/reachable refusal as
+  #every other click in this bar.
+  if("newVersions" %in% steps){
+    shiny::observeEvent(input$vftNav_hitze, {
+      #set, then immediately cleared once vftGoToStep() returns. That call runs
+      #enter() synchronously when newVersions is already built (the common
+      #case - it is a singleton), so the module's own contextPreset reactive
+      #(app_server.R's newVersions_server() call) has already read "4" by the
+      #time this observer's next line runs. Left set, a later PLAIN return to
+      #newVersions (the "Neue Versionen" button, or a save/restore) would find
+      #it still "4" and preselect Hitzeminderung when nothing asked for that.
+      r$vftContextPreset <- "4"
+      vftGoToStep(r, "newVersions", session, check = TRUE)
+      r$vftContextPreset <- NULL
+    }, ignoreInit = TRUE)
+  }
+
   #last state pushed to the client, so the observe below can send only changes.
   #A list rather than a vector: the entries start NULL, which is not identical()
   #to TRUE or FALSE, so the first run always sends.
-  sent    <- stats::setNames(vector("list", length(steps)), steps)
-  current <- NULL
+  sent      <- stats::setNames(vector("list", length(steps)), steps)
+  sentHitze <- NULL
+  current   <- NULL
 
   shiny::observe({
     #greyed while this session has async work outstanding, so "wait" is something
@@ -420,6 +442,12 @@ vftNavBarServer <- function(r, input, session = shiny::getDefaultReactiveDomain(
         if(!ok && !busy)
           vftDbg(paste0("NAV GREY -> ", s, " (missing: ",
                         paste(vftStepMissing(r, s), collapse = ", "), ")"))
+      }
+      #Hitzeminderung goes to the same tab newVersions does, so it is reachable
+      #exactly when newVersions is - mirror that `ok` rather than recomputing it.
+      if(identical(s, "newVersions") && !identical(ok, sentHitze)){
+        shinyjs::toggleState(id = "vftNav_hitze", condition = ok)
+        sentHitze <<- ok
       }
     }
 
