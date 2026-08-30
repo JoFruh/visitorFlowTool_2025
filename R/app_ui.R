@@ -38,7 +38,11 @@ app_ui <- function(){
 
   #the step nav bar, OUTSIDE the tabsetPanel so it is on screen whichever step
   #is showing. Renders nothing unless VFT_NAV=1. See vftStepNav() below.
-  vftStepNav(),
+  #
+  #Handed the Translator so its labels, tooltips and title can carry all three
+  #languages as data attributes - it is static markup, so it cannot re-render
+  #when the language changes and swaps them on the client instead.
+  vftStepNav(i18n),
 
   shiny::tabsetPanel(id = "tabs", type = "hidden",
 
@@ -137,22 +141,112 @@ app_ui <- function(){
 #' fifth group, added by hand after the loop rather than through
 #' VFT_NAV_GROUPS - it is not a VFT_STEPS entry (see the button's own comment
 #' below), so it has nothing for that registry to hold.
-vftStepNav <- function(){
+#'
+#' ---- fitting the buttons next to everything else ----------------------------
+#'
+#' Seven nav buttons (five steps, "Neue Versionen", "Hitzeminderung") plus the
+#' title, the language selector, the logo and the two icon buttons did not fit
+#' on a 1280- or 1440-wide monitor: the row overflowed and the logo was pushed
+#' off the end. Nothing here is smaller because "smaller looks better" - every
+#' size in the strip is now one of the eleven custom properties at the top of
+#' the CSS below, each a `clamp(floor, ideal-in-vw, ceiling)`, so the whole
+#' banner is ONE scale that tracks the window and "make it fit at 1280" is a
+#' coefficient change in one place rather than an edit at twenty. At 2560 every
+#' clamp is at its maximum and the bar is the size it has always been.
+#'
+#' Structural changes on top of the scale, in order of how much room they buy:
+#' the language selector moved from the left (where it sat stacked above the
+#' title, on a `margin-top:-15px` that existed only to undo the h2's own margin)
+#' into the right-hand cluster with the rest of the chrome; the title is a plain
+#' span with its own font size rather than an `<h2>`; the separators' fixed
+#' 14px-a-side margins became the parent flex gap, so they scale too; and the
+#' logo and the two icon buttons lost their inline pixel sizes.
+#'
+#' ---- and translating them ---------------------------------------------------
+#'
+#' The labels, the tooltips and the title are i18n now. They could NOT be
+#' `i18n$t()` calls in this markup and stay translated, for exactly the reason
+#' the bar is not an output: it is built once per session, so whatever language
+#' it is built in is the language it would keep. So each label carries ALL THREE
+#' translations, as `data-i18n-de` / `-fr` / `-en` on the label span and
+#' `data-tip-*` on the button, and one small script at the bottom of this
+#' function swaps `textContent` and `title` when `languageSelect` changes. It is
+#' entirely client-side: no output, no custom message handler, not one extra
+#' byte over the socket, and the swap is instant.
+#'
+#' The keys are `:nav_<step>:` (plus `:nav_hitze:`, `:nav_needs:`, `:nav_lang:`)
+#' in the translation CSVs; the title reuses the existing
+#' `Besucherlenkungs-Tool: ` row. A key the CSVs do not carry falls back to the
+#' German literal already in VFT_STEPS, so adding a step does not require
+#' touching the CSVs first - it just shows German until it does.
+vftStepNav <- function(i18n = NULL){
   if(!vftNavEnabled()) return(NULL)
 
+  langs <- c("de", "fr", "en")
+
+  #every language of one key, with the German literal standing in wherever the
+  #CSVs have no row (vftTrAll() hands back the key itself in that case).
+  navTr <- function(key, fallback){
+    out <- vftTrAll(i18n, key, langs)
+    out[is.na(out) | out == key] <- fallback
+    out
+  }
+
+  #Two forms of each step's name are needed. The button shows the label with its
+  #leading digit stripped ("1 Gebiet" -> "Gebiet"), which is what the CSV rows
+  #hold; the tooltip wants the digit back, because "benötigt: 2 Sensibilität"
+  #tells the user which button to go and press and "benötigt: Sensibilität"
+  #makes them look for it.
+  shortLab <- lapply(stats::setNames(names(VFT_STEPS), names(VFT_STEPS)),
+                     function(s) navTr(paste0(":nav_", s, ":"),
+                                       sub("^\\d+\\s*", "", VFT_STEPS[[s]]$label)))
+  #setNames, because paste() drops names and every one of these vectors is
+  #indexed by language name from here on.
+  fullLab <- lapply(names(shortLab), function(s){
+    digit <- regmatches(VFT_STEPS[[s]]$label, regexpr("^\\d+", VFT_STEPS[[s]]$label))
+    if(length(digit)) stats::setNames(paste(digit, shortLab[[s]]), langs) else shortLab[[s]]
+  })
+  names(fullLab) <- names(shortLab)
+
+  needsWord <- navTr(":nav_needs:", "benötigt")
+
+  #the translated form of vftStepTooltip(), written once per language. Same
+  #sentence, same en dash, same registry ordering - vftStepPrereqSteps() is the
+  #half of vftStepPrereqLabels() that answers in step names rather than German.
+  tooltipFor <- function(step, label = fullLab[[step]]){
+    prereq <- vftStepPrereqSteps(step)
+    if(length(prereq) == 0) return(label)
+    stats::setNames(vapply(langs, function(l){
+      paste0(label[[l]], " – ", needsWord[[l]], ": ",
+             paste(vapply(prereq, function(s) fullLab[[s]][[l]], character(1)),
+                   collapse = ", "))
+    }, character(1)), langs)
+  }
+
+  #`data-i18n-de` and friends. setNames on a list, because those names carry
+  #dashes and so cannot be written as R argument names.
+  withData <- function(tag, prefix, values){
+    do.call(shiny::tagAppendAttributes,
+            c(list(tag), stats::setNames(as.list(unname(values)),
+                                         paste0(prefix, names(values)))))
+  }
+
   buttonFor <- function(step, chevron = FALSE){
-    lab <- sub("^\\d+\\s*", "", VFT_STEPS[[step]]$label)
+    lab <- withData(shiny::tags$span(class = "vft-nav-lab", shortLab[[step]][["de"]]),
+                    "data-i18n-", shortLab[[step]])
     #a chevron button paints nothing itself: an empty span underneath it carries
     #the arrow shape, so that the shape and the outline drawn round it can live
     #on two different elements. See the .vft-nav-shape CSS below for why they
     #have to. Absolutely positioned, so it costs the label no layout.
     label <- if(chevron) shiny::tagList(shiny::tags$span(class = "vft-nav-shape"), lab) else lab
+    tips <- tooltipFor(step)
     btn <- shiny::actionButton(
       inputId = vftNavInputId(step),
       label   = label,
       class   = "vft-nav-btn",
-      title   = vftStepTooltip(step)
+      title   = tips[["de"]]
     )
+    btn <- withData(btn, "data-tip-", tips)
     #step 1 is the only step whose needs are met at session start; a step this
     #build does not let the bar reach (VFT_NAV=step1,step3) ships disabled and
     #stays that way, since vftNavBarServer() gives it no observer to re-enable it.
@@ -190,28 +284,63 @@ vftStepNav <- function(){
   #vftNav_hitze observer in vftNavBarServer(). Its own group, its own
   #separator, so it reads as a 7th destination rather than a fourth member of
   #the "Neue Versionen" group.
-  #same prerequisites as "Neue Versionen" - it is the same page - but its own
-  #tooltip text rather than vftStepTooltip("newVersions"), which would say
-  #"Neue Versionen – benötigt: ..." under a button labelled "Hitzeminderung".
-  hitzePrereq <- vftStepPrereqLabels("newVersions")
-  hitzeTooltip <- if(length(hitzePrereq) == 0) "Hitzeminderung" else
-    paste0("Hitzeminderung – benötigt: ", paste(hitzePrereq, collapse = ", "))
+  #same prerequisites as "Neue Versionen" - it is the same page - so its tooltip
+  #is built from newVersions' prereqs but under its OWN label: passing
+  #tooltipFor("newVersions") straight through would say "Neue Versionen –
+  #benötigt: ..." under a button labelled "Hitzeminderung".
+  hitzeLab  <- navTr(":nav_hitze:", "Hitzeminderung")
+  hitzeTips <- tooltipFor("newVersions", label = hitzeLab)
 
   center[[length(center) + 1L]] <- shiny::tags$div(class = "vft-nav-sep")
   center[[length(center) + 1L]] <- shiny::tags$div(class = "vft-nav-group",
     shiny::tagAppendAttributes(
-      shiny::actionButton(
-        inputId = "vftNav_hitze",
-        label   = "Hitzeminderung",
-        class   = "vft-nav-btn",
-        title   = hitzeTooltip
-      ),
+      withData(
+        shiny::actionButton(
+          inputId = "vftNav_hitze",
+          label   = withData(shiny::tags$span(class = "vft-nav-lab", hitzeLab[["de"]]),
+                             "data-i18n-", hitzeLab),
+          class   = "vft-nav-btn",
+          title   = hitzeTips[["de"]]
+        ),
+        "data-tip-", hitzeTips),
       disabled = NA
     )
   )
 
+  #the app title. Reuses the translation row the six step banner images already
+  #used; the trailing ": " that row carries belonged to the old banner's layout
+  #and is dropped here.
+  titleTxt <- sub("[[:space:]:]+$", "",
+                  navTr("Besucherlenkungs-Tool: ", "Besucherlenkungs-Tool"))
+  langTip  <- navTr(":nav_lang:", "Sprache")
+
   shiny::tagList(
     shiny::tags$style(shiny::HTML("
+      /* ---- one scale for the whole banner --------------------------------
+         Every size below is one of these, and every one is
+         clamp(floor, ideal, ceiling): the vw term tracks the monitor, the
+         floor keeps a 1280-wide laptop readable, the ceiling stops a 4K panel
+         inflating the strip. At 2560 all eleven sit at their maximum, which is
+         the size this banner has always been.
+
+         vw, not a container query unit: the banner is always exactly the page
+         width so the two agree, and cqw would need `container-type` on
+         #vftNav - size containment on an element the rest of the app's CSS
+         does not expect it on - for no gain. */
+      #vftNav {
+        --nav-h:     clamp(70px,   5.20vw, 100px);
+        --nav-font:  clamp(10.5px, 0.80vw,  15px);
+        --nav-pad:   clamp(6px,    0.62vw,  14px);
+        --nav-btn-h: clamp(34px,   2.55vw,  50px);
+        --nav-notch: clamp(9px,    0.83vw,  16px);
+        --nav-sep:   clamp(4px,    0.72vw,  14px);
+        --nav-gap:   clamp(2px,    0.24vw,   4px);
+        --nav-title: clamp(12.5px, 1.02vw,  22px);
+        --nav-logo:  clamp(88px,   8.60vw, 190px);
+        --nav-icon:  clamp(19px,   1.55vw,  30px);
+        --nav-edge:  clamp(8px,    0.78vw,  15px);
+      }
+
       /* 'franklin gothic' is not the name of any installed family - Windows
          ships 'Franklin Gothic Book' / 'Franklin Gothic Medium' and, on this
          machine, the face the loose match landed on is the family's ITALIC
@@ -220,29 +349,60 @@ vftStepNav <- function(){
          requested family could resolve to, which no font-style:normal can
          undo. Naming the real families, with a fallback chain, fixes it. */
       #vftNav { display:flex; align-items:center; background-color:#006268;
-                height:100px; color:#ffffff;
+                height:var(--nav-h); color:#ffffff;
+                gap:var(--nav-sep); padding:0 var(--nav-edge);
+                box-sizing:border-box;
                 font-family:'Franklin Gothic Book','Franklin Gothic Medium',
                             'Libre Franklin','Arial Narrow',Arial,sans-serif; }
-      #vftNav .vft-nav-left  { flex: 0 0 auto; padding-left:15px; }
-      #vftNav .vft-nav-left h2 { margin-top:-15px; }
-      #vftNav .vft-nav-center { flex: 1 1 auto; display:flex; align-items:center;
-                                justify-content:center; }
-      #vftNav .vft-nav-right { flex: 0 0 auto; padding-right:15px; display:flex;
-                               align-items:center; gap:10px; }
-      #vftNav .vft-nav-group { display:flex; gap:4px; }
-      /* the vertical separator between groups - a bit of space either side, then
-         a thick white bar, never placed between two buttons of the same group */
-      #vftNav .vft-nav-sep { width:3px; align-self:center; height:32px;
-                             background:#ffffff; margin:0 14px; border-radius:2px; }
-      /* height:50px is 50% of the banner's 100px. font-style:normal is belt
-         and braces only - the italic labels came from the font-family above,
-         not from any font-style rule. border is 2px transparent rather than
-         `none` so [disabled] toggling a real border color does not change
-         the button's box size. */
-      #vftNav .vft-nav-btn { height:50px; background-color:#ffffff; color:#006268;
-                             font-weight:700; font-style:normal;
+
+      /* Shrink priority, and it matters: the title is the ONLY zone with a
+         non-zero flex-shrink, so any pressure the clamp scale has not already
+         absorbed lands on it and nowhere else. 'Besucherlenkungs-Tool' breaks
+         at its own hyphen and 'Outil de Gestion de Visiteurs' at its spaces,
+         so what an absurdly narrow window costs is two lines of title - never
+         an ellipsised button label, never a logo pushed off the end.
+         With `flex:1 1 auto` on the centre instead, shrink is distributed in
+         proportion to each zone's base width, so the buttons - much the widest
+         zone - would take about four fifths of it and ellipsise first. */
+      #vftNav .vft-nav-left  { flex:0 1 auto; min-width:0; }
+      #vftNav .vft-nav-title { font-size:var(--nav-title); font-weight:700;
+                               line-height:1.1; margin:0;
+                               overflow-wrap:break-word; }
+      #vftNav .vft-nav-center { flex:1 0 auto; min-width:0; display:flex;
+                                align-items:center; justify-content:center;
+                                gap:var(--nav-sep); }
+      #vftNav .vft-nav-right { flex:0 0 auto; display:flex; align-items:center;
+                               gap:calc(var(--nav-sep) * 0.7); }
+      #vftNav .vft-nav-group { display:flex; gap:var(--nav-gap); min-width:0; }
+      /* the vertical separator between groups - a thick white bar, never placed
+         between two buttons of the same group. Its old 14px-a-side margins are
+         the parent's flex gap now, so they scale with everything else. */
+      #vftNav .vft-nav-sep { width:3px; align-self:center; flex:0 0 auto;
+                             height:calc(var(--nav-btn-h) * 0.64);
+                             background:#ffffff; border-radius:2px; }
+      /* font-style:normal is belt and braces only - the italic labels came from
+         the font-family above, not from any font-style rule. border is 2px
+         transparent rather than `none` so [disabled] toggling a real border
+         colour does not change the button's box size.
+         flex:0 1 auto + min-width:0 is the safety net under the clamp scale: if
+         some future translation is longer than the scale allows for, that one
+         label ellipsises - and its tooltip still names it in full - instead of
+         the row overflowing and taking the logo with it. */
+      #vftNav .vft-nav-btn { height:var(--nav-btn-h); background-color:#ffffff;
+                             color:#006268; font-weight:700; font-style:normal;
+                             font-size:var(--nav-font); line-height:1;
                              border:2px solid transparent; border-radius:2px;
-                             padding:0 14px; opacity:0.7; box-sizing:border-box; }
+                             padding:0 var(--nav-pad); opacity:0.7;
+                             box-sizing:border-box; flex:0 1 auto; min-width:0;
+                             display:flex; align-items:center; justify-content:center; }
+      /* the button is a flex box (above) purely so the ellipsis has something to
+         be measured against: shiny wraps an actionButton's label in its own
+         `.action-label` span, and a block inside an inline span in a non-flex
+         button has no width to overflow. Absolutely-positioned children are out
+         of flow, so .vft-nav-shape is unaffected. */
+      #vftNav .vft-nav-btn .action-label { min-width:0; overflow:hidden; }
+      #vftNav .vft-nav-lab { display:block; white-space:nowrap; overflow:hidden;
+                             text-overflow:ellipsis; }
       /* [disabled] is the one true state: set in the markup above, and added and
          removed by shinyjs::toggleState() at runtime. Do not add a class here.
          Reachable steps (opacity 0.7 above) sit half way between this dark-teal
@@ -258,8 +418,48 @@ vftStepNav <- function(){
       /* current step: no underline - a thick white outline standing slightly
          proud of the button, via outline-offset rather than a border (a border
          would eat into the button's own layout box). Full opacity - this is
-         the one state .vft-nav-btn's 0.7 default is measured against. */
-      #vftNav .vft-nav-current { outline:3.5px solid #ffffff; outline-offset:3.5px; opacity:1; }
+         the one state .vft-nav-btn's 0.7 default is measured against. Ring and
+         offset scale with the button, or at 1280 the offset alone would be a
+         third of the gap between two groups. */
+      #vftNav .vft-nav-current { outline:calc(var(--nav-btn-h) * 0.07) solid #ffffff;
+                                 outline-offset:calc(var(--nav-btn-h) * 0.07);
+                                 opacity:1; }
+
+      /* ---- the right-hand cluster ---------------------------------------
+         The language selector lives here now, not on the left. It used to sit
+         stacked above the title inside .vft-nav-left, which is what the
+         `margin-top:-15px` on that h2 was there to undo; moving it here puts
+         all the chrome in one place and gives the title the whole left zone. */
+      #vftNav .vft-nav-lang { width:calc(var(--nav-logo) * 0.62); min-width:62px; }
+      #vftNav .vft-nav-lang .form-group { margin-bottom:0; }
+      /* `.selectize-input` is what actually renders in the app - shiny turns the
+         <select> into a selectize widget - and the other two cover the plain
+         <select> that is left if selectize does not initialise. */
+      #vftNav .vft-nav-lang .selectize-input,
+      #vftNav .vft-nav-lang select,
+      #vftNav .vft-nav-lang .form-control {
+        min-height:0; height:calc(var(--nav-btn-h) * 0.62);
+        line-height:calc(var(--nav-btn-h) * 0.62);
+        padding:0 20px 0 8px; font-size:var(--nav-font);
+        border-radius:2px; border:none;
+      }
+      #vftNav .vft-nav-lang .selectize-input:after { margin-top:-2px; }
+      #vftNav .vft-nav-logo { width:var(--nav-logo); height:70%;
+                              object-fit:contain; flex:0 0 auto; }
+      /* the two icon buttons had their 30px squares written inline. They scale
+         with the bar now, and stay STACKED because vertical space is what this
+         banner has spare and horizontal space is exactly what it does not. */
+      #vftNav .vft-nav-icons { display:flex; flex-direction:column;
+                               gap:calc(var(--nav-icon) * 0.17); }
+      /* :hover/:focus repeated because bootstrap's own .btn-default:hover sets a
+         grey background, which would show as a box round the icon. */
+      #vftNav .vft-nav-icon,
+      #vftNav .vft-nav-icon:hover,
+      #vftNav .vft-nav-icon:focus,
+      #vftNav .vft-nav-icon:active { width:var(--nav-icon); height:var(--nav-icon);
+                              padding:0; border:none; background-color:transparent;
+                              box-shadow:none;
+                              background-size:cover; background-position:center; }
 
       /* Interessengebiete | Wegnetz | Simulation, plugged into each other like
          inst/app/www/step2_wsl.png: each button is an arrow pointing right with
@@ -269,7 +469,8 @@ vftStepNav <- function(){
          reference image's chevrons overlap. Everything else about these
          buttons - fill, text colour, opacity, the [disabled] look - is the
          plain .vft-nav-btn rule above; the shape is the only thing this group
-         changes. */
+         changes. Every padding and the overlap derive from --nav-notch, so the
+         whole chevron geometry scales as one piece with the rest of the bar. */
       /* The button paints nothing: no background, no border, no clip-path. It is
          just the box and the label. Its .vft-nav-shape span - empty, absolutely
          positioned over that box, z-index:-1 so it lands above the button's own
@@ -278,31 +479,35 @@ vftStepNav <- function(){
       #vftNav .vft-nav-group--chevron { gap:0; }
       #vftNav .vft-nav-group--chevron .vft-nav-btn {
         background-color:transparent; border:none;
-        margin-left:-15px; padding:0 22px 0 30px;
+        margin-left:calc(var(--nav-notch) * -1 + 1px);
+        padding:0 calc(var(--nav-notch) + var(--nav-pad) * 0.45)
+                0 calc(var(--nav-notch) + var(--nav-pad));
         position:relative;
       }
       #vftNav .vft-nav-shape { position:absolute; inset:0; z-index:-1;
                                pointer-events:none; }
       #vftNav .vft-nav-shape::before {
         content:''; position:absolute; inset:0; background-color:#ffffff;
-        clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 50%,
-                            calc(100% - 16px) 100%, 0 100%, 16px 50%);
+        clip-path: polygon(0 0, calc(100% - var(--nav-notch)) 0, 100% 50%,
+                            calc(100% - var(--nav-notch)) 100%, 0 100%,
+                            var(--nav-notch) 50%);
       }
       /* first: no notch to plug into anything before it */
       #vftNav .vft-nav-group--chevron .vft-nav-btn:first-child {
-        margin-left:0; padding-left:18px;
+        margin-left:0;
+        padding-left:calc(var(--nav-notch) * 0.2 + var(--nav-pad));
       }
       #vftNav .vft-nav-group--chevron .vft-nav-btn:first-child .vft-nav-shape::before {
-        clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 50%,
-                            calc(100% - 16px) 100%, 0 100%);
+        clip-path: polygon(0 0, calc(100% - var(--nav-notch)) 0, 100% 50%,
+                            calc(100% - var(--nav-notch)) 100%, 0 100%);
       }
       /* last (Simulation today): keeps the notch that plugs into the button
          before it, but drops the point - nothing plugs into ITS right side,
          so it has no reason to angle there. Flat-right padding matches the
-         plain (non-chevron) buttons' 14px rather than the point's 22px. */
-      #vftNav .vft-nav-group--chevron .vft-nav-btn:last-child { padding-right:14px; }
+         plain (non-chevron) buttons' --nav-pad rather than the point's. */
+      #vftNav .vft-nav-group--chevron .vft-nav-btn:last-child { padding-right:var(--nav-pad); }
       #vftNav .vft-nav-group--chevron .vft-nav-btn:last-child .vft-nav-shape::before {
-        clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%, 16px 50%);
+        clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%, var(--nav-notch) 50%);
       }
       #vftNav .vft-nav-group--chevron .vft-nav-btn:nth-child(1) { z-index:3; }
       #vftNav .vft-nav-group--chevron .vft-nav-btn:nth-child(2) { z-index:2; }
@@ -330,8 +535,10 @@ vftStepNav <- function(){
          the ring, which is what made the first attempt at this look swollen.
          Chaining two such stacks nests two rings, so the current step gets
          white face -> 3px teal gap -> 3px white ring: the same reading as the
-         plain buttons' `outline:3px #fff; outline-offset:3px`, drawn a way
-         clip-path cannot eat. */
+         plain buttons' outline + outline-offset, drawn a way clip-path cannot
+         eat. These stay in fixed px while everything else scales: 2px is the
+         thinnest a drop-shadow union reads cleanly at, so shrinking the ring
+         with the bar would simply make it vanish at 1280. */
       #vftNav .vft-nav-group--chevron .vft-nav-btn[disabled] .vft-nav-shape::before {
         background-color:#006268;
       }
@@ -360,31 +567,107 @@ vftStepNav <- function(){
           drop-shadow(0.88px 0.88px 0 #ffffff) drop-shadow(-0.88px -0.88px 0 #ffffff)
           drop-shadow(0.88px -0.88px 0 #ffffff) drop-shadow(-0.88px 0.88px 0 #ffffff);
       }
+      /* `current` can land on a button that is MOMENTARILY [disabled] too - the
+         nav bar's own observe() greys a step while the session is busy, and
+         landing on the next step (e.g. step 4's confirm handing off to step 5)
+         can do that in the very same tick the step becomes current, while an
+         earlier step's provider is still resolving. Without this, the
+         `[disabled] .vft-nav-shape` rule above and this current-ring rule tie in
+         specificity (chevron + btn + one attr/class each) and the disabled,
+         dark-teal ring silently wins - the step LOOKS unreached even though
+         r$navStep says otherwise. These two rules add .vft-nav-current on top of
+         [disabled]'s own selector so 'you are here' always outranks 'not
+         reachable yet'. */
+      #vftNav .vft-nav-group--chevron .vft-nav-btn[disabled].vft-nav-current .vft-nav-shape::before {
+        background-color:#ffffff;
+      }
+      #vftNav .vft-nav-group--chevron .vft-nav-btn[disabled].vft-nav-current .vft-nav-shape {
+        filter:
+          drop-shadow(1.24px 0 0 #006268)      drop-shadow(-1.24px 0 0 #006268)
+          drop-shadow(0 1.24px 0 #006268)      drop-shadow(0 -1.24px 0 #006268)
+          drop-shadow(0.88px 0.88px 0 #006268) drop-shadow(-0.88px -0.88px 0 #006268)
+          drop-shadow(0.88px -0.88px 0 #006268) drop-shadow(-0.88px 0.88px 0 #006268)
+          drop-shadow(1.24px 0 0 #ffffff)      drop-shadow(-1.24px 0 0 #ffffff)
+          drop-shadow(0 1.24px 0 #ffffff)      drop-shadow(0 -1.24px 0 #ffffff)
+          drop-shadow(0.88px 0.88px 0 #ffffff) drop-shadow(-0.88px -0.88px 0 #ffffff)
+          drop-shadow(0.88px -0.88px 0 #ffffff) drop-shadow(-0.88px 0.88px 0 #ffffff);
+      }
+
+      /* ---- below every desktop monitor ----------------------------------
+         Not a design target: 1152 is under the narrowest desktop panel in use,
+         and the clamp scale above is sized to fit German, French AND English
+         at 1280. This is the safety net for a half-width window or an old 1024
+         screen - the buttons take a row of their own rather than ellipsising,
+         and the strip grows downwards instead of the logo being pushed off. */
+      @media (max-width: 1152px){
+        #vftNav { flex-wrap:wrap; height:auto;
+                  padding-top:8px; padding-bottom:8px; row-gap:8px; }
+        #vftNav .vft-nav-center { order:3; flex:1 0 100%; justify-content:flex-start; }
+        #vftNav .vft-nav-left   { flex:1 1 auto; }
+      }
+
+      .vft-nav-contact { color:#006268; margin:4px 0 0 15px; font-size:12px;
+                         font-family:'Franklin Gothic Book','Libre Franklin',
+                                     Arial,sans-serif; }
     ")),
+    #kept from the old markup: it is what names the browser tab. Outside the
+    #flex row, so it cannot become a flex item of it.
+    shiny::HTML("<title>Visitor Flow Tool</title>"),
     shiny::tags$div(id = "vftNav",
       shiny::tags$div(class = "vft-nav-left",
-        shiny::HTML("<title>Visitor Flow Tool</title>"),
-        shiny::selectInput(inputId = "languageSelect", label = NULL,
-                           choices = c("Deutsch" = "de", "Français" = "fr", "English" = "en"),
-                           selected = "de", width = 100),
-        shiny::h2("Besucherlenkungs-Tool: ")
+        withData(shiny::tags$div(class = "vft-nav-title", titleTxt[["de"]]),
+                 "data-i18n-", titleTxt)
       ),
       shiny::tags$div(class = "vft-nav-center", center),
       shiny::tags$div(class = "vft-nav-right",
-        shiny::HTML("
-          <img src ='www/BiodivCenterLogo_w.png' style = 'width:200px; height:75%; object-fit:contain;'>
-        "),
-        shiny::tags$div(
-          shiny::actionButton(inputId = "helpButton", label = "", style = "width: 30px; height: 30px;
-background: url('helpIcon.png');  background-size: cover; background-position: center; border:none"),
-          shiny::div(style = "margin-top:5px"),
-          shiny::actionButton(inputId = "infoButton", label = "", style = "width: 30px; height: 30px;
-background: url('infoIcon.png');  background-size: cover; background-position: center; border: none")
+        withData(
+          shiny::tags$div(class = "vft-nav-lang", title = langTip[["de"]],
+            shiny::selectInput(inputId = "languageSelect", label = NULL,
+                               choices = c("Deutsch" = "de", "Français" = "fr",
+                                           "English" = "en"),
+                               selected = "de", width = "100%")
+          ),
+          "data-tip-", langTip),
+        shiny::tags$img(class = "vft-nav-logo", src = "www/BiodivCenterLogo_w.png"),
+        shiny::tags$div(class = "vft-nav-icons",
+          shiny::actionButton(inputId = "helpButton", label = "",
+                              class = "vft-nav-icon",
+                              style = "background-image:url('helpIcon.png');"),
+          shiny::actionButton(inputId = "infoButton", label = "",
+                              class = "vft-nav-icon",
+                              style = "background-image:url('infoIcon.png');")
         )
       )
     ),
-    shiny::tags$div(style = "display:inline-block;height:1px;color:#006268; font-family: 'franklin gothic';margin-top:4px;margin-left:15px",
-      shiny::h5("app designer/kontakt: johan.frueh@wsl.ch")
-    )
+    #### swapping the language, entirely on the client ####
+    #
+    #Every label and tooltip in the bar carries all three languages as data
+    #attributes (see the note above this function). This walks them when
+    #`languageSelect` changes and writes textContent / title. `shiny:inputchanged`
+    #covers both a click on the selector and an updateSelectInput() from the
+    #server, and it is the only listener: no output, no custom message handler,
+    #nothing over the socket for a language change that the app was not already
+    #sending anyway.
+    shiny::tags$script(shiny::HTML("
+      (function(){
+        function vftNavLang(lang){
+          var nav = document.getElementById('vftNav');
+          if(!nav || !lang) return;
+          nav.querySelectorAll('[data-i18n-' + lang + ']').forEach(function(el){
+            el.textContent = el.getAttribute('data-i18n-' + lang);
+          });
+          nav.querySelectorAll('[data-tip-' + lang + ']').forEach(function(el){
+            el.setAttribute('title', el.getAttribute('data-tip-' + lang));
+          });
+          nav.setAttribute('lang', lang);
+        }
+        window.vftNavLang = vftNavLang;
+        $(document).on('shiny:inputchanged', function(e){
+          if(e.name === 'languageSelect') vftNavLang(e.value);
+        });
+      })();
+    ")),
+    shiny::tags$div(class = "vft-nav-contact",
+                    "app designer/kontakt: johan.frueh@wsl.ch")
   )
 }

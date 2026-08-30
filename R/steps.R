@@ -61,14 +61,31 @@ VFT_STEPS <- list(
   #a simulation is first launched now (R/prepare_network.R), so both pages
   #genuinely read the threshold. VFT_KEY_READY$minThresh below already answers
   #TRUE on step 3's skip path, so adding it darkens nothing.
+  #`SM_pres`, `SMcolors`, `species` and `minCutThresh` are NOT here, and that is
+  #the whole of "step 2 is optional". Every one of them is step 2's, and step 2
+  #is skippable by construction: step 3 needs only the perimeter and a crop
+  #derived from it, so the bar offers step 3 the moment step 1 is confirmed and
+  #nothing between there and here asks for a sensitivity matrix.
+  #
+  #Listing them made the walk 1 -> 3 -> 4 -> 5 a trap. Step 4's confirm moves
+  #the user on with `check = FALSE`, so they ARRIVED at a step 5 that the nav
+  #bar graded unreachable: highlighted as current, greyed, refusing every click
+  #back into it, with "Neue Versionen" dark beside it for the same two keys.
+  #
+  #They are out because they are not what step 5 IS. A simulation is a function
+  #of the network - see the long note on `pathUsage` in VFT_DERIVED_FROM - and
+  #every consumer of the matrix on this page and the next is a display consumer
+  #behind one checkbox. So the step opens, runs and simulates without them, and
+  #the two controls that need them say so: the checkbox offers to go and make
+  #one (step5_server.R's smAskCreate()), and newVersions already branches on
+  #`is.null(SM_pres)` at each of its three draw sites.
   step5       = list(tab = "tab_step5",       code = 5L,
                      label = "5 Simulation",
-                     needs = c("networkList", "SM_pres", "SMcolors",
-                               "shape", "species", "minCutThresh", "minThresh")),
+                     needs = c("networkList", "shape", "minThresh")),
   newVersions = list(tab = "tab_newVersions", code = NA_integer_,
                      label = "Neue Versionen",
-                     needs = c("networkList", "SM_pres", "SMcolors",
-                               "finalPolygons", "DULN", "shape", "minThresh"))
+                     needs = c("networkList", "finalPolygons", "DULN", "shape",
+                               "minThresh"))
 )
 
 #' How the nav bar groups its buttons, left to right.
@@ -415,14 +432,25 @@ vftRestoreStep <- function(r){
 #' so the tooltip can be baked into the markup at UI build time and the bar stays
 #' free of outputs.
 vftStepPrereqLabels <- function(step){
+  vapply(vftStepPrereqSteps(step), function(s) VFT_STEPS[[s]]$label,
+         character(1), USE.NAMES = FALSE)
+}
+
+#' The same answer as `vftStepPrereqLabels()`, as step NAMES rather than labels.
+#'
+#' Split out because the nav bar's tooltips are translated now (see
+#' `vftStepNav()` in R/app_ui.R): it has to write the same sentence three times,
+#' once per language, so it needs the step names to look each label up in the
+#' language being written. Reading the German labels back out of VFT_STEPS -
+#' which is all `vftStepPrereqLabels()` can give it - would give it only the one.
+vftStepPrereqSteps <- function(step){
   needs   <- VFT_STEPS[[step]]$needs
   if(length(needs) == 0) return(character(0))
   sources <- unique(VFT_KEY_SOURCE[needs])
   sources <- sources[!is.na(sources) & sources != step]
   if(length(sources) == 0) return(character(0))
   #back into registry order, so a tooltip reads "2 ..., 3 ..." not "3 ..., 2 ..."
-  sources <- names(VFT_STEPS)[names(VFT_STEPS) %in% sources]
-  vapply(sources, function(s) VFT_STEPS[[s]]$label, character(1), USE.NAMES = FALSE)
+  names(VFT_STEPS)[names(VFT_STEPS) %in% sources]
 }
 
 #' The tooltip for one nav bar button.

@@ -975,6 +975,25 @@ app_server <- function(input, output, session){
                 bannerId = "step5-banner", session = session)
     }, ignoreInit = TRUE)
 
+    #### "make me a sensitivity matrix" ####
+    #
+    #Step 2 is optional (see VFT_STEPS in R/steps.R), so step 5 can be reached
+    #with no matrix and its overlay checkbox is an offer rather than a toggle.
+    #The module raises the modal and counts the "Ja"; the navigation has to
+    #happen out here, because step5_server has neither the app's `r` nor the
+    #app's session.
+    #
+    #`check = FALSE`, like every other transition app_server makes. `check` also
+    #gates on VFT_NAV (vftNavAllows), and this offer must not go dead in a build
+    #with the bar switched off - a modal whose "Ja" does nothing is worse than
+    #no modal. Nothing is skipped by it either: step 2 needs only `shape`, which
+    #exists by definition if the user is standing on step 5, and the new
+    #"not derivable" refusal in vftGoToStep() applies to unchecked callers too.
+    shiny::observeEvent(step5return$smCreate(), {
+      vftDbg("From step 5, go to step 2 to build a sensitivity matrix")
+      vftGoToStep(r, "step2", session)
+    }, ignoreInit = TRUE)
+
     step5return
     })
 

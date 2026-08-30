@@ -214,19 +214,61 @@ vftGoToStep <- function(r, step, session = shiny::getDefaultReactiveDomain(),
   if(vftStepIsBack(shiny::isolate(r$navStep), step))
     vftDbg(paste0("NAV BACK -> ", step, " (nothing is discarded by looking)"))
 
+  missing   <- vftStepMissing(r, step)
+  derivable <- missing[vapply(missing, function(k) vftKeyDerivable(r, k), logical(1))]
+
+  #### a step that cannot run is not a destination ####
+  #
+  #Keys that are missing and that NO provider can derive used to fall through
+  #here, on the reasoning that a checked caller had already been refused above
+  #and an unchecked one is the app moving itself forward out of a confirm
+  #handler "that has just set them". That second half is not true, and step 4 is
+  #where it breaks: its confirm writes finalPolygons and networkList, while
+  #step 5 also needs the sensitivity matrix, and the bar offers step 3 as soon
+  #as the perimeter exists - DULN_all is derivable from `shape` alone - so step
+  #2 can be walked straight past. Confirming step 4 then LANDED the user on a
+  #step 5 that the bar itself grades unreachable: current, and greyed, and
+  #refusing every click back to it, with "Neue Versionen" dark beside it for the
+  #same missing keys. The step was reached by a door that does not check and
+  #guarded by one that does.
+  #
+  #So the test moves here, where it covers every caller. A checked caller cannot
+  #reach this line with anything blocked - vftStepReachable() refused it above -
+  #which makes this purely the unchecked half, and it costs the user nothing:
+  #the confirm handler's vftCommit() has already written its results, and step 4
+  #re-enables its own two buttons before it hands over, so a refusal leaves them
+  #on a working step with the missing one named rather than on a dead one.
+  #
+  #NOT a modal: this is the app declining to move, not a question. The
+  #notification names the STEP to go and do, not the keys - "benoetigt:
+  #2 Sensibilitaet" is actionable, "missing: SM_pres, SMcolors" is not.
+  blocked <- setdiff(missing, derivable)
+  if(length(blocked)){
+    vftDbg(paste0("NAV BLOCKED -> ", step, " (not derivable: ",
+                  paste(blocked, collapse = ", "), ")"))
+    todo <- unique(VFT_KEY_SOURCE[blocked])
+    todo <- todo[!is.na(todo) & todo != step]
+    #back into registry order, so it reads "2 ..., 3 ..." rather than the order
+    #the keys happen to sit in `needs`. Same shaping as vftStepPrereqLabels().
+    todo <- names(VFT_STEPS)[names(VFT_STEPS) %in% todo]
+    labs <- vapply(todo, function(s) VFT_STEPS[[s]]$label, character(1),
+                   USE.NAMES = FALSE)
+    msg <- if(length(labs))
+      paste0("\"", VFT_STEPS[[step]]$label, "\" benoetigt zuerst: ",
+             paste(labs, collapse = ", "))
+    else
+      paste0("\"", VFT_STEPS[[step]]$label, "\" kann noch nicht geoeffnet werden.")
+    try(shiny::showNotification(msg, type = "warning", duration = 8,
+                                session = session), silent = TRUE)
+    return(invisible(NULL))
+  }
+
   #### hold the move until the step's data exists ####
   #
   #Nothing is awaited: vftEnsure() dispatches and returns, and the provider
   #observe performs this navigation when the last key lands. The user stays where
   #they are meanwhile, with the progress bar the provider opened - entering a tab
   #whose module would be built against NULLs is the failure this replaces.
-  #
-  #Keys that are missing and NOT derivable fall through: a checked caller was
-  #already refused above, and an unchecked one is the app moving itself forward
-  #out of a confirm handler that has just set them - step 3's skip path hands
-  #step 4 a deliberately unset minThresh.
-  missing   <- vftStepMissing(r, step)
-  derivable <- missing[vapply(missing, function(k) vftKeyDerivable(r, k), logical(1))]
   if(length(derivable)){
     vftDbg(paste0("NAV DEFERRED -> ", step, " (deriving: ",
                   paste(derivable, collapse = ", "), ")"))

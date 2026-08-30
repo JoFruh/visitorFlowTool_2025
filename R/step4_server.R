@@ -116,44 +116,45 @@ step4_server <- function(id, network, minThresh, i18n, currentLang,
     plotMap <- function(){
 
 
-      #vftTimeRender, not vftTime inside the block: this render converts the whole
-      #edge network to sf and hands it to tmap/leaflet, and the JSON serialisation
-      #of that happens AFTER the block returns, inside the function renderLeaflet
-      #produces. A label placed inside would miss it. Reported as user-visible
-      #stall right after Confirm in step 4.
+      #vftTimeRender, not vftTime inside the block: the JSON serialisation of
+      #whatever this returns happens AFTER the block returns, inside the
+      #function renderLeaflet produces. A label placed inside would miss it.
+      #Reported as user-visible stall right after Confirm in step 4.
+      #
+      #This used to also draw the whole path network as a grey backdrop (first
+      #via tmap::tmap_leaflet()/tm_lines(), later via vftAddNetworkLines()'s
+      #WebGL layer) - but step 4 only edits AOI polygons and never reads the
+      #network to do it; the backdrop was decorative. The network stays reserved
+      #for step 5 and newVersions, where it's actually the data being shown, and
+      #dropping it here removes both the tmap/SVG cost AND the sf conversion of
+      #the whole edge table that fed it - the map now has nothing to wait on but
+      #the AOI polygons themselves.
       output$finalAOIMap <- vftTimeRender("step4:finalAOIMap", leaflet::renderLeaflet({
 
-
-        #tmap_mode('view') is set once for the process in global.R - see the note
-        #there. It was ~1.2s of main-thread time per render here.
-
-        #plot the initial map
-
-        if(skip == TRUE){ #without starting polygons
-          tmap::tmap_leaflet(
-            tmap::tm_shape(network |> tidygraph::activate(edges) |> dplyr::as_tibble() |> sf::st_as_sf(), options = leaflet::pathOptions(pane = "layer1")) +
-              tmap::tm_lines(col = "grey", lwd = 2, palette = c("grey"), popup.vars = FALSE,interactive = FALSE) 
-              # +
-              # tmap::tmap_options(basemaps = 'OpenStreetMap', basemap.alpha = c(0.5) )
-          ) |>leaflet::addMapPane("layer1", zIndex = 410) |> leaflet::addMapPane("layer2", zIndex = 420) |>
+        map <- leaflet::leaflet() |>
+          leaflet::addMapPane("layer2", zIndex = 420) |>
           leaflet::addProviderTiles(
             leaflet::providers$OpenStreetMap,
             options = leaflet::providerTileOptions(noWrap = TRUE)
           )
 
+        #dropping the network also dropped the view it used to imply: tm_shape(network)
+        #made tmap fit the map to the network's own extent, so removing that layer left
+        #leaflet with nothing to size the view on and it defaulted to the whole world.
+        #Fit to the perimeter instead, padded by 15% a side so the outline (and any AOI
+        #polygons, which live inside it) isn't flush against the edge of the map.
+        if(!is.null(shape)){
+          outline <- sf::st_transform(shape, "epsg:4326")
+          bb <- sf::st_bbox(outline)
+          padX <- max((bb[["xmax"]] - bb[["xmin"]]) * 0.15, 0.01)
+          padY <- max((bb[["ymax"]] - bb[["ymin"]]) * 0.15, 0.01)
+          map <- map |> leaflet::fitBounds(lng1 = bb[["xmin"]] - padX, lat1 = bb[["ymin"]] - padY,
+                                           lng2 = bb[["xmax"]] + padX, lat2 = bb[["ymax"]] + padY)
+        }
 
-        }else if(skip == FALSE){ #with starting polygons
-
-          tmap::tmap_leaflet(
-            tmap::tm_shape(network |> tidygraph::activate(edges) |> dplyr::as_tibble() |> sf::st_as_sf(), options = leaflet::pathOptions(pane = "layer1")) +
-              tmap::tm_lines(col = "grey", lwd = 2, palette = c("grey"), popup.vars = FALSE,interactive = FALSE) 
-              # +
-              # tmap::tmap_options(basemaps = 'OpenStreetMap', basemap.alpha = c(0.5) )
-          ) |> leaflet::addMapPane("layer1", zIndex = 410) |> leaflet::addMapPane("layer2", zIndex = 420) |>
-            leaflet::addProviderTiles(
-              leaflet::providers$OpenStreetMap,
-              options = leaflet::providerTileOptions(noWrap = TRUE)
-            ) |>
+        #plot the initial map
+        if(skip == FALSE){ #with starting polygons
+          map <- map |>
             leaflet::addGeoJSON(
             geojson = geojsonsf::sf_geojson(r$startingPolygons ),
             stroke = TRUE,
@@ -167,7 +168,7 @@ step4_server <- function(id, network, minThresh, i18n, currentLang,
           )
         }
 
-
+        map
 
       }))
 

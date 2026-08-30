@@ -101,6 +101,94 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
 
     r <- shiny::reactiveValues()
 
+    #### the sensitivity matrix is optional ####
+    #
+    # Step 2 produces it, and step 2 can be walked straight past: step 3 needs
+    # only the perimeter and the attractiveness crop derived from it, so the nav
+    # bar lights step 3 up the moment step 1 is confirmed. `SM_pres` and
+    # `SMcolors` used to sit in step 5's `needs` for that reason, which made the
+    # whole step unreachable for anyone who skipped step 2 - and, because step
+    # 4's confirm moves the user on with check = FALSE, it put them ON a step 5
+    # the nav bar then refused to let them back into. See VFT_STEPS in R/steps.R
+    # for the other half of this: the keys are out of `needs` now.
+    #
+    # They can be out of `needs` because every consumer of the matrix in this
+    # module is a DISPLAY consumer behind this one checkbox - the leaflet
+    # overlay, the terra overlay on the export image, its legend, the species
+    # caption beside it - plus the GeoTIFF download. Nothing a simulation reads.
+    # So the step runs perfectly well without it and exactly two controls do not.
+
+    #' Is the overlay switched on AND drawable?
+    #'
+    #' Every site that used to test `input$SMcheckbox` directly tests this. The
+    #' checkbox is briefly TRUE with no matrix - the update() that puts it back
+    #' is a client round trip - and a redraw landing in that window would reach
+    #' terra::plot(NULL) / addRasterImage(NULL). Also tolerates the NULL the
+    #' input reads as before the UI has initialised, which `== 1` did not.
+    smOn <- function(){
+      isTRUE(as.logical(input$SMcheckbox)) && !is.null(SM_pres)
+    }
+
+    #' "Go and make a sensitivity matrix" - a rising count app_server turns into
+    #' the navigation to step 2. See the module's return value.
+    smCreate <- shiny::reactiveVal(0L)
+
+    #' Put the matrix-dependent control into the state the data justifies.
+    #'
+    #' Only ever takes state AWAY. The map-present observer enables every display
+    #' control together and this runs after it; strengthening here instead would
+    #' enable things while the rest of the panel is still dead.
+    #'
+    #' The CHECKBOX is deliberately not touched: it stays live whether or not
+    #' there is a matrix, because that click is the offer to go and make one, and
+    #' declining the offer must leave it exactly as it was - unchecked, and
+    #' clickable again. Only the download is disabled, and only because it has
+    #' nothing to write.
+    applySMState <- function(){
+      if(is.null(SM_pres)) shinyjs::disable(id = "SMbutton")
+    }
+
+    #' Offer to go and build one.
+    smAskCreate <- function(){
+      shiny::showModal(shiny::modalDialog(
+        title = "Sensitivitätsmatrix nicht vorhanden",
+        shiny::tags$p(paste0(
+          "Für dieses Gebiet wurde noch keine Sensitivitätsmatrix erstellt - ",
+          "Schritt 2 (Sensibilität) wurde übersprungen.")),
+        shiny::tags$p("Möchten Sie jetzt eine erstellen?"),
+        footer = shiny::tagList(
+          shiny::actionButton(session$ns("smCreateNo"), "Nein, ohne fortfahren"),
+          shiny::actionButton(session$ns("smCreateYes"), "Ja, zu Schritt 2",
+                              class = "btn-primary")
+        ),
+        easyClose = FALSE
+      ), session = session)
+      invisible(NULL)
+    }
+
+    #One pair of observers for the module, not one pair per modal: a per-modal
+    #pair left armed by a dismissed modal answers the NEXT one too. Same trap,
+    #and the same fix, as vftCommitServer() in R/providers.R - including the
+    #`v == 0` guard, because re-showing the modal re-renders both buttons and a
+    #re-rendered actionButton reports 0, which observeEvent reads as a click.
+    shiny::observeEvent(input$smCreateYes, {
+      v <- input$smCreateYes
+      if(is.null(v) || v == 0) return(invisible(NULL))
+      shiny::removeModal(session = session)
+      vftDbg("STEP5: sensitivity matrix wanted -> step 2")
+      smCreate(shiny::isolate(smCreate()) + 1L)
+    }, ignoreInit = TRUE)
+
+    shiny::observeEvent(input$smCreateNo, {
+      v <- input$smCreateNo
+      if(is.null(v) || v == 0) return(invisible(NULL))
+      shiny::removeModal(session = session)
+      #Nothing else to do, and deliberately so. The checkbox was already put
+      #back to unchecked before the modal went up, which is the whole of "no":
+      #it is not disabled, not remembered, and ticking it again asks again.
+      vftDbg("STEP5: sensitivity matrix declined")
+    }, ignoreInit = TRUE)
+
     #the banner, the language bar and the per-visit state are in enter() now.
 
     #LOAD PROTECTED AREAS DATA ####
@@ -755,7 +843,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
 
 
 
-            if(input$SMcheckbox == 1){
+            if(smOn()){
               map <- map |> leaflet::addRasterImage(raster::raster(SM_pres),
                                            colors = SMcolors,
                                            opacity = 1,
@@ -1184,6 +1272,9 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
           shinyjs::enable(id = "imageButton")
           shinyjs::enable(id = "pathsDwnldButton")
           shinyjs::enable(id = "SMDwnldButton")
+          #...and take back the two the data does not justify. This branch
+          #enables every display control in one go, so it has to run after it.
+          applySMState()
 
           r$agentCheckboxIsDisabled <- FALSE
 
@@ -1576,9 +1667,24 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
 
       #observe SM ####
       obsSM <- shiny::observeEvent(input$SMcheckbox, {
+        #### no matrix: the switch is an OFFER, not a display toggle ####
+        #
+        #Step 2 is skippable - the bar offers step 3 as soon as the perimeter
+        #exists - so step 5 can legitimately be reached with no sensitivity
+        #matrix at all. Rather than lock the user out of the whole step (which
+        #is what listing SM_pres in step 5's `needs` used to do), the step opens
+        #and only this one overlay is unavailable. Ticking it asks whether to go
+        #and make one; the tick itself is undone either way, because there is
+        #nothing to draw.
+        if(isTRUE(as.logical(input$SMcheckbox)) && is.null(SM_pres)){
+          shiny::updateCheckboxInput(inputId = "SMcheckbox", value = FALSE)
+          smAskCreate()
+          return(invisible(NULL))
+        }
+
         vftDbg("OBS SM")
 
-        if(input$SMcheckbox == 1){
+        if(smOn()){
           proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet"
           )|> leaflet::addRasterImage(raster::raster(SM_pres),
                                        colors = SMcolors,
@@ -1673,7 +1779,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
         #determine layout
         #determine how many legends (parking, residential and starting points are combined)
         legendNb <- sum(
-                        input$SMcheckbox,
+                        smOn(),
                         input$startingCheckbox,
                         input$PA_Checkbox,
                         (input$aoi |
@@ -1692,7 +1798,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
         vftDbgCat("SMCheckbox\n")
 
 
-        if(input$SMcheckbox == FALSE){
+        if(!smOn()){
           layout(mat,
                  widths = c(5, 2.5, 0))
         }else{
@@ -1786,7 +1892,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
 
         vftDbgCat("sm\n")
 
-        if(input$SMcheckbox == TRUE){
+        if(smOn()){
           terra::plot(SM_pres,alpha = 0.4, add = TRUE, col = SMcolors, legend = FALSE)
         }
 
@@ -1954,7 +2060,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
           }
 
           #SM
-          if(input$SMcheckbox == 1){
+          if(smOn()){
             plot.new()
             legend("topleft",
                    legend = c("niedrigste", "mittlere", "hohe", "höchste"),
@@ -1974,7 +2080,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
 
 
           # species names (if SM active)####
-          if(input$SMcheckbox == TRUE){
+          if(smOn()){
             plot.new()
 
             #write species names on right hand side
@@ -2085,7 +2191,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
           }
 
           #SM
-          if(input$SMcheckbox == 1){
+          if(smOn()){
             plot.new()
             legend("topleft",
                    legend = c("minimum", "moyen", "haut", "maximum"),
@@ -2105,7 +2211,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
 
 
           # species names (if SM active)####
-          if(input$SMcheckbox == TRUE){
+          if(smOn()){
             plot.new()
 
             #write species names on right hand side
@@ -2215,7 +2321,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
           }
 
           #SM
-          if(input$SMcheckbox == 1){
+          if(smOn()){
             plot.new()
             legend("topleft",
                    legend = c("minimum", "medium", "high", "maximum"),
@@ -2235,7 +2341,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
 
 
           # species names (if SM active)####
-          if(input$SMcheckbox == TRUE){
+          if(smOn()){
             plot.new()
 
             #write species names on right hand side
@@ -2305,6 +2411,13 @@ vftDbgCat("FINISHED TIFF\n")
 
       # observe SM download click ####
       obsDownloadSM <- shiny::observeEvent(input$SMbutton, {
+        #writeRaster(NULL) aborts out of a download handler and the browser gets
+        #an error page. The button is disabled without a matrix; this is the
+        #same refusal on the server side, for the console-fired click.
+        if(is.null(SM_pres)){
+          smAskCreate()
+          return(invisible(NULL))
+        }
         shinyjs::click("downloadSM", asis = FALSE)
 
       }, ignoreInit = TRUE)
@@ -2432,6 +2545,11 @@ vftDbgCat("FINISHED TIFF\n")
       minThresh       <<- .rx$minThresh()
       selectedVersion <<- .rx$selectedVersion()
 
+      #SM_pres has just been refreshed above, so this visit's matrix - or its
+      #absence - is what the download button reflects. The checkbox is not
+      #touched here or anywhere: see applySMState().
+      applySMState()
+
       #--- 2. tear down the previous visit's version cards and their observers.
       #One observer per card, created by updateVersions(), and the cards are
       #insertUI'd - so without this a second visit shows every version twice and
@@ -2527,6 +2645,12 @@ vftDbgCat("FINISHED TIFF\n")
     enter()
 
     return(list(pathUsage = shiny::reactive(r$result$pathUsage), networkList = shiny::reactive(r$networkList), confirm = shiny::reactive({r$confirm}), newVersions = shiny::reactive(input$newVersionsButton), trigger = shiny::reactive(r$triggerStp6), versionsUI = shiny::reactive(r$versionsUI),
+                #a rising count meaning "the user asked to go and make a
+                #sensitivity matrix". app_server turns it into the navigation -
+                #this module has neither the app's `r` nor the app's session, so
+                #it cannot call vftGoToStep() itself. Same shape as
+                #`newVersions`/`trigger` above.
+                smCreate = shiny::reactive(smCreate()),
                 selectedVersion = shiny::reactive(r$selectedVersion),
                 #the parking table, once vftPrepareThen() has produced it. The
                 #scenario holds the authoritative copy; this is what keeps the
