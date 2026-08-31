@@ -152,10 +152,26 @@ vftStepEntered <- function(step, session = shiny::getDefaultReactiveDomain()){
 #'   default) for the app moving itself forward out of a confirm handler, which
 #'   has just set that step's inputs in the same tick and is trusted; step 3's
 #'   skip path in particular hands step 4 a deliberately unset `minThresh`.
+#' @param needs the keys this ONE move requires, overriding the step's registry
+#'   `needs`. Only the Hitzeminderung door passes it (VFT_HITZE_NEEDS in
+#'   R/steps.R): it lands on the newVersions TAB but on a context that reads
+#'   none of the three keys newVersions is registered as needing, and without
+#'   this the move is refused by the "not derivable" branch below - which fires
+#'   for unchecked callers too, so the door could not be opened at all. NULL
+#'   (the default) means the registry answer, which is every other caller.
 vftGoToStep <- function(r, step, session = shiny::getDefaultReactiveDomain(),
-                        check = FALSE){
+                        check = FALSE, needs = NULL){
   if(!step %in% names(VFT_STEPS))
     stop("vftGoToStep(): unknown step '", step, "'")
+
+  #What this move needs, and what of it is not there yet. Everything below asks
+  #these two rather than vftStepMissing()/vftStepReachable() directly, so the
+  #override applies to the checked gate and the unchecked one alike.
+  stepNeeds  <- if(is.null(needs)) VFT_STEPS[[step]]$needs else needs
+  missingNow <- function(){
+    if(!length(stepNeeds)) return(character(0))
+    stepNeeds[!vapply(stepNeeds, function(k) vftKeyReady(r, k), logical(1))]
+  }
 
   if(isTRUE(check)){
     if(!vftNavAllows(step)){
@@ -195,9 +211,10 @@ vftGoToStep <- function(r, step, session = shiny::getDefaultReactiveDomain(),
     #derivation. The deferral is handled below, for every caller rather than only
     #this branch - step 3's confirm button reaches step 4 with check = FALSE and
     #has exactly the same wait to do.
-    if(!vftStepReachable(r, step)){
+    reachNow <- missingNow()
+    if(!all(vapply(reachNow, function(k) vftKeyDerivable(r, k), logical(1)))){
       vftDbg(paste0("NAV BLOCKED -> ", step, " (missing: ",
-                    paste(vftStepMissing(r, step), collapse = ", "), ")"))
+                    paste(reachNow, collapse = ", "), ")"))
       return(invisible(NULL))
     }
   }
@@ -214,7 +231,7 @@ vftGoToStep <- function(r, step, session = shiny::getDefaultReactiveDomain(),
   if(vftStepIsBack(shiny::isolate(r$navStep), step))
     vftDbg(paste0("NAV BACK -> ", step, " (nothing is discarded by looking)"))
 
-  missing   <- vftStepMissing(r, step)
+  missing   <- missingNow()
   derivable <- missing[vapply(missing, function(k) vftKeyDerivable(r, k), logical(1))]
 
   #### a step that cannot run is not a destination ####
@@ -429,16 +446,32 @@ vftNavBarServer <- function(r, input, session = shiny::getDefaultReactiveDomain(
   #every other click in this bar.
   if("newVersions" %in% steps){
     shiny::observeEvent(input$vftNav_hitze, {
-      #set, then immediately cleared once vftGoToStep() returns. That call runs
-      #enter() synchronously when newVersions is already built (the common
-      #case - it is a singleton), so the module's own contextPreset reactive
-      #(app_server.R's newVersions_server() call) has already read "4" by the
-      #time this observer's next line runs. Left set, a later PLAIN return to
-      #newVersions (the "Neue Versionen" button, or a save/restore) would find
-      #it still "4" and preselect Hitzeminderung when nothing asked for that.
+      #Set, then cleared AFTER the flush this navigation runs in - not on the
+      #next line. The clear has to outlive whichever of the two ways the module
+      #reads it:
+      #
+      #  * already built (a singleton, so the common case): vftGoToStep() calls
+      #    enter() synchronously, and the preset has been read by the time this
+      #    observer's next line runs;
+      #  * NOT yet built - the FIRST visit, which is now the ordinary way in,
+      #    because this door no longer waits for steps 3 to 5. There
+      #    vftGoToStep() only bumps the step counter, and the observer that
+      #    constructs the module (and with it enter()) runs later in the flush.
+      #    Clearing on the next line handed that construction a NULL.
+      #
+      #Cleared at all because a later PLAIN return to newVersions - the "Neue
+      #Versionen" button, a save/restore - would otherwise find it still "4" and
+      #preselect Hitzeminderung when nothing asked for that.
       r$vftContextPreset <- "4"
-      vftGoToStep(r, "newVersions", session, check = TRUE)
-      r$vftContextPreset <- NULL
+      #`needs = VFT_HITZE_NEEDS` is what makes this door open on the perimeter
+      #alone. Without it the move is refused for finalPolygons / minThresh -
+      #newVersions' registry `needs`, which context 4 does not read. The page
+      #then runs in heat-only mode; see enter() in R/newVersions_server.R.
+      vftGoToStep(r, "newVersions", session, check = TRUE,
+                  needs = VFT_HITZE_NEEDS)
+      #Nothing takes a reactive dependency on this key outside enter(), which is
+      #isolated, so the write costs a flush and no re-render.
+      session$onFlushed(function() r$vftContextPreset <- NULL, once = TRUE)
     }, ignoreInit = TRUE)
   }
 
@@ -485,11 +518,24 @@ vftNavBarServer <- function(r, input, session = shiny::getDefaultReactiveDomain(
           vftDbg(paste0("NAV GREY -> ", s, " (missing: ",
                         paste(vftStepMissing(r, s), collapse = ", "), ")"))
       }
-      #Hitzeminderung goes to the same tab newVersions does, so it is reachable
-      #exactly when newVersions is - mirror that `ok` rather than recomputing it.
-      if(identical(s, "newVersions") && !identical(ok, sentHitze)){
-        shinyjs::toggleState(id = "vftNav_hitze", condition = ok)
-        sentHitze <<- ok
+    }
+
+    #Hitzeminderung goes to the same TAB newVersions does, but not to the same
+    #work: it lands on context 4, which paints a land cover baseline derived
+    #from the step-1 perimeter and reads neither the path network, nor the
+    #confirmed areas of interest, nor the step-3 threshold. It used to mirror
+    #newVersions' `ok`, so it stayed dark until all three existed - which put
+    #the whole of steps 3 and 4 in front of a feature that needs none of them.
+    #
+    #vftHitzeReachable() asks VFT_HITZE_NEEDS instead (R/steps.R): the perimeter,
+    #and nothing else. Outside the loop now, because it is no longer an answer
+    #about `s`. The reentrancy half of the step test is dropped rather than
+    #copied - newVersions is a converted singleton, so that half was always TRUE.
+    if("newVersions" %in% steps){
+      okHitze <- vftHitzeReachable(r) && !busy
+      if(!identical(okHitze, sentHitze)){
+        shinyjs::toggleState(id = "vftNav_hitze", condition = okHitze)
+        sentHitze <<- okHitze
       }
     }
 

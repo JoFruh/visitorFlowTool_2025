@@ -155,6 +155,12 @@ step1_server <- function(id, i18n,
     #handlers at the bottom of this file.
     r1$isNewShape <- FALSE
 
+    #Is the outline currently in force past the ceiling the heat mitigation
+    #land cover baseline can be built for? Kept by areaLimitObs below, read by
+    #updateZoomText(); nothing else in step 1 cares, because the limit costs
+    #only that one feature - every other step works at any size.
+    r1$areaTooLarge <- FALSE
+
     r1$network <- NULL
 
     # RESET BUTTONS####
@@ -458,6 +464,69 @@ step1_server <- function(id, i18n,
 
     # FUNCTIONS ####
 
+    #### the zoomText strip ####
+    #
+    #Two independent warnings share this one div, and only one of them is about
+    #the zoom. It used to be written from five places with shinyjs::html(), each
+    #of which clobbered whatever was there; adding the area warning as a sixth
+    #writer would have made the two cancel out - drawing a large area would have
+    #wiped the zoom warning, and the next wheel click would have wiped the area
+    #warning straight back.
+    #
+    #So the strip is composed rather than written. Every writer sets its own
+    #flag and calls this, which renders whatever is true at that moment, and
+    #both warnings can be on screen together - which for a large area drawn at a
+    #low zoom is exactly what should happen.
+    updateZoomText <- function(){
+      parts <- character(0)
+
+      #the view: below zoom 13 the user is about to select more ground than the
+      #simulation can chew through in a reasonable time
+      zoom <- shiny::isolate(input[[paste0(leafletMapID, "_zoom")]])
+      if(length(zoom) == 1 && !is.na(zoom) && zoom < 13){
+        parts <- c(parts, paste0(
+          i18n()$t("Warnung: In diesem Maßstab können die Berechnungen sehr lange dauern."), "<br>",
+          i18n()$t("Bitte zoomen Sie weiter hinein, bevor Sie einen Bereich auswählen.")))
+      }
+
+      #the area: a separate ceiling, and about the shape rather than the view, so
+      #zooming in does not clear it. Past it newVersions cannot build a land
+      #cover baseline and greys the Hitzeminderung context out (see
+      #paintAreaTooLarge() and the contextChoice_ui render), which is a poor
+      #place to find out - by then the area is confirmed and the whole
+      #simulation has been run on it. Said here, while it is still one click to
+      #draw a smaller one.
+      if(isTRUE(shiny::isolate(r1$areaTooLarge))){
+        parts <- c(parts, i18n()$t("Warnung: Das gewählte Gebiet ist zu groß für die Hitzeminderungsplanung. Wenn Sie diese Funktion nutzen möchten, wählen Sie ein kleineres Gebiet."))
+      }
+
+      shinyjs::html(id = "zoomText",
+                    html = if(length(parts) == 0) "" else
+                      paste0("<font color='#dd1717' size='3'><b>",
+                             paste(parts, collapse = "<br>"), "</b></font>"))
+    }
+
+    #Keep that flag in step with whatever outline is currently in force.
+    #
+    #An observer rather than a call at each of the sites that can change the
+    #outline, because there are five of them - a polygon closed on the map, an
+    #uploaded shapefile, typed coordinates, the map click that erases the lot,
+    #and enter() putting a confirmed perimeter back - and a warning that is
+    #missing on one of those paths is worse than none at all.
+    #
+    #The read order matches the map render's: r$polygonsList is what is on the
+    #map right now (it is set before r1$finalShape on every path that produces
+    #one), then the perimeter already handed to the app, then an upload not yet
+    #confirmed. Nothing to measure means no warning.
+    areaLimitObs <- shiny::observe({
+      outline <- r$polygonsList
+      if(is.null(outline)) outline <- r1$finalShape
+      if(is.null(outline)) outline <- r1$shape
+      r1$areaTooLarge <- paintAreaTooLarge(outline)
+      updateZoomText()
+    })
+
+
     # RENDER MAP ####
     output$areaSelectMap <- leaflet::renderLeaflet({
 
@@ -596,12 +665,7 @@ step1_server <- function(id, i18n,
         vftDbg("DE")
         vftSetBanner(id, "www/step1_wsl.png")
 
-        if(input[[paste0(leafletMapID, "_zoom")]] >= 13){
-          shinyjs::html(id = "zoomText", html = paste0(""))
-        }else{
-          #below a zoom level, write warning
-          shinyjs::html(id = "zoomText", html = paste0("<font color=\'#dd1717\' size='3'><b>",i18n()$t("Warnung: In diesem Maßstab können die Berechnungen sehr lange dauern."), "<br>", i18n()$t("Bitte zoomen Sie weiter hinein, bevor Sie einen Bereich auswählen."),  "</b></font>"))
-        }
+        updateZoomText()
       }else if(input$languageSelect_1 == "fr"){
         # i18n$set_translation_language('fr')
         shiny.i18n::update_lang("fr")
@@ -609,12 +673,7 @@ step1_server <- function(id, i18n,
         r$currentLang <- "fr"
 
         vftSetBanner(id, "www/step1_wsl_fr.png")
-        if(input[[paste0(leafletMapID, "_zoom")]] >= 13){
-          shinyjs::html(id = "zoomText", html = paste0(""))
-        }else{
-          #below a zoom level, write warning
-          shinyjs::html(id = "zoomText", html = paste0("<font color=\'#dd1717\' size='3'><b>",i18n()$t("Warnung: In diesem Maßstab können die Berechnungen sehr lange dauern."), "<br>", i18n()$t("Bitte zoomen Sie weiter hinein, bevor Sie einen Bereich auswählen."),  "</b></font>"))
-        }
+        updateZoomText()
         vftDbg("FR")
       }else if(input$languageSelect_1 == "en"){
         # i18n$set_translation_language('en')
@@ -623,23 +682,13 @@ step1_server <- function(id, i18n,
         r$currentLang <- "en"
 
         vftSetBanner(id, "www/step1_wsl_en.png")
-        if(input[[paste0(leafletMapID, "_zoom")]] >= 13){
-          shinyjs::html(id = "zoomText", html = paste0(""))
-        }else{
-          #below a zoom level, write warning
-          shinyjs::html(id = "zoomText", html = paste0("<font color=\'#dd1717\' size='3'><b>",i18n()$t("Warnung: In diesem Maßstab können die Berechnungen sehr lange dauern."), "<br>", i18n()$t("Bitte zoomen Sie weiter hinein, bevor Sie einen Bereich auswählen."),  "</b></font>"))
-        }
+        updateZoomText()
         vftDbg("EN")
       }else if(input$languageSelect_1 == "it"){
         # i18n$set_translation_language('it')
         shiny.i18n::update_lang("it")
         vftSetBanner(id, "www/step1_wsl.png")
-        if(input[[paste0(leafletMapID, "_zoom")]] >= 13){
-          shinyjs::html(id = "zoomText", html = paste0(""))
-        }else{
-          #below a zoom level, write warning
-          shinyjs::html(id = "zoomText", html = paste0("<font color=\'#dd1717\' size='3'><b>",i18n()$t("Warnung: In diesem Maßstab können die Berechnungen sehr lange dauern."), "<br>", i18n()$t("Bitte zoomen Sie weiter hinein, bevor Sie einen Bereich auswählen."),  "</b></font>"))
-        }
+        updateZoomText()
         vftDbg("IT")
       }
 
@@ -682,13 +731,7 @@ step1_server <- function(id, i18n,
 
     #Zoom warning text ####
     zoomTextObs <- observeEvent(input[[paste0(leafletMapID, "_zoom")]],{
-      #above a zoom level, no warning
-      if(input[[paste0(leafletMapID, "_zoom")]] >= 13){
-        shinyjs::html(id = "zoomText", html = paste0(""))
-      }else{
-        #below a zoom level, write warning
-          shinyjs::html(id = "zoomText", html = paste0("<font color=\'#dd1717\' size='3'><b>",i18n()$t("Warnung: In diesem Maßstab können die Berechnungen sehr lange dauern."), "<br>", i18n()$t("Bitte zoomen Sie weiter hinein, bevor Sie einen Bereich auswählen."),  "</b></font>"))
-      }
+      updateZoomText()
     })
 
     #make confirm button

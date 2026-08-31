@@ -1094,6 +1094,34 @@ app_server <- function(input, output, session){
     #observer in newVersions_server.R - so it publishes parking too.
     vftMirror(r, "parking",     newVersionsReturn$parking)
 
+    #### the newVersions page's two offers ####
+    #
+    #Same arrangement as step 5's smCreate above, and for the same reason: the
+    #module raises the modal and counts the "Ja", but it has neither the app's
+    #`r` nor the app's session, so the navigation has to happen out here.
+    #
+    #"Sensitivitätsmatrix anzeigen" with no matrix -> step 2, exactly as on
+    #step 5. "Wegen/Strassen" or "Parken/Wohnen" with no confirmed Zielgebiete
+    #-> step 3, which is where the areas of interest are begun; the user came in
+    #through the Hitzeminderung door, which opens on the perimeter alone
+    #(VFT_HITZE_NEEDS in R/steps.R), so steps 3 and 4 are still ahead of them.
+    #
+    #`check = FALSE`, like every other transition app_server makes, and for the
+    #reason spelled out at step 5's smCreate: `check` also gates on VFT_NAV, and
+    #an offer whose "Ja" does nothing in a build with the bar switched off is
+    #worse than no offer. Nothing is skipped by it - step 2 and step 3 both need
+    #only what a user standing on this page already has, and vftGoToStep()'s
+    #"not derivable" refusal still applies to unchecked callers.
+    shiny::observeEvent(newVersionsReturn$smCreate(), {
+      vftDbg("From new versions, go to step 2 to build a sensitivity matrix")
+      vftGoToStep(r, "step2", session)
+    }, ignoreInit = TRUE)
+
+    shiny::observeEvent(newVersionsReturn$aoiCreate(), {
+      vftDbg("From new versions, go to step 3 to determine the areas of interest")
+      vftGoToStep(r, "step3", session)
+    }, ignoreInit = TRUE)
+
     shiny::observeEvent(newVersionsReturn$confirm(), {
 
       vftDbgCat(paste0("newVersionsReturn$trigger_1() ", newVersionsReturn$trigger_1()))

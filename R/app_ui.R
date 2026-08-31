@@ -213,8 +213,10 @@ vftStepNav <- function(i18n = NULL){
   #the translated form of vftStepTooltip(), written once per language. Same
   #sentence, same en dash, same registry ordering - vftStepPrereqSteps() is the
   #half of vftStepPrereqLabels() that answers in step names rather than German.
-  tooltipFor <- function(step, label = fullLab[[step]]){
-    prereq <- vftStepPrereqSteps(step)
+  #`prereq` is an override, for the one button whose prerequisites are not its
+  #tab's: Hitzeminderung. See vftHitzePrereqSteps() in R/steps.R.
+  tooltipFor <- function(step, label = fullLab[[step]],
+                         prereq = vftStepPrereqSteps(step)){
     if(length(prereq) == 0) return(label)
     stats::setNames(vapply(langs, function(l){
       paste0(label[[l]], " – ", needsWord[[l]], ": ",
@@ -284,12 +286,14 @@ vftStepNav <- function(i18n = NULL){
   #vftNav_hitze observer in vftNavBarServer(). Its own group, its own
   #separator, so it reads as a 7th destination rather than a fourth member of
   #the "Neue Versionen" group.
-  #same prerequisites as "Neue Versionen" - it is the same page - so its tooltip
-  #is built from newVersions' prereqs but under its OWN label: passing
+  #Its OWN label and its OWN prerequisites, both as overrides. Passing
   #tooltipFor("newVersions") straight through would say "Neue Versionen –
-  #benötigt: ..." under a button labelled "Hitzeminderung".
+  #benötigt: ..." under a button labelled "Hitzeminderung" - and it would name
+  #the three steps newVersions needs when this door needs only the perimeter
+  #(VFT_HITZE_NEEDS in R/steps.R, which is the same test that enables it).
   hitzeLab  <- navTr(":nav_hitze:", "Hitzeminderung")
-  hitzeTips <- tooltipFor("newVersions", label = hitzeLab)
+  hitzeTips <- tooltipFor("newVersions", label = hitzeLab,
+                          prereq = vftHitzePrereqSteps())
 
   center[[length(center) + 1L]] <- shiny::tags$div(class = "vft-nav-sep")
   center[[length(center) + 1L]] <- shiny::tags$div(class = "vft-nav-group",

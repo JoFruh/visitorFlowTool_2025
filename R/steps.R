@@ -209,6 +209,29 @@ VFT_KEY_READY <- list(
   minThresh = function(r){
     if(!is.null(r$minThresh)) return(TRUE)
     isTRUE(as.logical(r$isSkip))
+  },
+  #' A list of scenarios, not a canvas.
+  #'
+  #' The Hitzeminderung door opens on the perimeter alone, and the newVersions
+  #' page then seeds one placeholder entry so the paint has somewhere to live -
+  #' see enter() there. That entry is mirrored into `r$networkList` like any
+  #' other scenario, which is what makes the painting survive a trip to another
+  #' step and back, and it carries `heatOnly = TRUE` so that this test can tell
+  #' it apart from the real thing.
+  #'
+  #' Without the distinction a heat-only session that then SKIPPED step 3 (which
+  #' satisfies `minThresh` without producing anything) would light step 5 up:
+  #' `networkList` present, `shape` present, `minThresh` answered - and step 5
+  #' would go on to prepare a scenario against a NULL `finalPolygons`, which is
+  #' an error inside a future rather than a message on screen. The two steps that
+  #' name this key want scenarios; a canvas is not one.
+  networkList = function(r){
+    nl <- r$networkList
+    if(is.null(nl) || !length(nl)) return(FALSE)
+    #is.list first: `$` aborts on an atomic, and this runs inside the nav bar's
+    #observe on every change to `r`, where an abort takes the whole session's
+    #navigation with it rather than answering "not ready".
+    !all(vapply(nl, function(v) is.list(v) && isTRUE(v$heatOnly), logical(1)))
   }
 )
 
@@ -344,6 +367,53 @@ vftStepReachable <- function(r, step){
   missing <- vftStepMissing(r, step)
   if(length(missing) == 0) return(TRUE)
   all(vapply(missing, function(k) vftKeyDerivable(r, k), logical(1)))
+}
+
+#### The Hitzeminderung door ####
+
+# Hitzeminderung is not a step - it is a second door into the newVersions page
+# that arrives with contextChoice preset to 4 (see vftStepNav() in R/app_ui.R and
+# the vftNav_hitze observer in R/navigation.R). It used to mirror newVersions'
+# own reachability, which is the wrong answer: newVersions `needs` the path
+# network, the confirmed areas of interest and the step-3 threshold because its
+# two EDIT contexts read them, and context 4 reads none of the three. It paints a
+# land cover baseline derived from the step-1 perimeter and nothing else - which
+# is why R/prepare_network.R deliberately exempts context 4 from the preparation
+# in the first place.
+#
+# So the door opens on the perimeter alone. The page then runs in what
+# newVersions_server.R calls heat-only mode: one placeholder scenario to hold the
+# paint, and the two edit contexts offering to go and produce what they need
+# rather than being drawn dark.
+
+#' What the Hitzeminderung door needs, as opposed to what newVersions needs.
+#'
+#' Key names, read the same way `needs` is - through vftKeyReady() - so this
+#' stays one list rather than a second copy of "has the user got a perimeter".
+VFT_HITZE_NEEDS <- "shape"
+
+#' Can the Hitzeminderung door be opened - now, or after something is derived?
+#'
+#' The vftStepReachable() test, against VFT_HITZE_NEEDS instead of a step's
+#' `needs`. Reads `r`, so calling it inside an observe() takes a dependency on
+#' `shape` and the button lights up on its own when step 1 confirms.
+vftHitzeReachable <- function(r){
+  missing <- VFT_HITZE_NEEDS[
+    !vapply(VFT_HITZE_NEEDS, function(k) vftKeyReady(r, k), logical(1))]
+  if(length(missing) == 0) return(TRUE)
+  all(vapply(missing, function(k) vftKeyDerivable(r, k), logical(1)))
+}
+
+#' The steps that have to be done before the Hitzeminderung door opens.
+#'
+#' vftStepPrereqSteps() for VFT_HITZE_NEEDS, so the button's tooltip says
+#' "benötigt: 1 Gebiet" rather than repeating newVersions' three prerequisites
+#' under a label that does not need them.
+vftHitzePrereqSteps <- function(){
+  sources <- unique(VFT_KEY_SOURCE[VFT_HITZE_NEEDS])
+  sources <- sources[!is.na(sources)]
+  if(length(sources) == 0) return(character(0))
+  names(VFT_STEPS)[names(VFT_STEPS) %in% sources]
 }
 
 #' How far through the walk a step sits.

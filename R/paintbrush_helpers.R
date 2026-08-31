@@ -129,6 +129,62 @@ paintLandcoverDir <- function(){
                        "C:/Users/frueh/Documents/Local Data/landcover"))
 }
 
+#' The paint-grid window an area needs, as a terra extent.
+#'
+#' `shp` is the study area already buffered and in EPSG:2056. The window is
+#' snapped outward to the global paint grid - floor the minima, ceiling the
+#' maxima - so it is a whole number of cells and shares the national rasters'
+#' cell edges. That is what makes paintLandcoverSeed()'s read a crop rather than
+#' a resample.
+paintWindowExt <- function(shp, res = PAINT_RES){
+  bb <- sf::st_bbox(shp)
+  terra::ext(floor(bb[["xmin"]] / res) * res, ceiling(bb[["xmax"]] / res) * res,
+             floor(bb[["ymin"]] / res) * res, ceiling(bb[["ymax"]] / res) * res)
+}
+
+#' How many paint cells a window covers - the number `max_cells` caps. See
+#' paintLandcoverSeed() for what the ceiling is actually protecting.
+paintWindowCells <- function(e, res = PAINT_RES){
+  ((terra::xmax(e) - terra::xmin(e)) / res) * ((terra::ymax(e) - terra::ymin(e)) / res)
+}
+
+#' Is this area past the ceiling a land cover baseline can be built for?
+#'
+#' Answers ahead of time the question paintLandcoverSeed() otherwise answers by
+#' returning NULL halfway through a render, which is far too late to tell the
+#' user anything useful. Two places need it in advance: step 1 warns while the
+#' area is still being chosen, and newVersions disables the Hitzeminderung
+#' context for an area that is already too big, so the choice is never offered
+#' with nothing behind it.
+#'
+#' Both have to agree with the seed exactly - a warning for an area that then
+#' works is as bad as no warning at all - so the window arithmetic and the
+#' default ceiling are shared with it rather than restated here. Only the front
+#' half of the seed is repeated (transform, union, buffer), because the rest
+#' reads rasters and this must not.
+#'
+#' Deliberately NA-safe in one direction: an area that cannot be measured - no
+#' geometry, a CRS that will not transform - is reported as NOT too large. A
+#' false TRUE switches a working feature off behind a misleading label; a false
+#' FALSE lands on the blank-canvas path, which already prints its own diagnosis.
+paintAreaTooLarge <- function(aoi, buffer_m = 250, max_cells = 40e6,
+                              res = PAINT_RES){
+  if(is.null(aoi)) return(FALSE)
+  if(inherits(aoi, c("sf", "data.frame")) && nrow(aoi) == 0) return(FALSE)
+  geom <- try(sf::st_geometry(aoi), silent = TRUE)
+  if(inherits(geom, "try-error") || length(geom) == 0) return(FALSE)
+  #the same assumption the seed makes, and for the same reason; it warns there,
+  #where the projection actually decides what gets read
+  if(is.na(sf::st_crs(geom))) sf::st_crs(geom) <- 4326
+  n <- try({
+    shp <- sf::st_union(sf::st_transform(geom, 2056))
+    if(buffer_m > 0) shp <- sf::st_buffer(shp, buffer_m)
+    paintWindowCells(paintWindowExt(shp, res), res)
+  }, silent = TRUE)
+  if(inherits(n, "try-error") || !is.finite(n)) return(FALSE)
+  n > max_cells
+}
+
 #' Seed a version's paint layers from the national land cover.
 #'
 #' Returns list(ground, canopy) of SpatRasters on the paint grid, or NULL if the
@@ -202,14 +258,9 @@ paintLandcoverSeed <- function(aoi, buffer_m = 250, max_cells = 40e6,
   shp <- try(sf::st_union(sf::st_transform(geom, 2056)), silent = TRUE)
   if(inherits(shp, "try-error")) return(NULL)
   if(buffer_m > 0) shp <- sf::st_buffer(shp, buffer_m)
-  bb <- sf::st_bbox(shp)
+  e <- paintWindowExt(shp, res)
 
-  #snap outward to the paint grid: floor the minima, ceiling the maxima, so the
-  #window is a whole number of cells and shares the global grid's cell edges
-  e <- terra::ext(floor(bb[["xmin"]] / res) * res, ceiling(bb[["xmax"]] / res) * res,
-                  floor(bb[["ymin"]] / res) * res, ceiling(bb[["ymax"]] / res) * res)
-
-  n <- ((terra::xmax(e) - terra::xmin(e)) / res) * ((terra::ymax(e) - terra::ymin(e)) / res)
+  n <- paintWindowCells(e, res)
   if(n > max_cells){
     warning(sprintf("land cover seed skipped: %.1f M cells > max_cells (%.1f M)",
                     n / 1e6, max_cells / 1e6))

@@ -101,6 +101,14 @@ newVersions_server <- function(id, networkList, i18n, currentLang, isFirstRun,
     shape         <- NULL
     minThresh     <- NULL
     selectedVersion <- NULL
+    #TRUE when this visit arrived with no scenario list at all - the
+    #Hitzeminderung door straight off step 1. enter() answers it and seeds the
+    #placeholder scenario the paint is stored in; see section 1b there.
+    heatOnly        <- FALSE
+    #Set by obsContext immediately before it puts the radio back to the context
+    #the user was actually on, and cleared by the firing that revert provokes.
+    #Not per visit - it lives and dies inside one decline.
+    ctxRevertPending <- FALSE
 
     # RENDER UI
     # if(currentLang == "de"){
@@ -140,49 +148,92 @@ newVersions_server <- function(id, networkList, i18n, currentLang, isFirstRun,
       #cleared in the same pass, so a plain return to newVersions afterwards
       #renders the ordinary default again.
       preset <- r$vftContextPreset
-      selectedChoice <- if(!is.null(preset)) preset else 1
+      #No preset falls back to the context enter() decided for this visit, not
+      #to a hardcoded 1. They are usually the same thing, but not always: with
+      #no confirmed Zielgebiete enter() opens on 4, and a radio that said 1
+      #there would fire obsContext's "nothing to edit" modal at a user who had
+      #not touched anything. isolate() because this render must not re-run on
+      #every context change - the group would be rebuilt under the click that
+      #caused it. enter() writes r$context before this render runs, and a
+      #language change re-runs it against whatever the context is by then.
+      fallback <- shiny::isolate(r$context)
+      if(is.null(fallback) || !length(fallback)) fallback <- 1
+      selectedChoice <- if(!is.null(preset)) preset else fallback
       if(!is.null(preset)) r$vftContextPreset <- NULL
 
-      if(currentLang == "de"){
-        shiny::radioButtons(
-          inputId = NS(id,"contextChoice"),
-          label = NULL,
-          inline = TRUE,
-          choices = list(
-            "Wegen/Strassen" = 1,
-            "Parken/Wohnen" = 3
-            ,
-            "Hitzeminderung" = 4  # new option in dev.
-          ),
-          selected = selectedChoice
-        )
-      } else if(currentLang == "fr"){
-        shiny::radioButtons(
-          inputId = NS(id,"contextChoice"),
-          label = NULL,
-          inline = TRUE,
-          choices = list(
-            "Chemins/Routes" = 1,
-            "Parkings/Habitations" = 3
-            ,
-            "Attenuation de chaleur" = 4  # new option
-          ),
-          selected = selectedChoice
-        )
-      } else if(currentLang == "en"){
-        shiny::radioButtons(
-          inputId = NS(id,"contextChoice"),
-          label = NULL,
-          inline = TRUE,
-          choices = list(
-            "Paths/Roads" = 1,
-            "Parking/Residences" = 3
-            ,
-            "Attenuation de chaleur" = 4  # new option
-          ),
-          selected = selectedChoice
-        )
+      #unchanged: the three languages this control has ever had, and NULL for
+      #anything else rather than a group in the wrong one
+      if(!currentLang %in% c("de", "fr", "en")) return(NULL)
+
+      #Heat mitigation needs a land cover baseline, and past a certain area
+      #there is none to build - see paintAreaTooLarge(), which shares its
+      #ceiling with paintLandcoverSeed() so the two can never disagree. Context
+      #4 used to be offered anyway and then simply did nothing: an empty canvas
+      #with an inert brush, which reads as a broken feature rather than as an
+      #area that is out of range. So for such an area the option is disabled and
+      #the label says why, which is the only place the user can be told before
+      #they have spent a click finding out.
+      #
+      #Computed once per visit by enter() rather than here: this render also
+      #runs on every language change, and the perimeter cannot have moved
+      #between two of those.
+      tooLarge <- isTRUE(r$paintAreaTooLarge)
+
+      #and the preset falls with it. The nav bar's Hitzeminderung button asks
+      #for 4 directly and knows nothing about the area; honouring that here
+      #would preselect the one option about to be disabled, which is the single
+      #state the user cannot click their way out of.
+      if(tooLarge && identical(as.character(selectedChoice), "4")) selectedChoice <- 1
+
+      #the reason travels as part of the label, so it is attached to the option
+      #it is about wherever the group is drawn
+      heatLab <- switch(currentLang,
+                        de = "Hitzeminderung",
+                        fr = "Attenuation de chaleur",
+                        en = "Attenuation de chaleur")
+      if(tooLarge){
+        heatLab <- paste0(heatLab,
+                          switch(currentLang,
+                                 de = " (zu gro\u00dfes Gebiet)",
+                                 fr = " (zone trop grande)",
+                                 en = " (area too large)"))
       }
+
+      choices <- switch(currentLang,
+                        de = list("Wegen/Strassen"      = 1, "Parken/Wohnen"        = 3),
+                        fr = list("Chemins/Routes"      = 1, "Parkings/Habitations" = 3),
+                        en = list("Paths/Roads"         = 1, "Parking/Residences"   = 3))
+      choices[[heatLab]] <- 4
+
+      buttons <- shiny::radioButtons(
+        inputId = NS(id,"contextChoice"),
+        label = NULL,
+        inline = TRUE,
+        choices = choices,
+        selected = selectedChoice
+      )
+
+      if(!tooLarge) return(buttons)
+
+      #shiny::radioButtons() can disable the whole group but not one choice of
+      #it, so that one radio is disabled in the browser instead.
+      #
+      #The script ships WITH the control, in the same renderUI payload, because
+      #Shiny executes scripts in inserted HTML: it therefore re-applies itself
+      #every time this render runs. That is the point - a language change
+      #rebuilds the group from scratch, and a disable applied from anywhere else
+      #(shinyjs, an observer) would be silently undone by the next one.
+      shiny::tagList(
+        buttons,
+        shiny::tags$script(shiny::HTML(sprintf(
+          "(function(){
+             var g = document.getElementById('%s'); if(!g) return;
+             var i = g.querySelector('input[type=radio][value=\"4\"]'); if(!i) return;
+             i.disabled = true;
+             var l = i.closest('label'); if(l) l.style.opacity = 0.5;
+           })();",
+          NS(id,"contextChoice"))))
+      )
     })
 
 
@@ -218,6 +269,130 @@ newVersions_server <- function(id, networkList, i18n, currentLang, isFirstRun,
     edges <- NULL
 
     r <- shiny::reactiveValues()
+
+    #### two of this page's controls are OFFERS, not toggles ####
+    #
+    # The same shape step 5 gave its sensitivity-matrix checkbox (smAskCreate()
+    # in step5_server.R), for the same reason and now in two places here.
+    #
+    # 1. HEAT-ONLY MODE. The nav bar's "Hitzeminderung" button is a second door
+    #    into this page and it opens on the step-1 perimeter alone -
+    #    VFT_HITZE_NEEDS in R/steps.R - because context 4 paints a land cover
+    #    baseline derived from that perimeter and reads no path network, no
+    #    confirmed areas of interest and no step-3 threshold. (R/prepare_network.R
+    #    has always exempted context 4 from the preparation; this is the direct
+    #    route it was left open for.) So the user can be standing here with
+    #    `finalPolygons` NULL and no scenario at all, and contexts 1 and 3 - which
+    #    edit the graph and the parking table - have nothing to work on.
+    #
+    # 2. NO SENSITIVITY MATRIX. Step 2 is skippable by construction (see the long
+    #    note in VFT_STEPS), so `SM_pres` can be NULL here whatever door was used.
+    #
+    # In both cases the control stays LIVE and answers with a question rather
+    # than going dark: turning it on asks whether to go and produce what it
+    # needs, and "no" puts it back exactly as it was. A disabled switch cannot
+    # tell the user what is missing; this can.
+    #
+    # German literals, not i18n$t(): the translation CSVs live outside the repo
+    # (four copies), and step 5's modal set the precedent.
+
+    #' Is the data contexts 1 and 3 read actually here?
+    #'
+    #' `finalPolygons` is the whole test. Both edit contexts go through
+    #' vftPrepareThen() -> vftPrepareNetwork(), whose very first act is
+    #' terra::extract() against `finalPolygons["AOI"]`; the scenario network
+    #' itself is derived on demand, so its absence is not the question.
+    #' The snapshot, not the reactive - enter() refreshes it per visit.
+    aoiReady <- function(){
+      !is.null(finalPolygons) &&
+        isTRUE(tryCatch(length(sf::st_geometry(finalPolygons)) > 0,
+                        error = function(e) FALSE))
+    }
+
+    #' "Go and determine the Zielgebiete" - a rising count app_server turns into
+    #' the navigation to step 3. See the module's return value.
+    aoiCreate <- shiny::reactiveVal(0L)
+
+    #' "Go and make a sensitivity matrix" - the same, for step 2. Named and
+    #' shaped exactly like step 5's, because it is the same offer on the same
+    #' data seen from the next page.
+    smCreate  <- shiny::reactiveVal(0L)
+
+    #' Offer to go and draw the areas of interest.
+    aoiAskCreate <- function(){
+      shiny::showModal(shiny::modalDialog(
+        title = "Zielgebiete nicht vorhanden",
+        shiny::tags$p(paste0(
+          "Diese Ansicht bearbeitet das Wegnetz bzw. die Parkierung und ",
+          "benötigt dafür die Zielgebiete - für dieses Gebiet wurden noch ",
+          "keine bestimmt.")),
+        shiny::tags$p("Möchten Sie sie jetzt bestimmen?"),
+        footer = shiny::tagList(
+          shiny::actionButton(session$ns("aoiCreateNo"), "Nein, bei der Hitzeminderung bleiben"),
+          shiny::actionButton(session$ns("aoiCreateYes"), "Ja, zu Schritt 3",
+                              class = "btn-primary")
+        ),
+        easyClose = FALSE
+      ), session = session)
+      invisible(NULL)
+    }
+
+    #' Offer to go and build a sensitivity matrix. Same words as step 5's.
+    smAskCreate <- function(){
+      shiny::showModal(shiny::modalDialog(
+        title = "Sensitivitätsmatrix nicht vorhanden",
+        shiny::tags$p(paste0(
+          "Für dieses Gebiet wurde noch keine Sensitivitätsmatrix erstellt - ",
+          "Schritt 2 (Sensibilität) wurde übersprungen.")),
+        shiny::tags$p("Möchten Sie jetzt eine erstellen?"),
+        footer = shiny::tagList(
+          shiny::actionButton(session$ns("smCreateNo"), "Nein, ohne fortfahren"),
+          shiny::actionButton(session$ns("smCreateYes"), "Ja, zu Schritt 2",
+                              class = "btn-primary")
+        ),
+        easyClose = FALSE
+      ), session = session)
+      invisible(NULL)
+    }
+
+    #One pair of observers per offer for the whole module, not one pair per
+    #modal: a per-modal pair left armed by a dismissed modal answers the NEXT
+    #one too. Same trap, and the same `v == 0` guard, as step5_server.R - a
+    #re-shown modal re-renders both buttons, and a re-rendered actionButton
+    #reports 0, which observeEvent reads as a click.
+    shiny::observeEvent(input$aoiCreateYes, {
+      v <- input$aoiCreateYes
+      if(is.null(v) || v == 0) return(invisible(NULL))
+      shiny::removeModal(session = session)
+      vftDbg("NEWVERSIONS: areas of interest wanted -> step 3")
+      aoiCreate(shiny::isolate(aoiCreate()) + 1L)
+    }, ignoreInit = TRUE)
+
+    shiny::observeEvent(input$aoiCreateNo, {
+      v <- input$aoiCreateNo
+      if(is.null(v) || v == 0) return(invisible(NULL))
+      shiny::removeModal(session = session)
+      #Nothing else to do. The radio was already put back to the context the
+      #user was actually on before the modal went up, which is the whole of
+      #"no": nothing is disabled, nothing is remembered, and choosing the same
+      #option again asks again.
+      vftDbg("NEWVERSIONS: areas of interest declined")
+    }, ignoreInit = TRUE)
+
+    shiny::observeEvent(input$smCreateYes, {
+      v <- input$smCreateYes
+      if(is.null(v) || v == 0) return(invisible(NULL))
+      shiny::removeModal(session = session)
+      vftDbg("NEWVERSIONS: sensitivity matrix wanted -> step 2")
+      smCreate(shiny::isolate(smCreate()) + 1L)
+    }, ignoreInit = TRUE)
+
+    shiny::observeEvent(input$smCreateNo, {
+      v <- input$smCreateNo
+      if(is.null(v) || v == 0) return(invisible(NULL))
+      shiny::removeModal(session = session)
+      vftDbg("NEWVERSIONS: sensitivity matrix declined")
+    }, ignoreInit = TRUE)
 
     #Everything this block used to assign is per VISIT, not per session, and has
     #moved into enter() at the bottom of this file: the network list and the
@@ -358,9 +533,33 @@ if(is.null(r$updateNetworkPlot)){
         #default bounds
         #use shape to determine starting bounds
 
+        #WHICH CONTEXT IS THIS RENDER FOR ####
+        #
+        #Read here rather than further down because the network guard below now
+        #depends on it: context 4 is the one context that draws no graph at all,
+        #so it is also the one that must not be held back waiting for one.
+        #
+        #"Unknown" is not "no". input$contextChoice is empty on a render that
+        #runs before the radio button has reported in - which happens, because
+        #the dummy-group trick below deliberately provokes re-renders - and
+        #treating that as "not context 4" is what used to disarm the brush
+        #behind the user's back.
+        ctxChoice    <- shiny::isolate(input$contextChoice)
+        ctxKnown     <- length(ctxChoice) == 1 && !is.na(ctxChoice)
+        paintContext <- ctxKnown && isTRUE(ctxChoice == 4)
+
         #save to, from, edgeID and nodeID as new columns
         #the plot uses these IDs in a fixed way, whereas the original columns can automatically change
-        shiny::isolate(network <- r$networkList[[r$position]]$network)
+        #
+        #Read defensively rather than as `r$networkList[[r$position]]$network`:
+        #in heat-only mode (see aoiReady() above) there may be no scenario list
+        #at all on the first pass, and `NULL[[1]]` is an error, not NULL.
+        network <- shiny::isolate({
+          nl  <- r$networkList
+          pos <- r$position
+          if(is.null(nl) || is.null(pos) || !length(pos) || pos > length(nl)) NULL
+          else nl[[pos]]$network
+        })
 
         #The path network is loaded on demand now - no step's `needs` names it
         #(R/steps.R) - so a scenario reaches this page with `network` NULL until
@@ -368,13 +567,19 @@ if(is.null(r$updateNetworkPlot)){
         #on this page either asks for the preparation first or bumps from inside
         #its callback, so this is the narrow window between the two: hold the
         #previous map rather than aborting the render with a NULL graph.
-        shiny::req(!is.null(network))
+        #
+        #Context 4 is exempt, and that exemption is what makes the Hitzeminderung
+        #door work: it never asks for the preparation (R/prepare_network.R), so
+        #waiting here for a graph nothing is going to build would leave the page
+        #permanently blank for a user who came straight from step 1.
+        if(!paintContext) shiny::req(!is.null(network))
 
-        network <- network %>% tidygraph::activate(nodes) %>% dplyr::mutate(nodeID_2 = .data$nodeID)
-        network <- network %>% tidygraph::activate(edges) %>% dplyr::mutate(edgeID_2 = .data$edgeID, to_2 = .data$to, from_2 = .data$from)
+        if(!is.null(network)){
+          network <- network %>% tidygraph::activate(nodes) %>% dplyr::mutate(nodeID_2 = .data$nodeID)
+          network <- network %>% tidygraph::activate(edges) %>% dplyr::mutate(edgeID_2 = .data$edgeID, to_2 = .data$to, from_2 = .data$from)
 
-
-        shiny::isolate(r$networkList[[r$position]]$network <- network )
+          shiny::isolate(r$networkList[[r$position]]$network <- network )
+        }
 
         #interactive map: mode is set once for the process in global.R
 
@@ -432,9 +637,10 @@ if(is.null(r$updateNetworkPlot)){
         #treating that as "not context 4" is what disarms the brush behind the
         #user's back. Silence leaves the flag alone instead, so only a render
         #that positively knows the context can change it.
-        ctxChoice    <- shiny::isolate(input$contextChoice)
-        ctxKnown     <- length(ctxChoice) == 1 && !is.na(ctxChoice)
-        paintContext <- ctxKnown && isTRUE(ctxChoice == 4)
+        #(ctxChoice / ctxKnown / paintContext were computed at the top of this
+        #render - the network guard needs them now. Everything the paragraph
+        #above says about them still holds: silence leaves the flag alone, so
+        #only a render that positively knows the context can change it.)
 
         #only the unusual case is worth a line: a render that cannot tell which
         #context it is in, which is the one that used to disarm the brush
@@ -449,6 +655,14 @@ if(is.null(r$updateNetworkPlot)){
           if(paintContext) shinyjs::show(id = "paintColorButtonsDiv")
           else             shinyjs::hide(id = "paintColorButtonsDiv")
         }
+
+        #Every branch below is `input$contextChoice == n`, and on an unknown
+        #context that is `logical(0)`, which `if` aborts on - so the chain fell
+        #through to an undefined `map`. Hold the previous map instead, the same
+        #way the network guard above does: obsContext fires as soon as the radio
+        #reports and bumps r$updateRender, which brings this render straight
+        #back with an answer.
+        shiny::req(ctxKnown)
 
         #RENDERING INFRASTRUCTURE/SIGNAGE
         # if(shiny::isolate(!is.null(input$contextChoice))){
@@ -715,10 +929,20 @@ if(is.null(r$updateNetworkPlot)){
             }
           }else if(shiny::isolate(input$contextChoice == 4)){
           #RENDER HEAT MITIGATION ####
-            shiny::isolate(r$parkingPolygons <- r$networkList[[r$position]]$parking)
-            if(shiny::isolate(nrow(r$parkingPolygons) == 0)){
-              shiny::isolate(r$parkingPolygons <- r$networkList[[1]]$parking)
-            }
+            #The parking table is a BACKDROP here, not data this context reads -
+            #the brush paints land cover and never touches it. In heat-only mode
+            #(the Hitzeminderung door, see aoiReady() above) there is no parking
+            #table and no scenario network, so this resolves to NULL and the map
+            #is built with no data. leaflet(NULL) is the same call leaflet() is.
+            shiny::isolate({
+              nl  <- r$networkList
+              pos <- r$position
+              park <- if(is.null(nl) || is.null(pos) || !length(pos) ||
+                         pos > length(nl)) NULL else nl[[pos]]$parking
+              if(!is.null(park) && nrow(park) == 0 && length(nl) >= 1)
+                park <- nl[[1]]$parking
+              r$parkingPolygons <- park
+            })
 
             map <- leaflet::leaflet(shiny::isolate(r$parkingPolygons))%>%
               leaflet::addMapPane("layer_SM", zIndex = 405)%>%
@@ -824,13 +1048,52 @@ if(is.null(r$updateNetworkPlot)){
             }
             session$sendCustomMessage("paint-base-load", baseMsg)
 
+            #this scenario's own strokes, if it has any. Read through the same
+            #guard as everything else that indexes the list: enter() guarantees a
+            #scenario slot in heat-only mode, but this render can run once before
+            #that lands, and rasterToRuns(NULL) is the "nothing painted yet" case
+            #the browser already handles.
+            paintEdits <- shiny::isolate({
+              nl  <- r$networkList
+              pos <- r$position
+              if(is.null(nl) || is.null(pos) || !length(pos) || pos > length(nl))
+                list(paintedRaster = NULL, canopyRaster = NULL) else nl[[pos]]
+            })
             session$sendCustomMessage("paint-grid-load", list(
               version = shiny::isolate(r$position),
-              ground  = rasterToRuns(shiny::isolate(r$networkList[[r$position]]$paintedRaster)),
-              canopy  = rasterToRuns(shiny::isolate(r$networkList[[r$position]]$canopyRaster))
+              ground  = rasterToRuns(paintEdits$paintedRaster),
+              canopy  = rasterToRuns(paintEdits$canopyRaster)
             ))
             session$sendCustomMessage("set-paint-level", list(canopy = canopyActive))
           }
+
+        #THE STUDY PERIMETER ####
+        #The outline drawn in step 1, on every context rather than in any one of
+        #them: it is what the whole page is about, and until now this map was the
+        #only one in the app that did not show it - step 5 draws the same shape
+        #the same way (see its addPolygons on `shape`), so the two pages read
+        #alike when you bounce between them.
+        #
+        #Added here, after the branches, for the same reason: four branches would
+        #otherwise each need their own copy, and the one that got forgotten would
+        #be the bug.
+        #
+        #Pane "layer_SM" (zIndex 405) is the lowest pane every branch declares,
+        #one step above the tiles at 400 and below everything else the map draws
+        #- so the perimeter frames the content instead of cutting across it. It
+        #is declared everywhere and used by nothing else, which is what makes it
+        #free to take.
+        #
+        #Unfilled and stroke-only on purpose: a fill would tint the land cover
+        #under it in context 4, where colour is the data being read.
+        if(!is.null(shape) && length(sf::st_geometry(shape)) > 0){
+          map <- map |>
+            leaflet::addPolygons(data = sf::st_zm(sf::st_transform(shape, "epsg:4326"),
+                                                  drop = TRUE, what = "ZM"),
+                                 stroke = TRUE, fill = FALSE, color = "black",
+                                 weight = 5,
+                                 options = leaflet::pathOptions(pane = "layer_SM"))
+        }
 
         #add or remove dummy group (this is to trigger an observer that determines when the map finished rendering)
         #in isolation to avoid linking input$versionMap_groups
@@ -1114,11 +1377,19 @@ computeHeat <- function(){
   if(is.null(aoi) || length(sf::st_geometry(aoi)) == 0){
     aoi <- shiny::isolate(r$parkingPolygons)
   }
+  #the scenario's edits, through the same guard every other read of the list
+  #uses - see the note in the context 4 render. No slot means no edits, which is
+  #a baseline-only heat surface rather than an error.
+  edits <- shiny::isolate({
+    nl <- r$networkList
+    if(is.null(nl) || is.null(pos) || !length(pos) || pos > length(nl))
+      list(paintedRaster = NULL, canopyRaster = NULL) else nl[[pos]]
+  })
   ok <- tryCatch({
     t0 <- Sys.time()
     h  <- heatRaster(aoi,
-                     groundEdits = shiny::isolate(r$networkList[[pos]]$paintedRaster),
-                     canopyEdits = shiny::isolate(r$networkList[[pos]]$canopyRaster))
+                     groundEdits = edits$paintedRaster,
+                     canopyEdits = edits$canopyRaster)
     if(is.null(h)){
       message("heat: no land cover for this area - nothing to compute from")
       FALSE
@@ -1354,6 +1625,53 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
 
       #observe if context changes####
       obsContext <- observeEvent(input$contextChoice, {
+
+        #### an edit context with nothing to edit is an OFFER ####
+        #
+        #Reached from the Hitzeminderung door (see the note above aoiReady()):
+        #the user is on context 4 with no confirmed Zielgebiete, and picking
+        #"Wegen/Strassen" or "Parken/Wohnen" would send vftPrepareThen() into
+        #vftPrepareNetwork(), whose first act is terra::extract() against
+        #`finalPolygons["AOI"]` - an error, from a radio button, with nothing on
+        #screen saying what is missing.
+        #
+        #So it asks instead. The radio goes back to the context the user was
+        #actually on BEFORE the modal is raised, which is what makes "no" mean
+        #"nothing happens": the update is a client round trip, so it comes back
+        #as another firing of this observer - harmless, because by then the
+        #value is the old context again and this branch does not apply to it.
+        #Ordering, not a guard: the same reason step 5 puts its checkbox back
+        #before calling smAskCreate().
+        newCtx <- input$contextChoice
+
+        #Swallow the echo of a revert THIS observer asked for, and only that.
+        #
+        #Without it, declining still costs a full map redraw with every control
+        #disabled and re-enabled around it, which is not what "nothing happens"
+        #looks like. With it written as a plain "is the value unchanged" test it
+        #would be much worse: the FIRST firing of this observer in a session is
+        #the radio reporting the value enter() already put in r$context, and
+        #that firing is what draws the map for the first time (the render that
+        #enter() triggers runs before the client has reported any context at
+        #all, and holds). So the test is the flag, not the value.
+        if(isTRUE(ctxRevertPending)){
+          ctxRevertPending <<- FALSE
+          if(identical(as.character(newCtx),
+                       as.character(shiny::isolate(r$context)))){
+            vftDbg("CONTEXT: revert echo swallowed")
+            return(invisible(NULL))
+          }
+        }
+
+        if(length(newCtx) == 1 && newCtx %in% c(1, 2, 3) && !aoiReady()){
+          back <- shiny::isolate(r$context)
+          if(is.null(back) || !length(back)) back <- 4
+          ctxRevertPending <<- TRUE
+          shiny::updateRadioButtons(inputId = "contextChoice", selected = back)
+          aoiAskCreate()
+          return(invisible(NULL))
+        }
+
 
         #save map zoom
         r$mapView <- list(center_lng = input[["versionMap_center"]]$lng,
@@ -1905,7 +2223,11 @@ vftDbg("add versions")
             # networkLst[[length(networkLst)+1]] <- list(network = networkLst[[1]]$network, pathUsage = NULL)
 
             #TODO: copy a group of elements (network, attractivity rasters, residential raster, parking polygons)
-            r$networkList[[length(r$networkList)+1]] <- list(network = r$networkList[[1]]$network, pathUsage = NULL, parking = r$networkList[[1]]$parking, paintedRaster = NULL, canopyRaster = NULL)
+            #`heatOnly` is carried over from the scenario being copied, not
+            #dropped: it is the tag VFT_KEY_READY$networkList reads, and a list
+            #where only SOME entries carry it would read as a real scenario list
+            #and light step 5 up over a canvas. A copy of a canvas is a canvas.
+            r$networkList[[length(r$networkList)+1]] <- list(network = r$networkList[[1]]$network, pathUsage = NULL, parking = r$networkList[[1]]$parking, paintedRaster = NULL, canopyRaster = NULL, heatOnly = r$networkList[[1]]$heatOnly)
             #update reactive
             # ntwrkLst_r(networkLst)
 
@@ -3844,15 +4166,27 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
 
         obsSM <- shiny::observeEvent(input$showSM, {
           #show SM when switch is turned on (and there is a SM)
-          if(input$showSM == 1 ){
+          if(isTRUE(as.logical(input$showSM))){
             if( !is.null(SM_pres)){
               #show SM
               leaflet::leafletProxy("versionMap" )%>%
                 leaflet::addRasterImage(x = raster::raster(SM_pres), colors = SMcolors, group = "SM", opacity = 0.7)
-            }else if(is.null(SM_pres)){
-              #write error precising that there is no SM or default SM is used
-              #TODO write error
-              return()
+            }else{
+              #### no matrix: the switch is an OFFER, not a display toggle ####
+              #
+              #What used to be here was a `return()` under a "TODO write error"
+              #- the switch moved, nothing appeared, and nothing said why. Step
+              #2 is skippable (see VFT_STEPS in R/steps.R), so this is a state
+              #a perfectly normal walk through the app reaches.
+              #
+              #Same behaviour as step 5's checkbox, which is where the user
+              #meets this offer first: the switch is put back BEFORE the modal
+              #goes up - there is nothing to draw either way - and "no" leaves
+              #it unchecked and clickable, so turning it on again asks again.
+              shinyWidgets::updatePrettySwitch(session = session,
+                                               inputId = "showSM", value = FALSE)
+              smAskCreate()
+              return(invisible(NULL))
             }
 
           }else{
@@ -3977,6 +4311,13 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
         #remove all non-linked segments in r$networkList
         for(networkNb in 1:length(r$networkList)){
 
+          #A scenario with no graph has no components to prune, and
+          #tidygraph::convert(NULL) is an error, not a no-op. Two ways to get
+          #one: the ordinary lazy-load window before vftPrepareThen() has run,
+          #and heat-only mode, where the placeholder scenario enter() seeds to
+          #hold the paint never has a network at all.
+          if(is.null(r$networkList[[networkNb]]$network)) next
+
           # graph <- igraph::as.igraph(r$networkList[[networkNb]]$network)
           # graph <- igraph::as.undirected(igraph::largest_component(graph, mode = "weak"))
           # r$networkList[[networkNb]]$network <- tidygraph::as_tbl_graph(graph, directed = FALSE)
@@ -4026,6 +4367,53 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
       minThresh     <<- .rx$minThresh()
       selectedVersion <<- .rx$selectedVersion()
 
+      #--- 1b. HEAT-ONLY MODE: somewhere to put the paint.
+      #
+      #The Hitzeminderung door opens on the step-1 perimeter alone
+      #(VFT_HITZE_NEEDS, R/steps.R), so this visit can arrive with no scenario
+      #list at all - step 4 has never been confirmed and step 5 has never run.
+      #Context 4 itself needs none of that; what it does need is a slot to hold
+      #the strokes, because the paint is stored per scenario
+      #(r$networkList[[pos]]$paintedRaster, written by the paintCells observer)
+      #and an empty list means every stroke is silently dropped.
+      #
+      #So one placeholder scenario is created here, with exactly the fields the
+      #rest of the module reads and all of them NULL. It is not a fake network:
+      #`network` is NULL, which is the same state a scenario has before
+      #vftPrepareThen() has run on it, and every read of it on this page already
+      #handles that. It mirrors into the app's `r$networkList` like any other
+      #scenario (vftMirror in app_server.R), which is what makes the paint
+      #survive a trip to another step and back.
+      #
+      #Deliberately NOT conditional on the preset: an empty list is unusable in
+      #every context, so this is "give the page something to work with", not
+      #"this visit is a heat visit".
+      heatOnly <<- length(networkList) == 0
+      if(heatOnly){
+        vftDbg("NEWVERSIONS: heat-only mode - seeding a placeholder scenario")
+        networkList <<- list(list(network = NULL, pathUsage = NULL,
+                                  parking = NULL, residential = NULL,
+                                  newAttr = NULL, paintedRaster = NULL,
+                                  canopyRaster = NULL,
+                                  #the tag VFT_KEY_READY$networkList reads. It is
+                                  #what stops this list - which the mirror puts
+                                  #into the app's r$networkList - from making
+                                  #step 5 and the ordinary newVersions door look
+                                  #reachable: they need SCENARIOS, and this is a
+                                  #canvas. Step 4's confirm rebuilds the list
+                                  #without the tag, and that is what clears it.
+                                  heatOnly = TRUE))
+        #and a card to hang it on, in createOriginalVersion()'s shape (see
+        #step5_server.R) so that the two pages agree on what "Original" is if
+        #step 5 is ever reached later.
+        if(length(versionsUI) == 0){
+          versionsUI <<- list(Original = list(name            = "Original",
+                                              inputId_removal = NULL,
+                                              inputId_select  = "versionBtn0",
+                                              id_ui_name      = "version_0"))
+        }
+      }
+
       #--- 2. tear down the previous visit's version cards and their observers.
       #One or two observers per card, created by appendVersion(), and the cards
       #are insertUI'd - so without this a second visit shows every version twice
@@ -4049,6 +4437,14 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
       #module's own `r` on every entry, same as currentLang above; the
       #contextChoice_ui render below is what actually consumes and clears it.
       r$vftContextPreset <- .rx$contextPreset()
+      #Whether this visit's perimeter is past the heat mitigation ceiling.
+      #Answered once here, not in the render that reads it: the render re-runs on
+      #every language change, and this is a pair of sf calls on the study area -
+      #cheap, but not free, and the answer cannot change without a new visit
+      #because `shape` is only ever refreshed by this function. enter() is
+      #isolated, so this and r$currentLang above land in the same flush - the
+      #render sees both or neither, whatever order they are written in.
+      r$paintAreaTooLarge <- paintAreaTooLarge(shape)
       shiny.i18n::update_lang(currentLang)
       shiny::updateSelectInput(inputId = "languageSelect_7", selected = currentLang)
       #this step never set its banner on entry - the old renderUI only ran from
@@ -4077,7 +4473,27 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
       r$mapPoints       <- NULL
       r$trigger         <- 1
       r$position        <- 1
-      r$context         <- 1 #infrastructure #2 = signage/attractivity, 3 = housing/parking
+      #WHICH CONTEXT THIS VISIT OPENS ON.
+      #
+      #It used to be 1 unconditionally, which made the Hitzeminderung preset
+      #half a feature: the radio button was rendered with 4 selected, but
+      #`r$context` still said 1, so section 6 below dispatched the network
+      #preparation this door exists to avoid - and, arriving straight from
+      #step 1, dispatched it against a NULL `finalPolygons`.
+      #
+      #Two ways in. The preset is the nav button (contextPreset, "4"); the
+      #aoiReady() test is the state - with no confirmed Zielgebiete, contexts 1
+      #and 3 have nothing to edit and only offer to go and make some (see the
+      #guard at the top of obsContext), so opening on one of them would greet
+      #the user with a modal they did not ask for.
+      #
+      #The area ceiling overrides both, for the same reason the contextChoice_ui
+      #render drops the preset there: context 4 is disabled on an area too large
+      #for a land cover baseline, and preselecting a disabled radio is the one
+      #state the user cannot click their way out of.
+      wantHeat <- (identical(as.character(shiny::isolate(r$vftContextPreset)), "4") ||
+                     !aoiReady()) && !isTRUE(r$paintAreaTooLarge)
+      r$context         <- if(wantHeat) 4 else 1 #1 = infrastructure, 3 = housing/parking, 4 = heat mitigation
       r$oldContext      <- 0 #save prior context (0 = no context)
       #keeps track of specific edges and nodes across functions
       r$edgID           <- NULL
@@ -4111,7 +4527,14 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
       vftDbg("UPDATE NETWORK 4")
       r$updateNetworkPlot(r$updateNetworkPlot() + 1)
 
-      if(r$context %in% c(1, 3)){
+      #`aoiReady()` as well as the context, and for the same reason obsContext
+      #tests it: vftPrepareNetwork() opens with terra::extract() against
+      #`finalPolygons["AOI"]`, so dispatching it without them is an error inside
+      #a future rather than a message on screen. Contexts 1 and 3 are only ever
+      #reached without them through the "area too large" corner - the ceiling
+      #takes context 4 away, so enter() falls back to 1 - and the user's first
+      #click on the radio raises the offer to go and draw them.
+      if(r$context %in% c(1, 3) && aoiReady()){
         vftPrepareThen(r, r$position, finalPolygons, minThresh,
                        label = "Wegnetz wird vorbereitet...",
                        then  = function(){
@@ -4137,6 +4560,14 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
 
     return(list(networkList = shiny::reactive({r$networkList}), confirm = shiny::reactive({input$newVersionsConfirmButton}, label = "TESTLABEL"), trigger_1 = shiny::reactive(r$trigger), versionsUI =  shiny::reactive(r$versionsUI),
                 selectedVersion = shiny::reactive(r$selectedVersion),
+                #Two rising counts, meaning "the user asked to go and produce
+                #what this control needs". app_server turns them into the
+                #navigation - this module has neither the app's `r` nor the
+                #app's session, so it cannot call vftGoToStep() itself. Same
+                #shape as step 5's `smCreate`, which is the same offer made one
+                #page earlier.
+                smCreate  = shiny::reactive(smCreate()),
+                aoiCreate = shiny::reactive(aoiCreate()),
                 #the parking table, once vftPrepareThen() has produced it. This
                 #page can be the first to run the preparation, so it publishes
                 #parking the same way step 5 does - see the mirrors in
