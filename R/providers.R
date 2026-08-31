@@ -431,6 +431,39 @@ VFT_KEY_LABEL <- c(
   versionsUI    = "gespeicherte Versionen"
 )
 
+#' Dependents an invalidation must SPARE.
+#'
+#' One exception, and it is not a special case so much as a missing edge. A
+#' canvas - the scenario list the newVersions page runs on when it was entered
+#' through the Hitzeminderung door, see vftIsCanvasList() in R/steps.R - holds a
+#' heat design painted on the land cover inside the step-1 perimeter. It has no
+#' network, no Zielgebiete and nothing simulated, and it is derived from the
+#' PERIMETER and nothing else. `minThresh`, `finalPolygons` and the path network
+#' therefore cannot make it stale.
+#'
+#' The graph says otherwise, because it describes the ordinary scenario list:
+#' networkList <- finalPolygons <- minThresh. So confirming step 3 - which is
+#' exactly what a user does when they take this page's own offer to go and draw
+#' the Zielgebiete - discarded the painting on the way there, and step 4's
+#' confirm discarded it again on the way back. That is the whole of what this
+#' function exists to stop.
+#'
+#' `versionsUI` and `selectedVersion` go with it: the cards ARE the scenarios,
+#' one card per entry by position, and keeping one list while clearing the other
+#' leaves generateVersionButtons() resolving names against a list that is no
+#' longer there.
+#'
+#' A change to `shape` is not spared: the paint is georeferenced to the outline
+#' drawn in step 1, so a new outline really does invalidate it.
+#'
+#' @param dep the dependents this invalidation is working on, so the answer is a
+#'   subset of them and the caller can `setdiff()` it straight out.
+vftInvalidateKeep <- function(r, keys, dep){
+  if(!length(dep) || "shape" %in% keys) return(character(0))
+  if(!vftIsCanvasList(shiny::isolate(r$networkList))) return(character(0))
+  intersect(dep, c("networkList", "versionsUI", "selectedVersion"))
+}
+
 #' What would actually be lost, as text, if `keys` were discarded.
 #'
 #' Only keys that are BOTH downstream and currently populated: a warning naming
@@ -439,6 +472,11 @@ VFT_KEY_LABEL <- c(
 #' go.
 vftInvalidationPreview <- function(r, keys){
   dep <- setdiff(vftDependents(keys), VFT_PSEUDO_KEYS)
+  #the same rule vftInvalidate() applies below, asked here as well: a key that
+  #survives the invalidation is not lost, and naming it would put "2
+  #gespeicherte Versionen werden verworfen" in front of a user whose versions
+  #step 4 is about to keep and fill in.
+  dep <- setdiff(dep, vftInvalidateKeep(r, keys, dep))
   if(!length(dep)) return(character(0))
 
   live <- dep[vapply(dep, function(k) !is.null(shiny::isolate(r[[k]])), logical(1))]
@@ -468,6 +506,17 @@ vftInvalidationPreview <- function(r, keys){
 #' @return the keys that were cleared, invisibly.
 vftInvalidate <- function(r, keys, session = shiny::getDefaultReactiveDomain()){
   dep <- vftDependents(keys)
+  if(!length(dep)) return(invisible(character(0)))
+
+  #a canvas is not downstream of the areas of interest whatever the graph says -
+  #see vftInvalidateKeep(). Its HOOK is skipped with it, deliberately: the one on
+  #versionsUI re-arms r$newVersionsFirstRun and r$step6FirstRun, which would
+  #rebuild the version cards for a list that was never taken away.
+  keep <- vftInvalidateKeep(r, keys, dep)
+  dep  <- setdiff(dep, keep)
+  if(length(keep))
+    vftDbg(paste0("INVALIDATE ", paste(keys, collapse = ", "),
+                  " -> kept (canvas) ", paste(keep, collapse = ", ")))
   if(!length(dep)) return(invisible(character(0)))
 
   for(k in dep){

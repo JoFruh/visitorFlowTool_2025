@@ -114,6 +114,30 @@ vftStepTrigger <- function(session, step){
   if(n == 0L) NULL else n
 }
 
+#' Which BUTTON is "you are here"?
+#'
+#' Not the same question as which STEP the user is on, and the bar has to answer
+#' this one. Hitzeminderung is not a step - it is a second door into the
+#' newVersions page (see vftStepNav() in R/app_ui.R) - so a bar keyed on
+#' `r$navStep` alone rings "Neue Versionen" whichever door was used, and goes on
+#' ringing it while the user paints.
+#'
+#' `r$navContext` is the newVersions page's own contextChoice, published into the
+#' app by the mirror in app_server(). Reading it here rather than remembering
+#' which button was clicked is what makes the ring follow the RADIO as well: pick
+#' Hitzeminderung on the page and the bar moves, pick Wegen/Strassen and it moves
+#' back, without either of those knowing the bar exists.
+#'
+#' Reads `r` reactively on purpose - its caller is the bar's observe(), which has
+#' to re-run when either half changes. NULL before the first navigation.
+vftNavCurrentId <- function(r){
+  step <- r$navStep
+  if(is.null(step)) return(NULL)
+  if(identical(step, "newVersions") &&
+     identical(as.character(r$navContext), "4")) return("vftNav_hitze")
+  vftNavInputId(step)
+}
+
 #' Has this session already built this step's module?
 #'
 #' The visit counters are the record: `vftGoToStep()` bumps one every time it
@@ -432,7 +456,14 @@ vftNavBarServer <- function(r, input, session = shiny::getDefaultReactiveDomain(
         #clicking the step you are already on would rebuild that module server -
         #a fresh observer set on top of the live one, until Stage 5 makes the
         #modules singletons. Nothing to do, so do nothing.
-        if(identical(r$navStep, step)) return(invisible(NULL))
+        #
+        #Asked of the BUTTON, not the step: with the ring on Hitzeminderung the
+        #user IS on newVersions, so a step test swallows the click on "Neue
+        #Versionen" and that button is dead - the one way out of context 4 that
+        #does not go through the radio. newVersions is re-entrant, so the
+        #re-entry is a plain enter(), and with no contextPreset set it opens on
+        #context 1 (or stays on 4 if there are still no Zielgebiete to edit).
+        if(identical(vftNavCurrentId(r), vftNavInputId(step))) return(invisible(NULL))
         vftGoToStep(r, step, session, check = TRUE)
       }, ignoreInit = TRUE)
     })
@@ -446,6 +477,10 @@ vftNavBarServer <- function(r, input, session = shiny::getDefaultReactiveDomain(
   #every other click in this bar.
   if("newVersions" %in% steps){
     shiny::observeEvent(input$vftNav_hitze, {
+      #already behind this door - the same "nothing to do" the six step buttons
+      #make, asked the same way. Without it, clicking the ringed Hitzeminderung
+      #button re-enters newVersions and redraws the map for no reason.
+      if(identical(vftNavCurrentId(r), "vftNav_hitze")) return(invisible(NULL))
       #Set, then cleared AFTER the flush this navigation runs in - not on the
       #next line. The clear has to outlive whichever of the two ways the module
       #reads it:
@@ -480,7 +515,84 @@ vftNavBarServer <- function(r, input, session = shiny::getDefaultReactiveDomain(
   #to TRUE or FALSE, so the first run always sends.
   sent      <- stats::setNames(vector("list", length(steps)), steps)
   sentHitze <- NULL
+  sentFold  <- NULL
   current   <- NULL
+
+  #### folded or unfolded ####
+  #
+  #The bar ships with `vft-nav-folded` in the markup (vftStepNav()), so this
+  #starts TRUE and the first unfold is a real change rather than a message sent
+  #into a state the client is already in.
+  #
+  #THREE things ask for a change - the fold button's click, the ring landing on
+  #a member of the group, and a new outline being committed - and this is the
+  #only thing that writes the class, for the same reason the observe below
+  #filters its toggleState calls: every message batch the client answers costs a
+  #full manageHiddenOutputs() sweep, and "unfold" arrives from two of those three
+  #in the same flush on the ordinary path.
+  folded <- TRUE
+  setFolded <- function(on){
+    if(identical(on, folded)) return(invisible(NULL))
+    if(on) shinyjs::addClass(id = "vftNav", class = "vft-nav-folded")
+    else   shinyjs::removeClass(id = "vftNav", class = "vft-nav-folded")
+    folded <<- on
+    invisible(NULL)
+  }
+
+  #the folded group's button ids, for the "is the ring inside the group" test
+  #below. Computed once - VFT_NAV_FOLD is a constant.
+  foldIds <- vftNavInputId(VFT_NAV_FOLD)
+
+  #Clicking the stand-in button unfolds the chain AND enters its first reachable
+  #member, which is step 3 in every ordinary session. Two things at once because
+  #a disclosure that only discloses would leave the user to make a second choice
+  #they have already made: they asked for the simulation half of the tool.
+  #
+  #Unfold FIRST, then navigate: vftGoToStep() may DEFER the move while a provider
+  #derives DULN_all, and the chain has to open under the user's click rather than
+  #when the derivation lands. check = TRUE for the same reason every other click
+  #in this bar uses it - the input can be fired from the browser console.
+  #
+  #Gated on the group being in `steps` (a VFT_NAV=step1,step2 build has no fold
+  #to open), and the button then keeps the disabled attribute vftStepNav()
+  #shipped, since nothing below re-enables it either.
+  if(any(VFT_NAV_FOLD %in% steps)){
+    shiny::observeEvent(input[[VFT_NAV_FOLD_ID]], {
+      target <- shiny::isolate(vftNavFoldTarget(r, steps))
+      setFolded(FALSE)
+      if(is.null(target)){
+        vftDbg("NAV FOLD -> no reachable member")
+        return(invisible(NULL))
+      }
+      vftDbg(paste0("NAV FOLD -> unfolded, entering ", target))
+      vftGoToStep(r, target, session, check = TRUE)
+    }, ignoreInit = TRUE)
+
+    #### a new outline folds it back up ####
+    #
+    #Confirming a NEW perimeter in step 1 discards everything downstream -
+    #vftCommit() in R/providers.R names what that costs and asks first - so the
+    #walk starts again and the bar goes back to its four simple choices. The
+    #WRITE is the event, not a visit to step 1: coming back to look at the area
+    #and pressing straight through hands the same shape back, vftCommit() finds
+    #nothing changed and never writes, and the chain stays open. Cancelling the
+    #modal is the same story for the same reason.
+    #
+    #ignoreInit so the first confirm of a fresh session is a no-op (already
+    #folded); ignoreNULL = FALSE so a shape being cleared counts too.
+    #
+    #Guarded on where the user IS. Step 1's confirm runs its vftGoToStep() to
+    #step 2 synchronously inside vftCommit(), so by the time this deferred
+    #observer runs r$navStep is outside the group and it folds. The restore path
+    #also writes r$shape, and it can land the session directly on step 5 - there
+    #the guard holds the chain open, and the ring test below would reopen it
+    #anyway.
+    shiny::observeEvent(r$shape, {
+      if(shiny::isolate(r$navStep) %in% VFT_NAV_FOLD) return(invisible(NULL))
+      vftDbg("NAV FOLD -> new outline, folded back")
+      setFolded(TRUE)
+    }, ignoreInit = TRUE, ignoreNULL = FALSE)
+  }
 
   shiny::observe({
     #greyed while this session has async work outstanding, so "wait" is something
@@ -539,11 +651,40 @@ vftNavBarServer <- function(r, input, session = shiny::getDefaultReactiveDomain(
       }
     }
 
-    now <- r$navStep
+    #The stand-in button for the folded group. Live when ANY member of the group
+    #could be entered - vftNavFoldTarget() in R/steps.R, which is the same
+    #question as "where would clicking it go", asked once so the two cannot
+    #disagree. In practice that is step 3, so this lights up the moment step 1
+    #confirms. Outside the loop: it is not an answer about `s`, and it is not one
+    #of VFT_STEPS.
+    if(any(VFT_NAV_FOLD %in% steps)){
+      okFold <- !is.null(vftNavFoldTarget(r, steps)) && !busy
+      if(!identical(okFold, sentFold)){
+        shinyjs::toggleState(id = VFT_NAV_FOLD_ID, condition = okFold)
+        sentFold <<- okFold
+      }
+    }
+
+    #the ring. `now` is a BUTTON id, not a step: Hitzeminderung and Neue
+    #Versionen are two doors into one step, and which of them the user is behind
+    #is a question about the page's context. See vftNavCurrentId().
+    now <- vftNavCurrentId(r)
+
+    #A ring inside the folded group means the user is standing on a button they
+    #cannot see, so the chain opens. This is the self-correcting half of the fold
+    #and it covers every way into the group that is not the fold button's own
+    #click: step 4's confirm handing off to step 5, a restored save landing
+    #there, the fold button's own DEFERRED navigation finally completing. None of
+    #those has to know the bar folds.
+    #
+    #Not an `else` - leaving the group does NOT fold it. Only a new outline does;
+    #see the r$shape observer above.
+    if(!is.null(now) && now %in% foldIds) setFolded(FALSE)
+
     if(!is.null(now) && !identical(now, current)){
       if(!is.null(current))
-        shinyjs::removeClass(id = vftNavInputId(current), class = "vft-nav-current")
-      shinyjs::addClass(id = vftNavInputId(now), class = "vft-nav-current")
+        shinyjs::removeClass(id = current, class = "vft-nav-current")
+      shinyjs::addClass(id = now, class = "vft-nav-current")
       current <<- now
     }
   })

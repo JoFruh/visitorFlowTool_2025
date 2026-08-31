@@ -482,7 +482,13 @@ if(is.null(r$updateNetworkPlot)){
       #the running number new version buttons are named from. Deliberately NOT
       #reset on an ordinary return: r$versionBtn_nb has to keep climbing or a new
       #version would claim an inputId a live card already owns.
-      r$versionBtn_nb <- 1
+      #
+      #A first run no longer implies an empty list either. Versions painted
+      #through the Hitzeminderung door now SURVIVE step 4 - its confirm merges
+      #the path network into them instead of replacing them (see app_server) -
+      #while still re-arming r$newVersionsFirstRun, so a flat 1 here would hand
+      #the next version an inputId one of those cards is already using.
+      r$versionBtn_nb <- max(1L, length(r$versionsUI))
 
       #select original network at start
       r$position <- 1
@@ -967,6 +973,14 @@ if(is.null(r$updateNetworkPlot)){
             setPaintLevelButtons(canopyActive)
             shiny::isolate(applyPaintLevelColor(session, r, if(canopyActive) "canopy" else "ground"))
 
+            #...and then take the brush away again on the original, which is the
+            #baseline every version is compared against rather than a canvas -
+            #see setPaintEditable(). Called AFTER setPaintLevelButtons() above,
+            #which would otherwise re-enable the active level's colours. This is
+            #the only call site it needs: selecting another card bumps
+            #r$updateNetworkPlot, so a card switch arrives back here.
+            setPaintEditable(!isTRUE(shiny::isolate(r$position) == 1))
+
             #hand this version's painted state to the browser, which owns the display from
             #here on: R draws no raster layers at all. The coordinate fit is anchored on the
             #study area rather than the current view, so it stays valid as the user pans
@@ -1222,6 +1236,41 @@ setPaintLevelButtons <- function(canopyActive){
       shinyjs::addClass(btn, "paintBtnDisabled")
     }
   }
+}
+
+#ORIGINAL IS READ-ONLY, HERE TOO.
+#
+#Scenario 1 is the surveyed baseline, and on this page every other context says
+#so: the marker, shape and map click handlers are all wrapped in
+#`if(r$position != 1)`, so the network and the parking areas can be looked at on
+#the original and edited only on a version of the user's own. Context 4 was the
+#exception - the brush wrote straight onto scenario 1 - which made the land cover
+#baseline something the user could paint over instead of the thing their
+#scenarios are measured against.
+#
+#Deliberately NOT `set-paint-active FALSE`: that hides both paint panes (see
+#applyLevelStyles() in paintbrush.js), which would take the land cover off the
+#screen along with the brush and leave the original looking like an empty map.
+#Read-only keeps everything visible and only stops the strokes, so the heat
+#switch beside it still reads the baseline - which is the comparison the whole
+#feature is for.
+#
+#The colour buttons and the two brush tools are greyed with it, because a live
+#button that does nothing is worse than one that says it is unavailable. The
+#heat buttons are left alone: they read, they never write.
+setPaintEditable <- function(canEdit){
+  session$sendCustomMessage("set-paint-readonly", list(readonly = !canEdit))
+  for(btn in PAINT_BUTTONS$inputId){
+    shinyjs::toggleState(id = btn, condition = canEdit)
+    shinyjs::toggleClass(id = btn, class = "paintBtnDisabled", condition = !canEdit)
+  }
+  for(btn in c("paintLevel", "paintEraser", "paintReset")){
+    shinyjs::toggleState(id = btn, condition = canEdit)
+  }
+  #the level switch decides which colour buttons are live, so it has the last
+  #word whenever they are live at all
+  if(canEdit) setPaintLevelButtons(isTRUE(shiny::isolate(input$paintLevel)))
+  invisible(NULL)
 }
 
 shiny::observeEvent(input$paintColor_grass, {
@@ -1496,6 +1545,11 @@ observeEvent(input$paintCells, {
     if(length(pos) != 1 || is.na(pos) || pos < 1 ||
        pos > length(shiny::isolate(r$networkList))) return(NULL)
 
+    #scenario 1 is the baseline and takes no strokes - see setPaintEditable().
+    #The browser already refuses them; this is the same refusal on the side that
+    #owns the data, since a custom message can be fired from a console.
+    if(pos == 1) return(NULL)
+
     for(fld in c("paintedRaster", "canopyRaster")){
       runs <- if(fld == "canopyRaster") delta$canopy else delta$ground
       if(is.null(runs) || length(runs) == 0) next
@@ -1611,7 +1665,14 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
       obsFinishRender <- shiny::observeEvent(input$versionMap_groups,{
         vftDbg("GROUPS CHANGED")
         vftDbg(input$versionMap_groups)
-        shinyjs::enable("newVersionsConfirmButton")
+        #"Weiter" leads to step 5, which simulates - so it stays greyed while
+        #this page holds nothing but a canvas (the Hitzeminderung door, no path
+        #network and no Zielgebiete yet). vftGoToStep() would refuse the move
+        #anyway, with a notification naming steps 3 and 4, but a button that
+        #cannot work should not be offered. It re-enables by itself once step 4
+        #has merged the network into these scenarios.
+        shinyjs::toggleState(id = "newVersionsConfirmButton",
+                             condition = !vftIsCanvasList(shiny::isolate(r$networkList)))
         shinyjs::enable("addVersionButton")
         shinyjs::enable("contextChoice")
         for(btn in r$versionsUI){
@@ -4367,30 +4428,34 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
       minThresh     <<- .rx$minThresh()
       selectedVersion <<- .rx$selectedVersion()
 
-      #--- 1b. HEAT-ONLY MODE: somewhere to put the paint.
+      #--- 1b. HEAT-ONLY MODE: the baseline scenario.
       #
       #The Hitzeminderung door opens on the step-1 perimeter alone
       #(VFT_HITZE_NEEDS, R/steps.R), so this visit can arrive with no scenario
       #list at all - step 4 has never been confirmed and step 5 has never run.
-      #Context 4 itself needs none of that; what it does need is a slot to hold
-      #the strokes, because the paint is stored per scenario
-      #(r$networkList[[pos]]$paintedRaster, written by the paintCells observer)
-      #and an empty list means every stroke is silently dropped.
+      #Context 4 itself needs none of that, but the page does need a scenario:
+      #the version cards ARE the scenario list, and every read on this page
+      #indexes it by r$position.
       #
-      #So one placeholder scenario is created here, with exactly the fields the
-      #rest of the module reads and all of them NULL. It is not a fake network:
-      #`network` is NULL, which is the same state a scenario has before
-      #vftPrepareThen() has run on it, and every read of it on this page already
-      #handles that. It mirrors into the app's `r$networkList` like any other
-      #scenario (vftMirror in app_server.R), which is what makes the paint
-      #survive a trip to another step and back.
+      #So "Original" is created here, with exactly the fields the rest of the
+      #module reads and all of them NULL. It is not a fake network: `network` is
+      #NULL, which is the same state a scenario has before vftPrepareThen() has
+      #run on it, and every read of it on this page already handles that. It
+      #mirrors into the app's `r$networkList` like any other scenario (vftMirror
+      #in app_server.R), which is what makes it - and the versions the user then
+      #adds to it - survive a trip to another step and back.
+      #
+      #It is the BASELINE, not a canvas: as in the other two contexts, scenario 1
+      #cannot be edited (setPaintEditable(), called from the context 4 render), so
+      #a heat design goes in a version the user adds with "Neue Version
+      #hinzufügen" - which copies this one, tag included.
       #
       #Deliberately NOT conditional on the preset: an empty list is unusable in
       #every context, so this is "give the page something to work with", not
       #"this visit is a heat visit".
       heatOnly <<- length(networkList) == 0
       if(heatOnly){
-        vftDbg("NEWVERSIONS: heat-only mode - seeding a placeholder scenario")
+        vftDbg("NEWVERSIONS: heat-only mode - seeding the baseline scenario")
         networkList <<- list(list(network = NULL, pathUsage = NULL,
                                   parking = NULL, residential = NULL,
                                   newAttr = NULL, paintedRaster = NULL,
@@ -4400,8 +4465,9 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
                                   #into the app's r$networkList - from making
                                   #step 5 and the ordinary newVersions door look
                                   #reachable: they need SCENARIOS, and this is a
-                                  #canvas. Step 4's confirm rebuilds the list
-                                  #without the tag, and that is what clears it.
+                                  #canvas. Step 4's confirm merges the path
+                                  #network into these entries and drops the tag,
+                                  #and that is what clears it.
                                   heatOnly = TRUE))
         #and a card to hang it on, in createOriginalVersion()'s shape (see
         #step5_server.R) so that the two pages agree on what "Original" is if
@@ -4568,6 +4634,14 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
                 #page earlier.
                 smCreate  = shiny::reactive(smCreate()),
                 aoiCreate = shiny::reactive(aoiCreate()),
+                #which of this page's contexts is showing, for the nav bar: it
+                #rings "Hitzeminderung" rather than "Neue Versionen" on context
+                #4, and the two are the same tab and the same module, so the
+                #context is the only thing that tells them apart. See
+                #vftNavCurrentId() in R/navigation.R. Written by enter() on
+                #arrival and by obsContext on every change of the radio, so the
+                #ring follows both doors and the control itself.
+                context   = shiny::reactive(r$context),
                 #the parking table, once vftPrepareThen() has produced it. This
                 #page can be the first to run the preparation, so it publishes
                 #parking the same way step 5 does - see the mirrors in

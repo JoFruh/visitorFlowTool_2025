@@ -51,6 +51,13 @@
     overlay:      null,
     canopyActive: false,
     active:       false,
+    //armed, but looking only. The original scenario is the surveyed baseline
+    //every version is compared against, so it is displayed and not painted -
+    //the same rule the other two contexts apply to the network and the parking
+    //areas. Separate from `active` because active=false hides both panes (see
+    //applyLevelStyles), which would take the land cover off the screen with the
+    //brush and leave the original looking like an empty map.
+    readonly:     false,
     //rolling record of the events that decide whether paint is armed and drawn.
     //Reasoning backwards from a single end-state flag repeatedly gave the wrong
     //answer here, because the flag says what is true now and not who last set
@@ -668,7 +675,9 @@
 
   function updateCursor() {
     if (!state.overlay) return;
-    if (!state.active) { state.overlay.style.cursor = "default"; return; }
+    //readonly as well as disarmed: a brush cursor over a scenario that takes no
+    //strokes is an invitation to try
+    if (!state.active || state.readonly) { state.overlay.style.cursor = "default"; return; }
     var r    = state.brushRadius;
     var size = r * 2 + 4;
     //the eraser shows an empty dashed ring: nothing is being added, and the
@@ -855,7 +864,10 @@
   function applyActive() {
     applyLevelStyles();
     if (!state.overlay) return;
-    state.overlay.style.pointerEvents = state.active ? "auto" : "none";
+    //`readonly` takes the input overlay out of the way, so clicks and drags go
+    //to the map (pan and zoom keep working) and no stroke is ever registered.
+    //Pane visibility is left to `active` alone, so the layers stay on screen.
+    state.overlay.style.pointerEvents = (state.active && !state.readonly) ? "auto" : "none";
     updateCursor();
   }
 
@@ -909,6 +921,7 @@
       attached:     map === state.map && !!state.map,
       overlay:      !!state.overlay && !!state.overlay.isConnected,
       active:       state.active,
+      readonly:     state.readonly,
       canopyActive: state.canopyActive,
       erasing:      state.erasing,
       res:          state.res,
@@ -1102,6 +1115,15 @@
     state.active = !!active;
     applyActive();
     reportDebug(state.active ? "paint-armed" : "paint-disarmed");
+  });
+
+  on("set-paint-readonly", function (msg) {
+    var ro = !!(msg && msg.readonly);
+    trace("set-paint-readonly(" + ro + ")");
+    if (ro) flush();   //whatever was painted before the switch still belongs to R
+    state.readonly = ro;
+    applyActive();
+    reportDebug(ro ? "paint-readonly" : "paint-writable");
   });
 
   on("set-paint-color", function (msg) {

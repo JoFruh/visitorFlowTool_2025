@@ -44,13 +44,13 @@
 #' not simply "not NULL".
 VFT_STEPS <- list(
   step1       = list(tab = "tab_step1",       code = 1L,
-                     label = "1 Gebiet",
+                     label = "1 Gebiet wählen",
                      needs = character(0)),
   step2       = list(tab = "tab_step2",       code = 2L,
-                     label = "2 Sensibilität",
+                     label = "2 Sensibilität der Biodiversität",
                      needs = "shape"),
   step3       = list(tab = "tab_step3",       code = 3L,
-                     label = "3 Interessengebiete",
+                     label = "3 ZG definieren",
                      needs = c("shape", "DULN_all")),
   #`network` and `networkNodes` are NOT here, despite the label. Step 4 draws and
   #edits AOI polygons; it does not read a single node or edge to do it. The map
@@ -65,7 +65,7 @@ VFT_STEPS <- list(
   #vftPrepareThen() in R/prepare_network.R. It is cached in `r$network` from then
   #on, so it is loaded once per perimeter and never again.
   step4       = list(tab = "tab_step4",       code = 4L,
-                     label = "4 Wegnetz",
+                     label = "4 ZG bearbeiten",
                      needs = c("shape", "DULN", "DULN_all", "minThresh")),
   #`minThresh` is new on both of these. The attractivity-weighted edge distances
   #used to be baked into the network by step 4's confirm; they are computed when
@@ -91,10 +91,10 @@ VFT_STEPS <- list(
   #one (step5_server.R's smAskCreate()), and newVersions already branches on
   #`is.null(SM_pres)` at each of its three draw sites.
   step5       = list(tab = "tab_step5",       code = 5L,
-                     label = "5 Simulation",
+                     label = "5 Naherholung simulieren",
                      needs = c("networkList", "shape", "minThresh")),
   newVersions = list(tab = "tab_newVersions", code = NA_integer_,
-                     label = "Neue Versionen",
+                     label = "Szenarien erstellen",
                      needs = c("networkList", "finalPolygons", "DULN", "shape",
                                "minThresh"))
 )
@@ -102,9 +102,54 @@ VFT_STEPS <- list(
 #' How the nav bar groups its buttons, left to right.
 #'
 #' Purely cosmetic - a thick white separator (see vftStepNav() in R/app_ui.R)
-#' goes between these groups and nowhere else. Steps 3-5 sit together because
-#' they all work the same perimeter once it exists.
-VFT_NAV_GROUPS <- list("step1", "step2", c("step3", "step4", "step5"), "newVersions")
+#' goes between these groups and nowhere else. Steps 3-5 and newVersions sit
+#' together because they all work the same perimeter once it exists: everything
+#' downstream of the outline that leads to, and comes out of, a simulation.
+#'
+#' newVersions used to be a group of its own, with a separator in front of it.
+#' It is plugged into the right-hand end of the chevron chain instead - it is
+#' the last thing a user does with a simulation, not a destination beside it.
+#' Hitzeminderung is still separate, and still added by hand after the loop: it
+#' is not a VFT_STEPS entry, so this registry has nothing to hold for it.
+VFT_NAV_GROUPS <- list("step1", "step2",
+                       c("step3", "step4", "step5", "newVersions"))
+
+#### Folding the simulation half of the bar ####
+
+# Seven destinations at once is the whole depth of the tool shown to someone who
+# has not drawn anything yet. Four of the seven are one piece of work, and they
+# are exactly the group above, so the bar ships with that group FOLDED behind a
+# single button and offers four choices to start with:
+#
+#   Gebiet waehlen | Sensibilitaet der Biodiversitaet |
+#   Naherholung simulieren | Hitzeminderung
+#
+# Clicking the folded button unfolds the chain and enters its first reachable
+# member (step 3 in practice). It folds back only when step 1 commits a NEW
+# outline - that write discards everything downstream, so the walk starts again.
+#
+# Nothing about this is an output. Both the folded button and the four chevrons
+# are always in the markup; ONE class on #vftNav decides which of them is
+# displayed. See vftStepNav() in R/app_ui.R and vftNavBarServer() in
+# R/navigation.R, which is the only writer of that class.
+
+#' The one group the bar can fold up.
+#'
+#' Compared with `identical()` against the entries of VFT_NAV_GROUPS, so the two
+#' cannot drift: change the group there without changing this and the group is
+#' simply never folded, rather than half-folded.
+VFT_NAV_FOLD <- c("step3", "step4", "step5", "newVersions")
+
+#' The input id of the button that stands in for the folded group.
+VFT_NAV_FOLD_ID <- "vftNav_sim"
+
+#' Whose label and translations that button borrows.
+#'
+#' step5's, i.e. "Naherholung simulieren" - the umbrella name for what the
+#' whole group does, and a `:nav_step5:` row the translation CSVs already
+#' carry, so folding the bar needs no new i18n string. The button is NOT step 5: clicking it enters
+#' vftNavFoldTarget(), which is normally step 3.
+VFT_NAV_FOLD_LABEL <- "step5"
 
 #' Which hidden per-module input each step's banner controls actually are.
 #'
@@ -213,11 +258,11 @@ VFT_KEY_READY <- list(
   #' A list of scenarios, not a canvas.
   #'
   #' The Hitzeminderung door opens on the perimeter alone, and the newVersions
-  #' page then seeds one placeholder entry so the paint has somewhere to live -
-  #' see enter() there. That entry is mirrored into `r$networkList` like any
-  #' other scenario, which is what makes the painting survive a trip to another
-  #' step and back, and it carries `heatOnly = TRUE` so that this test can tell
-  #' it apart from the real thing.
+  #' page then seeds a baseline "Original" so the page has a card and the paint a
+  #' place to be copied from - see enter() there. It is mirrored into
+  #' `r$networkList` like any other scenario, which is what makes the painting
+  #' survive a trip to another step and back, and it carries `heatOnly = TRUE` so
+  #' that this test can tell it apart from the real thing.
   #'
   #' Without the distinction a heat-only session that then SKIPPED step 3 (which
   #' satisfies `minThresh` without producing anything) would light step 5 up:
@@ -225,15 +270,34 @@ VFT_KEY_READY <- list(
   #' would go on to prepare a scenario against a NULL `finalPolygons`, which is
   #' an error inside a future rather than a message on screen. The two steps that
   #' name this key want scenarios; a canvas is not one.
+  #Both halves: an ABSENT or empty list is not a canvas either, and it is not a
+  #list of scenarios - it is nothing.
   networkList = function(r){
     nl <- r$networkList
-    if(is.null(nl) || !length(nl)) return(FALSE)
-    #is.list first: `$` aborts on an atomic, and this runs inside the nav bar's
-    #observe on every change to `r`, where an abort takes the whole session's
-    #navigation with it rather than answering "not ready".
-    !all(vapply(nl, function(v) is.list(v) && isTRUE(v$heatOnly), logical(1)))
+    is.list(nl) && length(nl) > 0 && !vftIsCanvasList(nl)
   }
 )
+
+#' Is this scenario list a CANVAS - somewhere to paint - rather than scenarios?
+#'
+#' TRUE for the list the newVersions page runs on when it was entered through the
+#' Hitzeminderung door: every entry tagged `heatOnly = TRUE`, no network, no areas
+#' of interest, nothing simulated. FALSE for an empty or absent list, which is not
+#' a canvas either - it is nothing.
+#'
+#' One function rather than two copies of the test, because two rules ask it and
+#' they must never disagree: VFT_KEY_READY above (a canvas does not make step 5
+#' reachable) and vftInvalidateKeep() in R/providers.R (a canvas is not discarded
+#' by the steps that produce the path network and the Zielgebiete, because it was
+#' not derived from either).
+#'
+#' `is.list()` per entry before `$`: `$` aborts on an atomic, and both callers run
+#' inside observers where an abort takes the whole session's navigation with it
+#' rather than answering "no".
+vftIsCanvasList <- function(nl){
+  if(!is.list(nl) || !length(nl)) return(FALSE)
+  all(vapply(nl, function(v) is.list(v) && isTRUE(v$heatOnly), logical(1)))
+}
 
 #' Is the step nav bar switched on?
 #'
@@ -369,6 +433,27 @@ vftStepReachable <- function(r, step){
   all(vapply(missing, function(k) vftKeyDerivable(r, k), logical(1)))
 }
 
+#' The first member of the folded group this session could actually enter.
+#'
+#' Two answers in one: it is where the folded button navigates to, and - through
+#' `is.null()` on the result - whether that button is enabled at all. One
+#' function so those two can never disagree, the way vftIsCanvasList() is one
+#' function for its two callers.
+#'
+#' In practice this is step 3 the moment the perimeter exists: step 3 needs
+#' `shape` and `DULN_all`, and the second is derivable from the first, so
+#' "reachable" here is exactly the user's "once step 1 is complete". Later
+#' members are candidates only for a build whose VFT_NAV list leaves step 3 out.
+#'
+#' Reads `r`, so calling it inside an observe takes a dependency on those keys -
+#' which is what makes the folded button light up on its own, the same way every
+#' other button in the bar does.
+vftNavFoldTarget <- function(r, steps = vftNavSteps()){
+  cand <- VFT_NAV_FOLD[VFT_NAV_FOLD %in% steps]
+  for(s in cand) if(vftStepReachable(r, s)) return(s)
+  NULL
+}
+
 #### The Hitzeminderung door ####
 
 # Hitzeminderung is not a step - it is a second door into the newVersions page
@@ -382,9 +467,10 @@ vftStepReachable <- function(r, step){
 # in the first place.
 #
 # So the door opens on the perimeter alone. The page then runs in what
-# newVersions_server.R calls heat-only mode: one placeholder scenario to hold the
-# paint, and the two edit contexts offering to go and produce what they need
-# rather than being drawn dark.
+# newVersions_server.R calls heat-only mode: a baseline "Original" scenario and
+# nothing else, so the user adds a version of their own to paint on (Original is
+# read-only here exactly as it is in the two edit contexts), and those contexts
+# offer to go and produce what they need rather than being drawn dark.
 
 #' What the Hitzeminderung door needs, as opposed to what newVersions needs.
 #'

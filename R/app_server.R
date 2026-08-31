@@ -828,9 +828,47 @@ app_server <- function(input, output, session){
         #newVersions and caches it in r$network, and a scenario built after that
         #gets the cached copy for free. Reading it here is "use it if it has
         #already been paid for", never "go and fetch it".
-        newList <- list(list(network = r$network, pathUsage = NULL,
-                             parking = NULL, residential = NULL,
-                             newAttr = NULL))
+        #
+        #AND IT MAY NOT BE A NEW LIST AT ALL. A user who came in through the
+        #Hitzeminderung door has been painting heat designs on a scenario list
+        #that has no network and no Zielgebiete - a canvas, vftIsCanvasList() in
+        #R/steps.R - and took this page's own offer to go and draw them. Their
+        #versions are the reason they are here; replacing them with one empty
+        #scenario would throw the work away at the moment it became usable.
+        #
+        #So the confirmation ARRIVES INTO them: same entries, same order (card i
+        #still names scenario i, and Original is still 1, which is what lets step
+        #5's createOriginalVersion() overwrite its card in place instead of
+        #appending one with no scenario behind it), each one gaining the network
+        #and losing the `heatOnly` tag - which is precisely what turns the canvas
+        #back into a scenario list for VFT_KEY_READY. The paint rides along
+        #untouched in paintedRaster/canopyRaster.
+        #
+        #Only when EVERYTHING on hand is a canvas. A real scenario list here means
+        #step 4 is being re-confirmed with changed areas of interest, and those
+        #scenarios were computed against the old ones: replacing them is right,
+        #and vftCommit() below asks first.
+        prior <- shiny::isolate(r$networkList)
+        if(vftIsCanvasList(prior)){
+          vftDbg(paste0("STEP4: merging the Zielgebiete into ", length(prior),
+                        " painted scenario(s) rather than replacing them"))
+          newList <- lapply(prior, function(v){
+            #built as a literal, exactly like the fresh scenario below, rather
+            #than by editing `v` in place: assigning NULL to a list element
+            #REMOVES it, so `v$network <- r$network` on the usual NULL would
+            #leave a scenario with no `network` field at all. Every read of it
+            #answers NULL either way, but a scenario should have the same shape
+            #whichever branch made it. The two rasters are the paint, and they
+            #are the whole reason this branch exists.
+            list(network = r$network, pathUsage = NULL, parking = NULL,
+                 residential = NULL, newAttr = NULL,
+                 paintedRaster = v$paintedRaster, canopyRaster = v$canopyRaster)
+          })
+        }else{
+          newList <- list(list(network = r$network, pathUsage = NULL,
+                               parking = NULL, residential = NULL,
+                               newAttr = NULL))
+        }
 
         #`network` and `parking` are no longer committed here. r$network is the
         #step-1 provider's key and step 4 was overwriting it with an
@@ -1093,6 +1131,11 @@ app_server <- function(input, output, session){
     #this page can be the first to run the preparation - see the context
     #observer in newVersions_server.R - so it publishes parking too.
     vftMirror(r, "parking",     newVersionsReturn$parking)
+    #which context the page is showing, for the nav bar alone: "Hitzeminderung"
+    #and "Neue Versionen" are two doors into this one module, and the ring has to
+    #sit on the one the user came through - and move when they change the radio.
+    #See vftNavCurrentId() in R/navigation.R; nothing else reads this key.
+    vftMirror(r, "navContext",  newVersionsReturn$context)
 
     #### the newVersions page's two offers ####
     #
