@@ -610,6 +610,27 @@ app_server <- function(input, output, session){
     #use shape information to clip, prepare and present SDM information
     vftDbgCat(paste0("DULN ALL 2: ", r$DULN_all))
 
+    #PREFETCH THE 7-BAND CROP WHILE THE USER IS ON THIS STEP.
+    #
+    #Step 4 needs `DULN` and step 3 needs only `DULN_all`, so `r$DULN` was still
+    #NULL when the confirm button was pressed - and vftGoToStep() therefore
+    #DEFERRED the whole navigation while the provider cropped the national COG
+    #(R/navigation.R, "hold the move until the step's data exists"). The user
+    #waited for it on step 3 with nothing to look at, and with VFT_WORKERS=1 it
+    #ran strictly BEFORE the areas-of-interest job rather than beside it.
+    #
+    #It depends on `shapeLarger` alone, which has existed since step 1, and this
+    #is a page the user spends time on moving a slider. Asking for it here costs
+    #the confirm click nothing and usually saves it the whole crop: vftEnsure()
+    #only adds to the wanted set, the provider's own in-flight marker stops a
+    #second dispatch, and if the crop has not landed by confirm time the
+    #existing vftSetPendingStep() path completes the navigation when it does -
+    #which is exactly what happened before, only started earlier.
+    #
+    #Outside vftModuleOnce() on purpose: this re-arms on every entry to step 3,
+    #including a return after the perimeter changed and invalidated the crop.
+    vftEnsure(r, "DULN", session)
+
     #FIRST-TOUCH SINGLETON (Stage 5). Built on the first visit and reused
     #afterwards; vftGoToStep() calls its enter() on every return. Everything in
     #this block - the module AND the two observers on its handle - runs exactly
@@ -741,7 +762,9 @@ app_server <- function(input, output, session){
     #network it had frozen before the area of interest changed.
     vftModuleOnce(session, "step4", function(){
     step4return <- vftTime("module:step4", step4_server("step4",
-                                network       = shiny::reactive(r$network),
+                                #`network` is not passed and is not wanted: this
+                                #step edits AOI polygons cut out of the DULN
+                                #rasters and never reads a path. See R/steps.R.
                                 minThresh     = shiny::reactive(r$minThresh),
                                 skip          = shiny::reactive(r$isSkip),
                                 DULN          = shiny::reactive(r$DULN),
@@ -789,14 +812,22 @@ app_server <- function(input, output, session){
         #than being assigned here. If the user has simulations or saved versions,
         #this is the write that asks them first.
         #
-        #The network in it is the RAW one the step-1 provider derived, and
-        #`parking` is NULL. Both used to be step 4's own output, from the ~30s
-        #job that has moved to R/prepare_network.R - it now runs when the first
-        #simulation is launched, which is where the first read of either happens.
-        #Everything between here and there works on the raw network: the scenario
-        #cards are labelled buttons, the map before a simulation is a static
+        #The network in it is the RAW one the provider derived, and `parking` is
+        #NULL. Both used to be step 4's own output, from the ~30s job that has
+        #moved to R/prepare_network.R - it now runs when the first simulation is
+        #launched, which is where the first read of either happens. Everything
+        #between here and there works without paths at all: the scenario cards
+        #are labelled buttons, the map before a simulation is a static
         #placeholder, and every display checkbox that would want the prepared
         #columns is disabled until a pathUsage exists.
+        #
+        #AND r$network IS USUALLY NULL AT THIS POINT, which is deliberate and is
+        #why this is a plain read rather than a vftEnsure(). No step's `needs`
+        #names the network any more, so nothing on the way here has loaded it;
+        #vftPrepareThen() loads it on the first simulation or the first visit to
+        #newVersions and caches it in r$network, and a scenario built after that
+        #gets the cached copy for free. Reading it here is "use it if it has
+        #already been paid for", never "go and fetch it".
         newList <- list(list(network = r$network, pathUsage = NULL,
                              parking = NULL, residential = NULL,
                              newAttr = NULL))

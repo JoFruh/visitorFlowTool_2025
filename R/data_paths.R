@@ -131,6 +131,41 @@ vftData <- function(...){
 #' layer, but keep it well under the width of the features being drawn.
 VFT_PA_TOLERANCE_M <- 25
 
+#' Simplification tolerance for the generated areas of interest, in metres.
+#'
+#' Same lever as VFT_PA_TOLERANCE_M above, applied to the polygons generateAoI2()
+#' cuts out of the attractiveness raster. terra::as.polygons() traces CELL
+#' BOUNDARIES, so those rings arrive as staircases carrying far more vertices
+#' than their shape needs - three features with a huge vertex count, which is
+#' exactly the case st_simplify() helps and the opposite of the path network (see
+#' vftAddNetworkLines() below, where the cost was edge count and simplifying
+#' bought almost nothing).
+#'
+#' It pays three times over: the GeoJSON step 4 serialises on the main thread for
+#' every draw and every edit, the terra::extract() that scores each polygon, and
+#' every st_intersects()/st_nearest_feature() the simulation and the newVersions
+#' page later run against the confirmed set.
+#'
+#' 75 m, NOT the 25 m used above, and the difference is the whole point: a
+#' tolerance below the cell size cannot remove a staircase step, because every
+#' vertex of a staircase is already further off the straight line than that.
+#' DULN_nat_majMaxMeanAGGBlur.tif is 0.00096 deg, which at 47 N is 73 x 106 m,
+#' so 25 m here would have been a no-op. Measured on a thresholded random field
+#' at exactly that resolution (117 polygons, 7301 vertices unsimplified):
+#'
+#'   tolerance   vertices   dropped   sum area   GeoJSON
+#'      25 m        7301      0.0%     -0.000%     286 KB
+#'      50 m        5133     29.7%     -0.055%     206 KB
+#'      75 m        2623     64.1%     -0.133%     112 KB
+#'     100 m        1937     73.5%     -0.122%      87 KB
+#'     150 m        1399     80.8%     -1.231%      67 KB
+#'
+#' 75 m is the knee: two thirds of the vertices and 61% of the payload gone for
+#' a 0.13% change in reported area. Past 100 m the area starts to cost real
+#' money for very little more. 0 switches simplification off, which is the A/B
+#' if the outlines ever look wrong.
+VFT_AOI_TOLERANCE_M <- 75
+
 vftProtectedAreasCached <- function(tolerance = VFT_PA_TOLERANCE_M){
   if(!exists(".vft_PA_simplified", envir = .GlobalEnv)){
     pa <- sf::st_read(vftData("maps/protectedAreas/PA_all.gpkg"), quiet = TRUE)

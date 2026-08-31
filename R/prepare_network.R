@@ -302,10 +302,28 @@ vftPrepareNetwork <- function(network, finalPolygons, minThresh,
 #' The one door both call sites use, so that "has this scenario been prepared"
 #' is answered in one place rather than two.
 #'
+#' THIS IS ALSO WHERE THE PATH NETWORK IS LOADED. No step's `needs` names
+#' `network` any more (see R/steps.R), so steps 1-4 never touch the paths GDB at
+#' all: a user who draws a perimeter, picks species, moves the attractiveness
+#' slider three times and redraws their areas of interest pays for two raster
+#' crops and nothing else. The two callers of this function are the two places
+#' that genuinely read paths - the simulation launch in step 5, and the
+#' newVersions page's "Wegen/Strassen" and "Parken/Wohnen" contexts - and both
+#' arrive through here.
+#'
+#' Loaded ONCE. The raw graph lands in the app-level `r$network`, which is a
+#' provider key and therefore survives until the PERIMETER changes; every
+#' scenario built afterwards is seeded from it (app_server's step-4 confirm) and
+#' every new version copies the prepared graph off scenario 1 (newVersions). So
+#' the GDB read happens once per perimeter no matter how many simulations, new
+#' versions, threshold changes or redrawn polygons follow.
+#'
 #' `r` is the CALLING MODULE's own reactiveValues - step 5 and the newVersions
 #' page each shadow the app-level one - and `pos` the index into its
 #' `r$networkList`. On success the prepared network and the parking table are
-#' written back into that scenario, so a second call is free.
+#' written back into that scenario, so a second call is free. The app-level `r`
+#' the network load needs is reached through vftAppReactives(), because a module
+#' has by construction shadowed the name.
 #'
 #' `then` is a callback rather than a return value for the reason the whole app
 #' is written this way: nothing is awaited. When the network is already prepared
@@ -314,9 +332,12 @@ vftPrepareNetwork <- function(network, finalPolygons, minThresh,
 #'
 #' @param label progress bar message.
 #' @param enable input ids for vftAsyncError() to re-enable if the job fails.
+#' @param session the module's session; its userData is shared with the root's,
+#'   which is how the provider layer is reached.
 vftPrepareThen <- function(r, pos, finalPolygons, minThresh, then,
                            label = "Wegnetz wird vorbereitet...",
-                           enable = NULL){
+                           enable = NULL,
+                           session = shiny::getDefaultReactiveDomain()){
 
   #Guarded rather than a bare [[ ]]: this runs inside an observer, and a
   #subscript error here would take that observer down with it rather than
@@ -342,6 +363,56 @@ vftPrepareThen <- function(r, pos, finalPolygons, minThresh, then,
     then()
     return(invisible(FALSE))
   }
+
+  #### stage 1: the raw path network, if this session has not loaded it yet ####
+  #
+  #The scenario was seeded from `r$network` when step 4 confirmed, and that was
+  #NULL unless some earlier simulation had already paid for the load. Ask the
+  #provider layer for it and come back to this same function when it lands - the
+  #re-entry then finds a scenario with a network in it and falls through to
+  #stage 2 below, so there is one preparation path rather than two.
+  #
+  #The scenario is re-read on re-entry rather than captured here on purpose: the
+  #load takes ~30s, and the user can delete a version or confirm new areas of
+  #interest in that time. Every guard above therefore runs again against what is
+  #actually in the list.
+  if(is.null(scenario$network)){
+    appR <- vftAppReactives(session)
+    base <- if(is.null(appR)) NULL else shiny::isolate(appR$network)
+
+    if(!is.null(base)){
+      #already loaded earlier in this session: free, and in this same tick.
+      vftDbg(paste0("PREPARE: seeding scenario ", pos, " from the cached network"))
+      shiny::isolate(r$networkList[[pos]]$network <- base)
+      scenario$network <- base
+    }else{
+      vftDbg(paste0("PREPARE: scenario ", pos, " has no network - loading it"))
+      ok <- vftEnsureThen(
+        "network",
+        session = session,
+        then = function(){
+          vftPrepareThen(r, pos, finalPolygons, minThresh, then,
+                         label = label, enable = enable, session = session)
+        },
+        #the provider layer opens and closes its own progress bar and shows its
+        #own error notification, so there is nothing to report here - only the
+        #caller's buttons to put back.
+        onFail = function(){
+          for(el in enable) try(shinyjs::enable(el), silent = TRUE)
+        })
+
+      if(!isTRUE(ok)){
+        #no provider server on this session (tests, or a build without one).
+        #Nothing can produce the network, so behave like the missing-scenario
+        #case above rather than dispatching a preparation against a NULL graph.
+        vftDbg("PREPARE: no provider layer to load the network from")
+        for(el in enable) try(shinyjs::enable(el), silent = TRUE)
+      }
+      return(invisible(ok))
+    }
+  }
+
+  #### stage 2: everything the scenario's own network still needs ####
 
   vftDbg(paste0("PREPARE: scenario ", pos))
 

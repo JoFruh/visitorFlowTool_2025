@@ -27,7 +27,11 @@
 #' alongside the other three, and enter() clears all five before plotMap() makes
 #' new ones - the user can leave this step by the nav bar without confirming, and
 #' then nothing would have destroyed them.
-step4_server <- function(id, network, minThresh, i18n, currentLang,
+#' `network` is gone from this signature. This step never read it: the map
+#' stopped drawing the paths as a grey backdrop, and generateAoI2() took it as an
+#' argument without ever touching it. Asking for it made opening step 4 dispatch
+#' the ~30s path-network job - see the note on step4's `needs` in R/steps.R.
+step4_server <- function(id, minThresh, i18n, currentLang,
                          skip = shiny::reactive(FALSE),
                          needHelp = shiny::reactive(NULL),
                          finalPolygons = shiny::reactive(NULL),
@@ -45,7 +49,7 @@ step4_server <- function(id, network, minThresh, i18n, currentLang,
   #shape is the submitted shapefile, or shape produced by submitted coordinates
   #The reactives, held under different names so that the locals below can shadow
   #them. Everything after this point reads plain values.
-  .rx <- list(network = network, minThresh = minThresh, currentLang = currentLang,
+  .rx <- list(minThresh = minThresh, currentLang = currentLang,
               skip = skip, needHelp = needHelp, finalPolygons = finalPolygons,
               DULN = DULN, DULN_all = DULN_all, shape = shape)
 
@@ -53,7 +57,6 @@ step4_server <- function(id, network, minThresh, i18n, currentLang,
 
     #per-visit snapshots. enter() refills these; the body and every closure in it
     #resolve them lexically from here, so nothing else in this file changes.
-    network       <- NULL
     minThresh     <- NULL
     currentLang   <- NULL
     skip          <- FALSE
@@ -70,6 +73,48 @@ step4_server <- function(id, network, minThresh, i18n, currentLang,
     #visit - coming back to adjust a polygon must not re-read it.
     cache <- new.env(parent = emptyenv())
     cache$shape <- NULL
+
+    #' The walkNat band with the lakes cut out of it, built on FIRST EDIT.
+    #'
+    #' This is what the four manual handlers below score a hand-drawn, split or
+    #' holed polygon against. It used to be built in enter(), which meant every
+    #' ARRIVAL at this step paid a read of lakes.gdb plus a rasterize on the
+    #' shared main thread - before the map was drawn, for a raster that is only
+    #' touched if the user goes on to edit something.
+    #'
+    #' On the normal path this body never runs at all: generateAoI2() has to mask
+    #' the lakes to score the areas it generates, so it hands the raster back
+    #' from the worker and the promise handler in .vftStep4Launch() fills the
+    #' cache. What is left here is the skip branch and the replay branch, where
+    #' no generation happened and there is nothing to inherit - and there the
+    #' cost lands on the first click rather than on the way in.
+    #'
+    #' Keyed on `shape`, not on the visit: a different perimeter is a different
+    #' cutout, the same perimeter re-entered is not.
+    .vftDULNna <- function(){
+      if(is.null(cache$DULN_na) || !identical(cache$shape, shape)){
+        if(is.null(shape) || is.null(DULN)) return(NULL)
+
+        #get lakes and add NAs in place of lakes
+        #before extracting values, remove lakes (make them NA)
+        wkt <- sf::st_as_text( sf::st_as_sfc(sf::st_transform(shape, "epsg:2056") ) )
+
+        lakes <- sf::st_read( vftData("maps/lakes.gdb"),
+                              query = 'SELECT * FROM "lakes"',
+                              wkt_filter = wkt)
+        lakes <- sf::st_transform(lakes[lakes$SHAPE_Area > 10000, ], "epsg:4326")
+
+        #remove lakes from DULN raster (save seperately)
+        DULN_na <- DULN$walkNat
+        if(nrow(lakes) > 0) DULN_na[terra::vect(lakes)] <- NA
+        #keep name
+        names(DULN_na) <- "walkNat"
+
+        cache$shape   <- shape
+        cache$DULN_na <- DULN_na
+      }
+      cache$DULN_na
+    }
 
     # if(r$needHelp == TRUE){
     #
@@ -112,6 +157,151 @@ step4_server <- function(id, network, minThresh, i18n, currentLang,
     # (r$finalPolygons and r$confirm are seeded by enter(), at the
     #  bottom of this function, so that a return to this step starts from the
     #  same state a first arrival does.)
+
+    #### Session-lifetime observers ####
+    #
+    #These five used to be created INSIDE plotMap(), which runs once per visit
+    #and again on every r$promiseFinished. enter() destroys the five
+    #map-interaction observers before plotMap() makes new ones, but these were
+    #never on that list, so every visit stacked another live copy on top of the
+    #last: two help modals for one click, two language switches for one
+    #selection, and a reset button that redrew the map as many times as the step
+    #had been entered.
+    #
+    #None of them holds per-visit state - they read `r` and this module's own
+    #inputs - so they belong out here, created once for the session. Same
+    #reasoning as the note on the missing $destroy() calls in R/step3_server.R.
+    #
+    #r$obsCutMode stays inside plotMap(): that one IS per-visit, because it
+    #clears leaflet groups the map has just re-created, and enter() destroys it
+    #by name.
+
+    #the id of the one map this module draws. Hoisted out of plotMap() so the
+    #reset observer below can still reach it.
+    leafletMapID <- "finalAOIMap"
+
+    shiny::observeEvent(input$resetButton, {
+      if(!is.null(r$startingPolygons)){
+        r$polygonsList <- r$startingPolygons
+
+        #replot polygons
+        map <- leaflet::leafletProxy(leafletMapID )|>
+          leaflet::clearGroup("eraseable")
+        if(!is.null(nrow(r$startingPolygons)) ){
+          map |> leaflet::addGeoJSON(
+            geojson = geojsonsf::sf_geojson(r$startingPolygons),
+            stroke = TRUE,
+            weight = 5,
+            color = "black",
+            fill = TRUE,
+            fillColor = "green",
+            opacity = 1,
+            group = "eraseable",
+            options = leaflet::pathOptions(pane = "layer2")
+          )
+        }
+        map
+      }
+    }, ignoreInit = TRUE, ignoreNULL = TRUE)
+
+
+
+
+
+
+
+    ### OBSERVERS ####
+    #dismiss Modal
+    obs_dimissModal <- shiny::observeEvent(input$dismissModal, {
+      shiny::removeModal()
+    })
+
+    #observe info Button ####
+    obs_info4 <- shiny::observeEvent(input$infoButton4, {
+      shiny::showModal(
+        shiny::modalDialog(footer = shiny::actionButton(inputId = shiny::NS(id, "dismissModal"), label = i18n()$t("OK!"), style = "background-color:#006268; color:#ffffff"  ),
+                           h2(i18n()$t("Zusätzliche Informationen:") ),
+                           h3(),
+                           h3(i18n()$t("Die hier festgelegten Zielgebiete werden verwendet, um für die Simulation zu definieren, wohin die Agenten gehen könnten, um sich zu erholen.") ),
+                           h3(),
+                           h4(i18n()$t("Jeder Agent wählt automatisch ein bestimmtes Zielgebiet, indem dessen Nähe, Attraktivität und Grösse berücksichtigt wird.") ),
+                           h3(),
+                           h4(i18n()$t("Wenn ein Agent nur wenig Zeit zur Verfügung hat, um sich neu zu erschaffen, wird der Agent dazu tendieren, ein Gebiet in der Nähe zu wählen.") ),
+                           h3(),
+                           h4(i18n()$t("Wenn ein Agent viel Zeit zur Erholung hat, wird er eher ein großes Gebiet wählen.") ),
+
+
+        )
+      )
+    })
+
+    #help observer####
+    obs_help4 <- shiny::observeEvent(input$helpButton4, {
+      shiny::showModal(
+        shiny::modalDialog(footer = shiny::actionButton(inputId = shiny::NS(id, "dismissModal"), label = i18n()$t("OK!"), style = "background-color:#006268; color:#ffffff"  ),
+                           h2(i18n()$t("Endgültige Festlegung von Zielgebiete")),
+                           div(style = "text-align:center",
+                               img(src = "www/goToAOI.png", style = "display:inline;height:150px")
+                           ),
+                           h4(shiny::HTML(i18n()$t("Menschen suchen <b> bestimmte Gebiete</b> auf, um sich <b>zu erholen</b> (<b>Zielgebiete</b>)."))),
+                           h3(),
+                           h4(shiny::HTML(i18n()$t("Hier können Sie die Zielgebiete <b>manuell korrigieren</b>."))),
+                           h3(),
+                           h4(shiny::HTML(i18n()$t("Dies geschieht auf die gleiche Weise wie in Schritt 1:"))),
+                           h5(shiny::HTML(i18n()$t("Sie klicken einfach auf die Karte und dann auf den roten Punkt, um die Korrektur vorzunehmen."))),
+                           h3(),
+                           h4(shiny::HTML(i18n()$t("<b>Drei Unterschiede:</b>"))),
+                           h4(shiny::HTML(i18n()$t("<b>1)</b> Sie können Zielgebiete entfernen, indem Sie sie anklicken."))),
+                           h4(shiny::HTML(i18n()$t("<b>2)</b> Sie können bestehende Zielgebiete <b>erweitern</b>, indem Sie ein <b>neues</b> Zielgebiet daüber hinaus ihnen erstellen."))),
+                           shiny::img(src = "www/combineAreas.png", style = "height:75px"),
+                           h4(shiny::HTML(i18n()$t("<b>3)</b> Sie können <b>Polygone ausschneiden</b>, indem Sie den <b>Polygonschnitt-Modus</b> aktivieren! (oben rechts)"))),
+                           h5(shiny::HTML(i18n()$t("In diesem Modus macht ein <b>erster</b> Klick ein <b>Kreuz</b>, der <b>zweite Klick</b> zieht eine Linie vom Kreuz aus und <b>schneidet so entstandene Polygone</b>."))),
+
+                           shiny::img(src = "www/cutClicks.png", style = "height:75px")
+
+
+        )
+      )
+    })
+
+    #Language Change ####
+    langChangeObs <- observeEvent(input$languageSelect_4, {
+      vftDbg("CHANGE LANGUAGE")
+      if(input$languageSelect_4 == "de"){
+        # i18n$set_translation_language('de')
+        shiny.i18n::update_lang("de")
+        i18n()$set_translation_language("de")
+        vftDbg("DE")
+        vftSetBanner(id, "www/step4_wsl.png")
+
+
+
+      }else if(input$languageSelect_4 == "fr"){
+        # i18n$set_translation_language('fr')
+        shiny.i18n::update_lang("fr")
+        i18n()$set_translation_language("fr")
+
+        vftSetBanner(id, "www/step4_wsl_fr.png")
+
+
+        vftDbg("FR")
+      }else if(input$languageSelect_4 == "en"){
+        # i18n$set_translation_language('en')
+        shiny.i18n::update_lang("en")
+        vftSetBanner(id, "www/step4_wsl.png")
+
+
+        vftDbg("EN")
+      }else if(input$languageSelect_4 == "it"){
+        # i18n$set_translation_language('it')
+        shiny.i18n::update_lang("it")
+        vftSetBanner(id, "www/step4_wsl.png")
+
+
+        vftDbg("IT")
+      }
+
+    }, ignoreInit = TRUE)
 
     plotMap <- function(){
 
@@ -194,7 +384,8 @@ step4_server <- function(id, network, minThresh, i18n, currentLang,
       # polygonCreator("finalAOIMap",  input = input, startingPolygons = startingPolygons) #requires "polygons" global variable
       # polygonEraser("finalAOIMap", input = input, startingPolygons = startingPolygons)
 
-      leafletMapID = "finalAOIMap"
+      #(leafletMapID is at module scope now - the reset observer moved out there
+      #and needs it too.)
 
       numberOfPolygons = "multi"
 
@@ -291,7 +482,7 @@ step4_server <- function(id, network, minThresh, i18n, currentLang,
                 }
 
                 #generate DULN value for polygon on the fly
-                values <- terra::extract(r$DULN_na, poly)
+                values <- terra::extract(.vftDULNna(), poly)
 
                 values <- values |> dplyr::group_by(ID)|>dplyr::arrange(desc(walkNat))
 
@@ -433,7 +624,7 @@ step4_server <- function(id, network, minThresh, i18n, currentLang,
                     #get new areas
                     spltPoly$id <- seq.int(from = max(r$polygonsList$id)+1, to = max(r$polygonsList$id) + length(spltPoly$id), by = 1)
                     #generate DULN value for polygon on the fly
-                    values <- terra::extract(r$DULN_na, spltPoly)
+                    values <- terra::extract(.vftDULNna(), spltPoly)
 
                     #Determine AoI by giving importance to a sizeable portion of the most attractive area (1/4)
                     values <- values |> dplyr::group_by(ID)|>dplyr::arrange(desc(walkNat))
@@ -476,7 +667,7 @@ step4_server <- function(id, network, minThresh, i18n, currentLang,
                     #get new areas
                     newPoly$id <- seq.int(from = max(r$polygonsList$id)+1, to = max(r$polygonsList$id) + nrow(newPoly), by = 1)
                     #generate DULN value for polygon on the fly
-                    values <- terra::extract(r$DULN_na, newPoly)
+                    values <- terra::extract(.vftDULNna(), newPoly)
 
                     #Determine AoI by giving importance to a sizeable portion of the most attractive area (1/4)
                     values <- values |> dplyr::group_by(ID)|>dplyr::arrange(desc(walkNat))
@@ -544,7 +735,7 @@ step4_server <- function(id, network, minThresh, i18n, currentLang,
               #get new areas
               newPoly$id <- seq.int(from = max(r$polygonsList$id)+1, to = max(r$polygonsList$id) + nrow(newPoly), by = 1)
               #generate DULN value for polygon on the fly
-              values <- terra::extract(r$DULN_na, newPoly)
+              values <- terra::extract(.vftDULNna(), newPoly)
 
               #Determine AoI by giving importance to a sizeable portion of the most attractive area (1/4)
               values <- values |> dplyr::group_by(ID)|>dplyr::arrange(desc(walkNat))
@@ -675,128 +866,6 @@ step4_server <- function(id, network, minThresh, i18n, currentLang,
       }
 
 
-      shiny::observeEvent(input$resetButton, {
-        if(!is.null(r$startingPolygons)){
-          r$polygonsList <- r$startingPolygons
-
-          #replot polygons
-          map <- leaflet::leafletProxy(leafletMapID )|>
-            leaflet::clearGroup("eraseable")
-          if(!is.null(nrow(r$startingPolygons)) ){
-            map |> leaflet::addGeoJSON(
-              geojson = geojsonsf::sf_geojson(r$startingPolygons),
-              stroke = TRUE,
-              weight = 5,
-              color = "black",
-              fill = TRUE,
-              fillColor = "green",
-              opacity = 1,
-              group = "eraseable",
-              options = leaflet::pathOptions(pane = "layer2")
-            )
-          }
-          map
-        }
-      }, ignoreInit = TRUE, ignoreNULL = TRUE)
-
-
-
-
-
-
-
-      ### OBSERVERS ####
-      #dismiss Modal
-      obs_dimissModal <- shiny::observeEvent(input$dismissModal, {
-        shiny::removeModal()
-      })
-
-      #observe info Button ####
-      obs_info4 <- shiny::observeEvent(input$infoButton4, {
-        shiny::showModal(
-          shiny::modalDialog(footer = shiny::actionButton(inputId = shiny::NS(id, "dismissModal"), label = i18n()$t("OK!"), style = "background-color:#006268; color:#ffffff"  ),
-                             h2(i18n()$t("Zusätzliche Informationen:") ),
-                             h3(),
-                             h3(i18n()$t("Die hier festgelegten Zielgebiete werden verwendet, um für die Simulation zu definieren, wohin die Agenten gehen könnten, um sich zu erholen.") ),
-                             h3(),
-                             h4(i18n()$t("Jeder Agent wählt automatisch ein bestimmtes Zielgebiet, indem dessen Nähe, Attraktivität und Grösse berücksichtigt wird.") ),
-                             h3(),
-                             h4(i18n()$t("Wenn ein Agent nur wenig Zeit zur Verfügung hat, um sich neu zu erschaffen, wird der Agent dazu tendieren, ein Gebiet in der Nähe zu wählen.") ),
-                             h3(),
-                             h4(i18n()$t("Wenn ein Agent viel Zeit zur Erholung hat, wird er eher ein großes Gebiet wählen.") ),
-
-
-          )
-        )
-      })
-
-      #help observer####
-      obs_help4 <- shiny::observeEvent(input$helpButton4, {
-        shiny::showModal(
-          shiny::modalDialog(footer = shiny::actionButton(inputId = shiny::NS(id, "dismissModal"), label = i18n()$t("OK!"), style = "background-color:#006268; color:#ffffff"  ),
-                             h2(i18n()$t("Endgültige Festlegung von Zielgebiete")),
-                             div(style = "text-align:center",
-                                 img(src = "www/goToAOI.png", style = "display:inline;height:150px")
-                             ),
-                             h4(shiny::HTML(i18n()$t("Menschen suchen <b> bestimmte Gebiete</b> auf, um sich <b>zu erholen</b> (<b>Zielgebiete</b>)."))),
-                             h3(),
-                             h4(shiny::HTML(i18n()$t("Hier können Sie die Zielgebiete <b>manuell korrigieren</b>."))),
-                             h3(),
-                             h4(shiny::HTML(i18n()$t("Dies geschieht auf die gleiche Weise wie in Schritt 1:"))),
-                             h5(shiny::HTML(i18n()$t("Sie klicken einfach auf die Karte und dann auf den roten Punkt, um die Korrektur vorzunehmen."))),
-                             h3(),
-                             h4(shiny::HTML(i18n()$t("<b>Drei Unterschiede:</b>"))),
-                             h4(shiny::HTML(i18n()$t("<b>1)</b> Sie können Zielgebiete entfernen, indem Sie sie anklicken."))),
-                             h4(shiny::HTML(i18n()$t("<b>2)</b> Sie können bestehende Zielgebiete <b>erweitern</b>, indem Sie ein <b>neues</b> Zielgebiet daüber hinaus ihnen erstellen."))),
-                             shiny::img(src = "www/combineAreas.png", style = "height:75px"),
-                             h4(shiny::HTML(i18n()$t("<b>3)</b> Sie können <b>Polygone ausschneiden</b>, indem Sie den <b>Polygonschnitt-Modus</b> aktivieren! (oben rechts)"))),
-                             h5(shiny::HTML(i18n()$t("In diesem Modus macht ein <b>erster</b> Klick ein <b>Kreuz</b>, der <b>zweite Klick</b> zieht eine Linie vom Kreuz aus und <b>schneidet so entstandene Polygone</b>."))),
-
-                             shiny::img(src = "www/cutClicks.png", style = "height:75px")
-
-
-          )
-        )
-      })
-
-      #Language Change ####
-      langChangeObs <- observeEvent(input$languageSelect_4, {
-        vftDbg("CHANGE LANGUAGE")
-        if(input$languageSelect_4 == "de"){
-          # i18n$set_translation_language('de')
-          shiny.i18n::update_lang("de")
-          i18n()$set_translation_language("de")
-          vftDbg("DE")
-          vftSetBanner(id, "www/step4_wsl.png")
-
-
-
-        }else if(input$languageSelect_4 == "fr"){
-          # i18n$set_translation_language('fr')
-          shiny.i18n::update_lang("fr")
-          i18n()$set_translation_language("fr")
-
-          vftSetBanner(id, "www/step4_wsl_fr.png")
-
-
-          vftDbg("FR")
-        }else if(input$languageSelect_4 == "en"){
-          # i18n$set_translation_language('en')
-          shiny.i18n::update_lang("en")
-          vftSetBanner(id, "www/step4_wsl.png")
-
-
-          vftDbg("EN")
-        }else if(input$languageSelect_4 == "it"){
-          # i18n$set_translation_language('it')
-          shiny.i18n::update_lang("it")
-          vftSetBanner(id, "www/step4_wsl.png")
-
-
-          vftDbg("IT")
-        }
-
-      }, ignoreInit = TRUE)
 
       #observe banner click (choosing to step back in history)
       r$obsBanner <- observeEvent(input$banner,  {
@@ -969,11 +1038,10 @@ step4_server <- function(id, network, minThresh, i18n, currentLang,
     # shinyjs::enable() calls in part 4 and the updateSelectInput() in part 3 send
     # unnamespaced ids and do nothing at all - and isolate() around everything,
     # because the provider observe() this is called from is not isolated and a
-    # bare .rx$network() read would make it re-enter step 4 forever. R/modules.R.
+    # bare .rx$DULN() read would make it re-enter step 4 forever. R/modules.R.
     enter <- vftModuleEnterFn(session, function(){
 
       #--- 1. refresh the snapshots the rest of this module reads
-      network       <<- .rx$network()
       minThresh     <<- .rx$minThresh()
       currentLang   <<- .rx$currentLang()
       skip          <<- isTRUE(as.logical(.rx$skip()))
@@ -988,12 +1056,20 @@ step4_server <- function(id, network, minThresh, i18n, currentLang,
       #by the nav bar does not go through either of them - and plotMap() below is
       #about to create a fresh set. Without this, a second visit would leave two
       #marker-click handlers live and a single click would draw two polygons.
+      #
+      #r$obsCutMode is on this list now. It was created by plotMap() alongside
+      #the other five and never destroyed, so cut mode was toggled once per
+      #visit ever made - each stale copy clearing the "first"/"after"/"cut"
+      #groups of a map it no longer had anything to do with. The four modal and
+      #language observers that had the same problem are not here because they
+      #have moved OUT of plotMap() to module scope, where nothing recreates
+      #them; see the note there.
       for(o in list(r$obsConfirm, r$obsBanner, r$obsMapClick,
-                    r$obsMarkerClick, r$obsErase)){
+                    r$obsMarkerClick, r$obsErase, r$obsCutMode)){
         if(!is.null(o)) try(o$destroy(), silent = TRUE)
       }
       r$obsConfirm <- NULL; r$obsBanner <- NULL; r$obsMapClick <- NULL
-      r$obsMarkerClick <- NULL; r$obsErase <- NULL
+      r$obsMarkerClick <- NULL; r$obsErase <- NULL; r$obsCutMode <- NULL
 
       #--- 3. banner and language
       if(identical(currentLang, "de")){
@@ -1021,27 +1097,9 @@ step4_server <- function(id, network, minThresh, i18n, currentLang,
       shinyjs::enable("resetButton")
       shinyjs::enable(id = "banner")
 
-      #--- 5. the lakes cutout, only when the perimeter actually changed
-      if(!is.null(shape) && !is.null(DULN) && !identical(cache$shape, shape)){
-        #get lakes and add NAs in place of lakes
-        #before extracting values, remove lakes (make them NA)
-        wkt <- sf::st_as_text( sf::st_as_sfc(sf::st_transform(shape, "epsg:2056") ) )
-
-        lakes <- sf::st_read( vftData("maps/lakes.gdb"),
-                              query = 'SELECT * FROM "lakes"',
-                              wkt_filter = wkt)
-        lakes <- sf::st_transform(lakes[lakes$SHAPE_Area > 10000, ], "epsg:4326")
-
-        #remove lakes from DULN raster (save seperately)
-        DULN_na <- DULN$walkNat
-        DULN_na[terra::vect(lakes)] <- NA
-        #keep name
-        names(DULN_na) <- "walkNat"
-
-        cache$shape <- shape
-        cache$DULN_na <- DULN_na
-      }
-      r$DULN_na <- cache$DULN_na
+      #--- 5. (the lakes cutout used to be built here, on the main thread, on the
+      #way in to this step. It is built by .vftDULNna() on first EDIT now - see
+      #the note there.)
 
       #--- 6. draw the map, generating the areas of interest first if needed
       .vftStep4Launch()
@@ -1092,19 +1150,24 @@ step4_server <- function(id, network, minThresh, i18n, currentLang,
 
 
 
-          DULN_wrapped <- terra::wrap(DULN)
+          #ONE BAND, not seven. generateAoI2() reads walkNat and nothing else, so
+          #wrapping the whole DULN raster serialised six bands on this thread,
+          #pushed them through mirai's transport and unwrapped them in the worker
+          #for nobody. `DULN` itself stays seven bands - sf_to_tidygraph3() and
+          #the newVersions page do read the others.
+          walkNat_wrapped  <- terra::wrap(DULN$walkNat)
           DULN_all_wrapped <- terra::wrap(DULN_all)
 
           # lake_path <- paste0(home, "/inst/app/www/data/maps/lakes.gdb")
 
           vftFuture({
 
-            DULN <- terra::unwrap(DULN_wrapped)
+            walkNat  <- terra::unwrap(walkNat_wrapped)
             DULN_all <- terra::unwrap(DULN_all_wrapped)
 
             progress1$set(1/2)
-            finalAOI <- generateAoI2(network, minThresh = minThresh, perimeter = shape,
-                                     DULN = DULN, DULN_all = DULN_all) #, lake_path = lake_path
+            finalAOI <- generateAoI2(minThresh = minThresh, perimeter = shape,
+                                     walkNat = walkNat, DULN_all = DULN_all) #, lake_path = lake_path
             progress1$set(2/2)
             progress1$close()
             finalAOI
@@ -1114,12 +1177,24 @@ step4_server <- function(id, network, minThresh, i18n, currentLang,
 
             #create a local version of the global variable to plot it
             #complications due to observe events being called by functions (TO DO: improve this coding)
-            r$startingPolygons <- sf::st_transform(finalAOI, crs = 4326)
+            #
+            #No st_transform here any more. Both providers crop in EPSG:4326 and
+            #generateAoI2() now returns lon/lat explicitly, so this call walked
+            #every vertex of every polygon to produce the same coordinates back.
+            r$startingPolygons <- finalAOI$polygons
 
             if(is.null(r$startingPolygons$id) & !is.null(nrow(r$startingPolygons)) ){
               r$startingPolygons$id <- 1:nrow(r$startingPolygons)
             }
             r$polygonsList <- r$startingPolygons
+
+            #the lakes cutout, for free. generateAoI2() has to mask the lakes out
+            #of walkNat to score the polygons, so the raster the manual
+            #draw/cut/hole handlers want is already built - in the worker, off
+            #this thread. Filling the cache here is what makes .vftDULNna()
+            #below a no-op on the normal path.
+            cache$shape   <- shape
+            cache$DULN_na <- terra::unwrap(finalAOI$walkNatNoLakes)
 
             r$promiseFinished <- 1
             vftDbg("promise finished")

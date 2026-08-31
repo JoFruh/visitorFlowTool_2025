@@ -341,6 +341,11 @@ if(is.null(r$updateNetworkPlot)){
     #depending on context
     output$versionMap <- leaflet::renderLeaflet({
       r$updateRender #create reactive link to control render
+      #Read BEFORE the req() below, or the dependency would not be taken on the
+      #pass where the scenario has no network yet and nothing would ever redraw
+      #it. (r$updateRender above is read for the same reason and is the trigger
+      #vftPrepareThen()'s callback bumps.)
+      r$updateNetworkPlot()
 
       # print(paste0("contextchoice:",input$contextChoice))
 
@@ -356,6 +361,15 @@ if(is.null(r$updateNetworkPlot)){
         #save to, from, edgeID and nodeID as new columns
         #the plot uses these IDs in a fixed way, whereas the original columns can automatically change
         shiny::isolate(network <- r$networkList[[r$position]]$network)
+
+        #The path network is loaded on demand now - no step's `needs` names it
+        #(R/steps.R) - so a scenario reaches this page with `network` NULL until
+        #vftPrepareThen() has filled it. Every caller that bumps a render trigger
+        #on this page either asks for the preparation first or bumps from inside
+        #its callback, so this is the narrow window between the two: hold the
+        #previous map rather than aborting the render with a NULL graph.
+        shiny::req(!is.null(network))
+
         network <- network %>% tidygraph::activate(nodes) %>% dplyr::mutate(nodeID_2 = .data$nodeID)
         network <- network %>% tidygraph::activate(edges) %>% dplyr::mutate(edgeID_2 = .data$edgeID, to_2 = .data$to, from_2 = .data$from)
 

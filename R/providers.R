@@ -128,7 +128,66 @@ VFT_PROVIDERS <- list(
     }
   ),
 
+  #The seven-band per-agent attractiveness raster, cropped. Step 4 wants this and
+  #DULN_all and NOTHING ELSE, and of these seven bands it reads exactly one:
+  #generateAoI2() is handed DULN$walkNat (not the whole raster - wrapping seven
+  #bands to send one across to the worker was six bands of pure transport), and
+  #step 4's .vftDULNna() cuts the lakes out of the same band for the manual
+  #editing handlers. The other six are here for sf_to_tidygraph3() and the
+  #newVersions page, which do read them.
+  #
+  #Step 3 asks for this key too, at the top of its build observer in
+  #app_server.R, even though step 3 itself never touches it - it is a PREFETCH.
+  #Step 4 needs it, the crop takes seconds, and confirming step 3 used to sit
+  #and wait for the whole thing with the user watching a step they had finished.
+  #
+  #It exists for exactly the reason DULN_all above does, one step later. `DULN`
+  #used to be produced only by the `network` provider, so step 4 listing it in
+  #its `needs` pulled the whole ~30s path-network job - which step 4 does not
+  #read a single edge of. This is the same crop sf_to_tidygraph3() performs
+  #internally, against the same buffered perimeter and with the same band names,
+  #so the two are interchangeable and whichever runs first wins.
+  DULN = list(
+    keys  = "DULN",
+    needs = "shapeLarger",
+    async = TRUE,
+    #not the same string as DULN_all's: step 4 asks for both at once and the two
+    #progress bars sit side by side.
+    label = "Attraktivitaetsdaten pro Aktivitaet",
+    provide = function(vals, progress){
+      shapeLarger <- vals$shapeLarger
+      p <- vftFuture({
+        #the daemon's own cache - see the note at the top of this file
+        if(!exists(".vft_DULN_full", envir = .GlobalEnv)){
+          .GlobalEnv$.vft_DULN_full <-
+            terra::rast(vftData("maps/attr/allAttrs_COG_final.tif"))
+        }
+        out <- terra::crop(.GlobalEnv$.vft_DULN_full,
+                           terra::project(terra::vect(shapeLarger), "EPSG:4326"))
+        #the names every consumer indexes by - terra::subset(DULN, "walkNat") in
+        #generateAoI2(), DULN$walkNat in step 4. Kept identical to
+        #sf_to_tidygraph3()'s, which is the other place this crop is made.
+        names(out) <- c("jog", "dogNat", "ebikeNat", "walkNat",
+                        "dogProx", "walkSoc", "bikerSport")
+        progress$close()
+        terra::wrap(out)
+      }, seed = TRUE, progress = progress)
+
+      promises::then(p, function(packed){
+        list(DULN = terra::unwrap(packed))
+      })
+    }
+  ),
+
   #The path network and everything hung off its nodes. One job, four keys.
+  #
+  #NOTHING BEFORE A SIMULATION OR A NEW VERSION ASKS FOR THIS ANY MORE. No step's
+  #`needs` names it: steps 1-4 work on the perimeter and the two rasters, and the
+  #two places that genuinely read paths - the simulation launch in step 5 and the
+  #newVersions page's edit contexts - ask for it through vftPrepareThen() in
+  #R/prepare_network.R. Walking 1-2-3-4, adjusting a threshold, redrawing a
+  #polygon and confirming again therefore costs no GDB read at all, and the one
+  #read that does happen is cached in `r$network` for the rest of the session.
   #
   #`networkNodes` is not a key of its own - the columns arrive attached to
   #`network` - but it is named here so that vftEnsure() can be asked for it and
@@ -136,11 +195,11 @@ VFT_PROVIDERS <- list(
   #dependency on. VFT_KEY_READY tests for the columns, which is what makes an old
   #save file carrying a fat envBase_network count as already done.
   #
-  #DULN_all is listed too because sf_to_tidygraph3() has to crop it anyway to
-  #extract it onto the nodes; returning it costs nothing. If step 3 already
-  #derived it, this overwrites it with an identical crop, which is why the cheap
-  #DULN_all provider above must come FIRST in this list - otherwise step 3 would
-  #pull the whole network job.
+  #DULN and DULN_all are listed too because sf_to_tidygraph3() has to crop them
+  #anyway to extract them onto the nodes; returning them costs nothing. If step 3
+  #or step 4 already derived them, this overwrites them with identical crops,
+  #which is why the two cheap providers above must come FIRST in this list -
+  #otherwise either step would pull the whole network job.
   network = list(
     keys  = c("network", "DULN", "DULN_all", "networkNodes"),
     needs = "shapeLarger",
@@ -422,6 +481,10 @@ vftInvalidate <- function(r, keys, session = shiny::getDefaultReactiveDomain()){
   #chance against the new ones.
   .vftWantedClear(session)
   .vftFailedClear(session)
+  #same reasoning for the continuations: a vftEnsureThen() waiter is holding a
+  #position in a networkList that may not exist any more, so it is dropped -
+  #through its onFail, because the caller disabled a button before asking.
+  .vftThenClear(session)
 
   vftDbg(paste0("INVALIDATE ", paste(keys, collapse = ", "),
                 " -> cleared ", paste(dep, collapse = ", ")))
@@ -722,6 +785,147 @@ vftEnsure <- function(r, keys, session = shiny::getDefaultReactiveDomain()){
   invisible(TRUE)
 }
 
+#' The app-level `r` the provider layer writes into.
+#'
+#' vftProviderServer() puts it here, beside vftWanted and vftPending, because
+#' the two callers that need it are inside MODULES - step 5's simulation launch
+#' and the newVersions page's context switch - and a module shadows `r` with its
+#' own reactiveValues. `session$userData` is shared between a module session and
+#' the root one, which makes this the same channel vftEnsure() already uses to
+#' find the wanted-set.
+#'
+#' NULL when there is no provider server (tests, or a build without one), which
+#' every caller has to handle: it is the same "no provider server on this
+#' session" case vftEnsure() reports by returning FALSE.
+vftAppReactives <- function(session = shiny::getDefaultReactiveDomain()){
+  tryCatch(session$userData$vftAppR, error = function(e) NULL)
+}
+
+#' Ask for some keys and do something once they are there.
+#'
+#' vftEnsure() with a continuation, for the consumers that are not steps. A step
+#' gets this for free - vftGoToStep() records a pending step and the provider
+#' observe performs the navigation when the last key lands - and this is the same
+#' mechanism for a caller that wants a VALUE rather than a page: the network for
+#' a simulation, say, which no step's `needs` names any more.
+#'
+#' Nothing is awaited, in keeping with the rest of this file. When the keys are
+#' already there `then()` runs in the SAME tick, which the newVersions page needs
+#' (its caller bumps a render trigger and the map must not wait a flush);
+#' otherwise it runs from the provider observe, on the flush the last key lands
+#' in.
+#'
+#' `then` is called with no arguments - read the values off `r` yourself, so that
+#' there is one answer to "where does this value live" rather than two.
+#'
+#' `onFail` runs instead of `then` if a provider along the chain gives up. It is
+#' not optional in practice: every caller here disables a button before asking,
+#' and without it a failed derivation leaves that button dead for the session.
+#'
+#' @return TRUE if the request was registered or satisfied, FALSE if there is no
+#'   provider server to serve it.
+vftEnsureThen <- function(keys, then, onFail = NULL,
+                          session = shiny::getDefaultReactiveDomain()){
+  r <- vftAppReactives(session)
+  if(is.null(r)){
+    vftDbg("vftEnsureThen(): no provider server on this session")
+    return(invisible(FALSE))
+  }
+
+  if(all(vapply(keys, function(k) shiny::isolate(vftKeyReady(r, k)), logical(1)))){
+    then()
+    return(invisible(TRUE))
+  }
+
+  ud <- .vftProviderStore(session)
+  if(is.null(ud)) return(invisible(FALSE))
+  #`session` is recorded so the continuation can be run back under it. It is
+  #registered from inside a MODULE and run from the provider observe, whose
+  #domain is the APP session - and shinyjs::enable() and update*Input()
+  #namespace against the domain, not against the session their caller can see.
+  #The same trap, and the same fix, as vftModuleEnterFn() in R/modules.R.
+  ud$vftThen <- c(ud$vftThen,
+                  list(list(keys = keys, then = then, onFail = onFail,
+                            domain = session)))
+
+  vftDbg(paste0("ENSURE-THEN waiting on ", paste(keys, collapse = ", ")))
+  vftEnsure(r, keys, session)
+}
+
+#' Run one waiter's callback under the domain it was registered from.
+#'
+#' isolate() for the second half of vftModuleEnterFn()'s reasoning: this runs
+#' inside the provider observe(), which is not isolated, so a bare reactive read
+#' in a continuation would make that observe depend on it and re-dispatch on
+#' every change to it.
+#'
+#' Errors are caught - an exception here would take the provider observe down and
+#' with it the whole session's navigation - but they are REPORTED, not swallowed:
+#' the continuations are simulation launches and map redraws, and a silent
+#' failure would look exactly like a hang.
+.vftRunThenCallback <- function(fn, domain, what){
+  if(!is.function(fn)) return(invisible(NULL))
+  tryCatch(shiny::withReactiveDomain(domain, shiny::isolate(fn())),
+           error = function(e)
+             message("vftEnsureThen: ", what, " failed: ", conditionMessage(e)))
+  invisible(NULL)
+}
+
+#' Run whatever vftEnsureThen() left waiting, for the keys that have arrived.
+#'
+#' Called from the provider observe, which is where readiness changes are seen.
+#' A waiter whose keys can no longer be produced - a provider along the chain has
+#' failed, or nothing derives them at all - is dropped rather than left pending,
+#' because the caller is holding a disabled button on the strength of it.
+#'
+#' The list is taken and reset BEFORE anything is called: `then()` may register
+#' another waiter (the second half of a two-stage prepare does exactly that), and
+#' appending to a list this loop is iterating would lose it.
+.vftRunThenWaiters <- function(r, session){
+  ud <- .vftProviderStore(session)
+  if(is.null(ud) || !length(ud$vftThen)) return(invisible(NULL))
+
+  waiting <- ud$vftThen
+  ud$vftThen <- NULL
+  keep <- list()
+
+  for(w in waiting){
+    ready <- all(vapply(w$keys, function(k) vftKeyReady(r, k), logical(1)))
+    if(ready){
+      vftDbg(paste0("ENSURE-THEN ready: ", paste(w$keys, collapse = ", ")))
+      .vftRunThenCallback(w$then, w$domain, paste(w$keys, collapse = ", "))
+      next
+    }
+    stuck <- any(vapply(w$keys, function(k){
+      nm <- vftKeyProvider(k)
+      is.null(nm) || vftProviderFailed(session, nm)
+    }, logical(1)))
+    if(stuck){
+      vftDbg(paste0("ENSURE-THEN gave up on ", paste(w$keys, collapse = ", ")))
+      .vftRunThenCallback(w$onFail, w$domain, "onFail")
+      next
+    }
+    keep <- c(keep, list(w))
+  }
+
+  ud$vftThen <- c(keep, ud$vftThen)
+  invisible(NULL)
+}
+
+#' Drop every waiting continuation, running each one's onFail.
+#'
+#' vftInvalidate() calls this: a waiter registered against the state that has
+#' just been torn down cannot be honoured, and silently forgetting it would leave
+#' whatever button the caller disabled dead for the session.
+.vftThenClear <- function(session){
+  ud <- .vftProviderStore(session)
+  if(is.null(ud) || !length(ud$vftThen)) return(invisible(NULL))
+  waiting <- ud$vftThen
+  ud$vftThen <- NULL
+  for(w in waiting) .vftRunThenCallback(w$onFail, w$domain, "onFail")
+  invisible(NULL)
+}
+
 #' Remember that a navigation is waiting for its data.
 vftSetPendingStep <- function(session, step){
   pv <- tryCatch(session$userData$vftPending, error = function(e) NULL)
@@ -863,6 +1067,7 @@ vftClearPendingStep <- function(session){
 #' happens here:
 #'
 #'   * dispatch whatever is currently runnable for the wanted set,
+#'   * run whatever vftEnsureThen() left waiting on keys that have now arrived,
 #'   * and, when a deferred navigation's step has become available, perform it.
 #'
 #' It re-runs because .vftRunnable() reads the readiness of every key in the
@@ -872,6 +1077,9 @@ vftClearPendingStep <- function(session){
 vftProviderServer <- function(r, session = shiny::getDefaultReactiveDomain()){
   session$userData$vftWanted  <- shiny::reactiveVal(character(0))
   session$userData$vftPending <- shiny::reactiveVal(NULL)
+  #the handle vftEnsureThen() reaches this `r` through, from inside a module that
+  #has shadowed the name. See vftAppReactives().
+  session$userData$vftAppR    <- r
 
   shiny::observe({
     wanted  <- session$userData$vftWanted()
@@ -881,6 +1089,10 @@ vftProviderServer <- function(r, session = shiny::getDefaultReactiveDomain()){
 
     if(length(wanted)){
       for(nm in .vftRunnable(r, wanted, session)) .vftDispatchProvider(r, nm, session)
+
+      #before the clear below, so that a waiter whose last key has just landed is
+      #run on this flush rather than on a later one that may never come.
+      .vftRunThenWaiters(r, session)
 
       #stop wanting things that have arrived, so that a later vftInvalidate()
       #does not find a stale request and immediately rebuild what it just threw

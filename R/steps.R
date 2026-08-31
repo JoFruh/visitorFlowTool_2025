@@ -52,10 +52,21 @@ VFT_STEPS <- list(
   step3       = list(tab = "tab_step3",       code = 3L,
                      label = "3 Interessengebiete",
                      needs = c("shape", "DULN_all")),
+  #`network` and `networkNodes` are NOT here, despite the label. Step 4 draws and
+  #edits AOI polygons; it does not read a single node or edge to do it. The map
+  #stopped drawing the paths as a backdrop (step4_server.R), and generateAoI2()
+  #works entirely on the DULN rasters - it took `network` as an argument for
+  #years and never touched it. Listing them meant that merely OPENING step 4
+  #dispatched the ~30s GDB read and tbl_graph build, on every walk through the
+  #app, for data nothing on the page would look at.
+  #
+  #The path network is loaded at the two places that read paths: the simulation
+  #launch and the newVersions page's edit contexts, both through
+  #vftPrepareThen() in R/prepare_network.R. It is cached in `r$network` from then
+  #on, so it is loaded once per perimeter and never again.
   step4       = list(tab = "tab_step4",       code = 4L,
                      label = "4 Wegnetz",
-                     needs = c("shape", "network", "networkNodes",
-                               "DULN", "DULN_all", "minThresh")),
+                     needs = c("shape", "DULN", "DULN_all", "minThresh")),
   #`minThresh` is new on both of these. The attractivity-weighted edge distances
   #used to be baked into the network by step 4's confirm; they are computed when
   #a simulation is first launched now (R/prepare_network.R), so both pages
