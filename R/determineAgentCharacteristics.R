@@ -229,25 +229,37 @@ determineAgentCharacteristics <- function(dayPop, currentDay, network, finalPoly
 
 #weight distances (times) with
 
-for(agentNo in 1:length(AOIInfo$nodes)){
-  #capture error
-  if(!is.finite(sum(AOIInfo$prob[agentNo][[1]]) == 0)){browser()}
-  # ABMprogress$inc((1/length(AOIInfo$nodes))/2, message = "Erzeugen von Agenten")
-  if(sum(AOIInfo$prob[agentNo][[1]]) == 0){
-    #if no areas are in proximity, label agent accordingly
-    dayPop$goalV[[agentNo]] <- -1
-    dayPop$AOIGoal[[agentNo]] <- "NO_GOAL"
+#ONE ASSIGNMENT PER COLUMN, NOT ONE PER AGENT. This was a loop writing
+#dayPop$goalV[[agentNo]] and dayPop$AOIGoal[[agentNo]] one agent at a time - a
+#data-frame column subassignment each, for as many agents as the region has
+#residents/50. The draws themselves are untouched: the same sample() call, with
+#the same arguments, in the same order, so the RNG stream and therefore every
+#agent's goal are identical to what the loop produced.
+#
+#The `if(!is.finite(sum(...) == 0)){browser()}` guard that led the loop is gone
+#with it: is.finite() of a logical is always TRUE, so it could never fire, and a
+#browser() inside a worker is not where anyone wants to end up regardless.
+#`length(AOIInfo$nodes)` is one entry per agent, so an empty population makes
+#[[1]] a subscript error rather than an empty loop. The old `1:length(...)` had
+#the same shape of problem from the other end - it counted down from 1 to 0.
+nAOI    <- if(length(AOIInfo$nodes)) length(AOIInfo$nodes[[1]]) else 0L
+#NA rather than a number here used to take `if(sum(...) == 0)` down with
+#"missing value where TRUE/FALSE needed"; it reads as "no reachable area" now.
+hasGoal <- vapply(AOIInfo$prob, function(pr) isTRUE(sum(pr) != 0), logical(1))
 
-  }else{
+goalV   <- rep(-1, length(AOIInfo$nodes))
+AOIGoal <- rep("NO_GOAL", length(AOIInfo$nodes))
+
+for(agentNo in which(hasGoal)){
   #sample a series of indices
-  whichAOI <- sample(1:length(AOIInfo$nodes[1][[1]]), 1, prob= AOIInfo$prob[agentNo][[1]])
+  whichAOI <- sample(1:nAOI, 1, prob = AOIInfo$prob[agentNo][[1]])
   #use same index for goalV and AOIGoal
-  dayPop$goalV[[agentNo]] <- AOIInfo$nodes[agentNo][[1]][[whichAOI]]
-  dayPop$AOIGoal[[agentNo]] <- AOIInfo$aoi[agentNo][[1]][[whichAOI]]
-
-  }
-
+  goalV[[agentNo]]   <- AOIInfo$nodes[agentNo][[1]][[whichAOI]]
+  AOIGoal[[agentNo]] <- AOIInfo$aoi[agentNo][[1]][[whichAOI]]
 }
+
+dayPop$goalV   <- goalV
+dayPop$AOIGoal <- AOIGoal
 #
 #   # 2) distribute the AOI info to all agents
 #   dayPop$goalV <- mapply(function(x) x[[1]],

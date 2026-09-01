@@ -479,13 +479,31 @@ vftProgress <- function(..., millis = 1000){
     NULL
   }, signal)
 
-  #The handle's closures get an environment holding ONLY the producer and the
-  #signal name. Built explicitly instead of letting them capture this function's
-  #frame, which contains `progress`, `target` and `q` - capturing that frame is
-  #exactly the leak being fixed, just moved. Parent is the package namespace so
-  #the closures can still find what they need; namespaces serialise by reference.
+  handle <- .vftProgressHandle(q$producer, signal)
+
+  #the ticket id, so vftFuture() can join THIS bar to the job it is about to
+  #dispatch. A character scalar on the outside of the list: it adds nothing to
+  #what crosses to the worker, so the "capture only the producer" rule above
+  #still holds.
+  attr(handle, "vftTicket") <- tid
+  handle
+}
+
+#' The $set/$inc/$close triple a worker drives one bar with.
+#'
+#' Split out of vftProgress() so vftProgressPair() below can build a SECOND one
+#' against the same queue without duplicating the part that has to be exactly
+#' right.
+#'
+#' The closures' environment is built explicitly and holds ONLY the producer and
+#' the signal name. Letting them capture the calling frame instead is precisely
+#' the leak documented above - that frame holds the shiny::Progress, which holds
+#' the session, which holds every reactive value in it. Parent is the package
+#' namespace so the closures can still find what they need; namespaces serialise
+#' by reference.
+.vftProgressHandle <- function(producer, signal){
   e <- new.env(parent = asNamespace("visitorFlowTool"))
-  e$.prod <- q$producer
+  e$.prod <- producer
   e$.sig  <- signal
 
   handle <- list(
@@ -500,14 +518,115 @@ vftProgress <- function(..., millis = 1000){
     close = function()
       .prod$fire(.sig, list(op = "close", args = list()))
   )
-  handle <- lapply(handle, function(f){ environment(f) <- e; f })
+  lapply(handle, function(f){ environment(f) <- e; f })
+}
 
-  #the ticket id, so vftFuture() can join THIS bar to the job it is about to
-  #dispatch. A character scalar on the outside of the list: it adds nothing to
-  #what crosses to the worker, so the "capture only the producer" rule above
-  #still holds.
-  attr(handle, "vftTicket") <- tid
-  handle
+#' Two bars in sequence, driven by ONE job over one queue and one FIFO position.
+#'
+#' Step 5's launch is one piece of work with two halves - prepare the data, then
+#' run the ABM - and it used to be two dispatches for no reason other than that
+#' each half wanted a progress bar of its own. That cost a second place in the
+#' worker queue (behind other users, not just behind yourself), a second
+#' serialisation of the graph in each direction, and a second Shiny flush.
+#'
+#' A single dispatch cannot open a bar halfway through: the handle has to exist
+#' before the expression is sent. So both handles are built here, and the second
+#' bar's shiny::Progress is created LAZILY - by the main-thread handler, on the
+#' first message the worker sends to it. Nothing is on screen for the second half
+#' until the second half actually starts, which is the whole point.
+#'
+#' ONE TICKET for the pair, because the ticket belongs to the job and there is
+#' one job. Bar 2 reports its own fraction against that ticket, so a session
+#' queued behind this one keeps seeing a moving estimate once the long half has
+#' taken over; without it the queue would sit at "preparation, 100 %" for the
+#' entire ABM.
+#'
+#' @param ... passed to ipc::AsyncProgress$new() for the FIRST bar
+#' @param message2,detail2 the second bar's caption, applied when it is created
+#' @param millis how often the main thread drains the queue
+#' @return list(prep = , sim = ), each a handle as vftProgress() returns, with the
+#'   queue ticket as an attribute on the LIST so vftFuture() finds it there
+vftProgressPair <- function(..., message2 = NULL, detail2 = NULL, millis = 1000){
+  progress <- ipc::AsyncProgress$new(..., millis = millis)
+
+  sp     <- tryCatch(progress$.__enclos_env__$private$progress,
+                     error = function(e) NULL)
+  target <- if(is.null(sp)) progress else sp
+  sess   <- tryCatch(sp$.__enclos_env__$private$session, error = function(e) NULL)
+
+  q    <- progress$.__enclos_env__$private$queue
+  sig1 <- basename(tempfile("vftProgress_"))
+  sig2 <- basename(tempfile("vftProgress2_"))
+
+  dots  <- list(...)
+  tid   <- .vftQueueTicket(label = dots$message, session = sess)
+  watch <- .vftQueueWatch(sp, tid, message0 = dots$message, detail0 = dots$detail)
+
+  #### bar 1: exactly what vftProgress() does ####
+  q$consumer$addHandler(function(sig, obj, e){
+    tryCatch(switch(obj$op,
+                    set   = do.call(target$set, obj$args),
+                    inc   = do.call(target$inc, obj$args),
+                    close = target$close()),
+             error = function(err) NULL)
+    tryCatch(watch$handOver(closed = identical(obj$op, "close")),
+             error = function(err) NULL)
+    NULL
+  }, sig1)
+
+  #### bar 2: created by its first message, and never before ####
+  #An environment rather than a local: the handler has to create the bar once and
+  #then find it again on every message after that.
+  st <- new.env(parent = emptyenv())
+  st$bar  <- NULL
+  st$done <- FALSE
+
+  #A session that leaves mid-run must not leave a bar behind it, and closing a
+  #Progress twice - or on a session that has gone - raises rather than no-ops.
+  tryCatch(sess$onSessionEnded(function(){
+    if(!is.null(st$bar)) try(st$bar$close(), silent = TRUE)
+    st$bar <- NULL; st$done <- TRUE
+  }), error = function(e) NULL)
+
+  q$consumer$addHandler(function(sig, obj, e){
+    tryCatch({
+      if(st$done) return(NULL)
+
+      #A close arriving on a bar that was never opened is the failure path -
+      #vftAsyncError() closing both halves of a job that died during preparation.
+      #Creating a bar in order to close it would flash one on screen for a phase
+      #the job never reached.
+      if(is.null(st$bar) && identical(obj$op, "close")){
+        st$done <- TRUE
+        return(NULL)
+      }
+
+      if(is.null(st$bar)){
+        #the first message IS the hand-over: the first half is done with the
+        #queue ticker, so let it go before painting anything of our own.
+        tryCatch(watch$stop(), error = function(err) NULL)
+        st$bar <- shiny::Progress$new(session = sess)
+        st$bar$set(value = 0, message = message2, detail = detail2)
+      }
+
+      switch(obj$op,
+             set   = do.call(st$bar$set, obj$args),
+             inc   = do.call(st$bar$inc, obj$args),
+             close = { st$bar$close(); st$bar <- NULL; st$done <- TRUE })
+    }, error = function(err) NULL)
+
+    #keep the FIFO's estimate honest for whoever is waiting behind this job
+    tryCatch({
+      v <- if(identical(obj$op, "set")) obj$args$value else NULL
+      if(length(v) == 1L && is.finite(v)) .vftQueueReport(tid, value = v)
+    }, error = function(err) NULL)
+    NULL
+  }, sig2)
+
+  out <- list(prep = .vftProgressHandle(q$producer, sig1),
+              sim  = .vftProgressHandle(q$producer, sig2))
+  attr(out, "vftTicket") <- tid
+  out
 }
 
 #' Where a dispatch came from, for the payload log.
@@ -1099,7 +1218,16 @@ vftAsyncError <- function(progress = NULL, what = "background job", enable = NUL
 
     #each of these is best-effort: the handler's own failure must not become a
     #second unhandled rejection on top of the first
-    try(if(!is.null(progress)) progress$close(), silent = TRUE)
+    #
+    #A vftProgressPair() is two bars behind one handle, and BOTH have to go: a
+    #job that dies during preparation would otherwise leave the ABM bar armed for
+    #the rest of the session. Tested on $prep rather than on is.list(), because a
+    #single vftProgress() handle is a list too - of $set/$inc/$close. Closing the
+    #second half of a pair that never opened is safe: its handler recognises a
+    #close on a bar that does not exist and declines to create one.
+    for(..bar.. in if(is.list(progress) && !is.null(progress$prep))
+                     list(progress$prep, progress$sim) else list(progress))
+      try(if(!is.null(..bar..)) ..bar..$close(), silent = TRUE)
     #several sites disable a pair of buttons together, so accept a vector; one
     #id that no longer exists must not stop the others being re-enabled.
     for(..id.. in enable) try(shinyjs::enable(..id..), silent = TRUE)

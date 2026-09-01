@@ -1354,6 +1354,33 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
       })
 
       #LAUNCH SIMULATION ####
+      #
+      #ONE DISPATCH, TWO BARS.
+      #
+      #This used to be two dispatches - vftPrepareThen() for the network, and
+      #then a second future for the ABM inside its callback - so a single click
+      #took two places in the FIFO worker queue (behind OTHER USERS, not just
+      #behind itself), sent the prepared graph across the process boundary twice
+      #more than it had to, and raised and dropped two unrelated progress bars
+      #in the middle of one action. Preparation and simulation are one job now;
+      #see vftSimulateScenario() in R/simulate_scenario.R.
+      #
+      #The path network LOAD stays separate, and stays where it was. It is a
+      #PROVIDER key: cached in the app-level r$network for the rest of the
+      #session, shared with the newVersions page and the nav bar, and paid for at
+      #most once per session. vftScenarioNetworkThen() is stage 1 of what
+      #vftPrepareThen() used to do in one piece, and the newVersions page still
+      #goes through vftPrepareThen() unchanged.
+      #
+      #This is also the first read, in the whole app, of anything step 4's
+      #confirm handler used to build: the AOI letters on the nodes, the parking
+      #capacity distributed across them, and the attractivity-weighted edge
+      #distances. generatePopulation() wants the first two,
+      #determineShortestPath() the third. So the ~30s that used to be spent by
+      #every user who confirmed their areas of interest is spent here, by the
+      #ones who actually simulate - and only once per SCENARIO, because
+      #vftNetworkPrepared() tests the graph's own attribute names and the result
+      #is written back into r$networkList[[pos]].
       obsEvent_sim <- shiny::observeEvent(input$launchSim, {
 
         #disable launch sim button
@@ -1363,65 +1390,56 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
 
         vftDbg("LAUNCH SIMULATION")
 
-        #THE PREPARED NETWORK ####
-        #
-        #This is the first read, in the whole app, of anything step 4's confirm
-        #handler used to build: the AOI letters on the nodes, the parking
-        #capacity distributed across them, and the attractivity-weighted edge
-        #distances. generatePopulation() wants the first two, determineShortestPath()
-        #the third. So the ~30s that used to be spent by every user who confirmed
-        #their areas of interest is spent here, by the ones who actually simulate.
-        #
-        #Once per SCENARIO, not once per launch: vftPrepareThen() tests the
-        #graph's own attribute names and writes the result back into
-        #r$networkList[[pos]], so a second simulation on the same card goes
-        #straight through, in this same tick. See R/prepare_network.R.
-        vftPrepareThen(r, selectedNetwork_position, finalPolygons, minThresh,
-                       label  = "Wegnetz wird vorbereitet...",
-                       enable = "launchSim",
-                       then   = function(){
+        vftScenarioNetworkThen(r, selectedNetwork_position,
+                               enable = "launchSim",
+                               then = function(scenario){
 
-        #use selected network to launch simulation. Read from the SCENARIO
-        #rather than from r$selectedNetwork_r(), and read it here rather than
-        #above the call: vftPrepareThen() has just written the prepared graph
-        #into r$networkList, and the reactiveVal is the older copy taken when the
-        #card was clicked. Kept in step below so nothing else reads a stale one.
-        network <- shiny::isolate(r$networkList[[selectedNetwork_position]]$network)
-        r$selectedNetwork_r(list(network))
+        #Read from the SCENARIO rather than from r$selectedNetwork_r(), which is
+        #the older copy taken when the card was clicked.
+        network <- scenario$network
+        parking <- scenario$parking
 
-        #vftProgress, not ipc::AsyncProgress: this was the worst site in the app -
-        #385 MB of session state serialised into the ABM worker, against 3.6 MB
-        #for the `network` the job actually needs. See R/async_helpers.R.
-        progress <- vftProgress(value = 0, message = "Running Agent-Based Model")
+        #TWO BARS OVER ONE QUEUE POSITION. The first covers everything that is
+        #DATA - the AOI letters, the parking, the twenty-one weight columns, the
+        #population, the adjacency lists and the agents' goals. The second covers
+        #the ABM, and is not created until the ABM sends its first message, so
+        #there is one bar on screen at a time. See vftProgressPair() in
+        #R/async_helpers.R.
+        #
+        #vftProgressPair, not ipc::AsyncProgress: the latter was the worst site
+        #in the app - 385 MB of session state serialised into the ABM worker,
+        #against 3.6 MB for the `network` the job actually needs.
+        progress <- vftProgressPair(value    = 0,
+                                    message  = "Daten werden vorbereitet",
+                                    detail   = "Dies sollte weniger als 30 Sekunden dauern",
+                                    message2 = "Simulation läuft")
+        progPrep <- progress$prep
+        progSim  <- progress$sim
 
         #LAUNCH PROMISE####
         vftFuture({
-        #determine sum of residents in area of focus
-        nbResidents <- sum(igraph::V(network)$Residents, na.rm = TRUE)
-        #determine number of agents
-        # do not divide by CONST for glatt/wigger subset
-        nbAgents <- nbResidents/CONST_residentDivision
-
-
-        vftDbg("GENERATE POPULATION")
-
-
-        #get dataframe of all agents, their characteristics and their starting positions
-        pop <- generatePopulation(network, nAgents = nbAgents, parkingIntensity = 0.1)
-
-
-        vftDbg("LAUNCH MULTISIM")
-
-        #launch simulations
-        results <- launchMultiSim(pop, network, days = "1wk", finalPolygons = finalPolygons, progress = progress)
-        progress$close()
-
-        results
-        }, seed = TRUE, progress = progress)%...>%(function(results){
+          vftSimulateScenario(network, finalPolygons, minThresh,
+                              parking          = parking,
+                              residentDivision = CONST_residentDivision,
+                              progPrep         = progPrep,
+                              progSim          = progSim)
+        }, seed = TRUE, progress = progress)%...>%(function(out){
 
         ## TREAT PROMISE RESULT ####
 
-        r$result <- results
+        #The prepared network and its parking table - but only when THIS run
+        #prepared them. A re-run of an already-prepared card gets NULL for both
+        #and the graph never makes the return trip. Written first, because
+        #everything below reads r$networkList.
+        if(!is.null(out$network))
+          r$networkList[[selectedNetwork_position]]$network <- out$network
+        if(!is.null(out$parking))
+          r$networkList[[selectedNetwork_position]]$parking <- out$parking
+
+        r$selectedNetwork_r(list(
+          shiny::isolate(r$networkList[[selectedNetwork_position]]$network)))
+
+        r$result <- out$results
         #fresh simulation result: invalidate cached passageTable + starting points
         r$passageTable <- NULL
         r$startingPointsSf <- NULL
@@ -1464,33 +1482,15 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
 
         plotPathUsage()
 
-        #
-        # print(networkList[[selectedNetwork_position]])
-        # print(networkList[[selectedNetwork_position]]$pathUsage)
-        #
-        #
-        # if(!is.null(networkList[[selectedNetwork_position]]$pathUsage )){
-        #
-        #   if(length(plotResults()) > 0){
-        #     print("ACTIVATE PLOT3")
-        #     plotResults(plotResults()+1)
-        #
-        #     print(plotResults())
-        #
-        #   }else{
-        #     print("ACTIVATE PLOT4")
-        #
-        #     plotResults(1)
-        #   }
-        #
-        # }
-
         #enable launch sim button
         shinyjs::enable("launchSim")
 
+        #vftAsyncError() closes BOTH bars of the pair - a job that dies during
+        #preparation must not leave the ABM bar armed for the rest of the
+        #session. See R/async_helpers.R.
         })%...!%(vftAsyncError(progress, "Agent-Based Model", "launchSim"))
 
-        })  #end vftPrepareThen(then = ...)
+        })  #end vftScenarioNetworkThen(then = ...)
 
       }, ignoreInit = TRUE)
 

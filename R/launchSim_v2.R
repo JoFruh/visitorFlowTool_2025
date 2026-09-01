@@ -15,7 +15,13 @@
 edges <- NULL
 nodes <- NULL
 
-launchSim <- function(dayPop, network, AOIList, listOfPointers, iter = 1, trackable = FALSE, areasOfInterest = NULL, debug = FALSE, progress = NULL){
+#' @param edgeTable,vertexTable the graph as tables, when the caller already has
+#'   them. launchMultiSim() builds both for the adjacency lists one call up, and
+#'   this function used to build them again for itself - two full materialisations
+#'   of a tens-of-thousands-of-rows edge table, geometry included, per run.
+#'   Computed here when NULL, so any other caller is unaffected.
+launchSim <- function(dayPop, network, AOIList, listOfPointers, iter = 1, trackable = FALSE, areasOfInterest = NULL, debug = FALSE, progress = NULL,
+                      edgeTable = NULL, vertexTable = NULL){
 
   # save(dayPop, network, AOIList,iter, trackable, areasOfInterest, debug, file = "dataForAssessement_2000agents.RData")
   #### sub - functions ####
@@ -59,8 +65,8 @@ launchSim <- function(dayPop, network, AOIList, listOfPointers, iter = 1, tracka
   #helper produces the identical table without that validation - verified
   #identical() on 946 node/edge tables from 368 real save files. See
   #R/graph_helpers.R; upgrading tibble/vctrs on the server is still the real fix.
-  edgeTable <- vftGraphTibble(network, "edges")
-  vertexTable <- vftGraphTibble(network, "nodes")
+  if(is.null(edgeTable))   edgeTable   <- vftGraphTibble(network, "edges")
+  if(is.null(vertexTable)) vertexTable <- vftGraphTibble(network, "nodes")
 
   #node coordinates are constant for the whole simulation; compute the coordinate matrix
   #once here instead of recomputing sf::st_coordinates() on every timestep in the loop below.
