@@ -673,6 +673,98 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
       r$startingPointsSf
     }
 
+    #' The map's two legends, rebuilt from what is actually drawn right now.
+    #'
+    #' The "Formen:" block used to be a fixed seven-row list written once, while
+    #' the map was being built, so it named every overlay whether or not its
+    #' checkbox was ticked - and it could never change afterwards either, because
+    #' every toggle below goes through leafletProxy and none of them touched the
+    #' controls.
+    #'
+    #' Both legends carry a `layerId` now. leaflet's ControlStore removes a
+    #' control it already holds under an id before adding the new one, so
+    #' re-issuing them through a proxy swaps them in place rather than stacking
+    #' copies in the corner. They are re-issued as a PAIR, and removed first when
+    #' this is a proxy, so the shapes block keeps its position ABOVE
+    #' "Wegnutzung:" - replacing it alone would re-append it underneath.
+    #'
+    #' The row conditions mirror the draw conditions exactly, data-presence
+    #' guards included: a ticked box with an empty layer behind it (parking and
+    #' residential can both be absent for a scenario) draws nothing, so it must
+    #' not put a row in the legend either. The protected areas are one checkbox
+    #' but three rows, so those come from the PA_type values the clipped layer
+    #' actually contains.
+    #'
+    #' "Wegnutzung:" is unconditional: the network is the one layer that is
+    #' always on the map.
+    legendShapeRows <- function(){
+      rows <- list()
+      add <- function(img, label){
+        rows[[length(rows) + 1L]] <<- c(img = img, label = label)
+      }
+
+      if(isTRUE(input$aoi)){
+        add("www/AOI.png", i18n()$t("Zielgebiete"))
+      }
+      if(isTRUE(input$ParkingCheckbox) &&
+         length(r$networkList[[selectedNetwork_position]]$parking) > 0){
+        add("www/parking.png", i18n()$t("Parkplatz"))
+      }
+      if(isTRUE(input$ResidentialCheckbox) &&
+         length(r$networkList[[selectedNetwork_position]]$residential) > 0){
+        add("www/bewohnen.png", i18n()$t("Neue Wohngebiete"))
+      }
+      if(isTRUE(input$startingCheckbox)){
+        add("www/Start.png", i18n()$t("Agenten Ausgangspunkte"))
+      }
+      if(isTRUE(input$PA_Checkbox) && !is.null(shp_PA) && isTRUE(nrow(shp_PA) > 0)){
+        #as.character so the test does not depend on whether the gpkg column
+        #comes back numeric, character or a factor
+        paTypes <- as.character(unique(shp_PA$PA_type))
+        if("1" %in% paTypes) add("www/PA_1.png", i18n()$t("Schutzgebiete – streng"))
+        if("2" %in% paTypes) add("www/PA_2.png", i18n()$t("Schutzgebiete – umfassend"))
+        if("3" %in% paTypes) add("www/PA_3.png", i18n()$t("Schutzgebiete – teilweise"))
+      }
+
+      rows
+    }
+
+    #' Put both legends on `map`, which may be a freshly built map or a proxy.
+    vftMapLegends <- function(map){
+      rows <- legendShapeRows()
+
+      #on a fresh map there is nothing to remove yet, and issuing the removal
+      #anyway would just add two dead calls to the widget's init list
+      if(inherits(map, "leaflet_proxy")){
+        map <- map |>
+          leaflet::removeControl("legendShapes") |>
+          leaflet::removeControl("legendUsage")
+      }
+
+      if(length(rows) > 0){
+        map <- map |>
+          leaflegend::addLegendImage(position = "topright",
+                                     title = i18n()$t("Formen:"),
+                                     images = vapply(rows, `[[`, character(1), "img"),
+                                     labels = vapply(rows, `[[`, character(1), "label"),
+                                     labelStyle = "font-size: 15px; text-align: left",
+                                     layerId = "legendShapes")
+      }
+
+      map |>
+        leaflet::addLegend(title = i18n()$t("Wegnutzung:"), position = "topright",
+                           labels = c(i18n()$t("kein"), i18n()$t("niedrigste"), i18n()$t("mittlere"),
+                                      i18n()$t("hohe"), i18n()$t("höchste")),
+                           colors = c("darkgrey", "lightblue", "steelblue", "#182db5", "#37046e"),
+                           layerId = "legendUsage")
+    }
+
+    #' Refresh the legends on the live map. Every display toggle ends with this.
+    vftRefreshMapLegends <- function(){
+      vftMapLegends(leaflet::leafletProxy(mapId = "mapAreaLeaflet"))
+      invisible(NULL)
+    }
+
     plotPathUsage <- function(){
 
 
@@ -762,14 +854,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
             leaflet::addMapPane("layer1", zIndex = 410)|> leaflet::addMapPane("layer2", zIndex = 420)|> leaflet::addMapPane("layer3", zIndex = 450) |>
             leaflet::addProviderTiles("OpenStreetMap.CH", options = leaflet::providerTileOptions(opacity = 0.5, zIndex = 400)))
 
-            map <- map |>
-              leaflegend::addLegendImage(position = "topright",title = i18n()$t("Formen:"),
-                                         images = c("www/AOI.png", "www/parking.png", "www/bewohnen.png", "www/Start.png",
-                                                    "www/PA_1.png", "www/PA_2.png", "www/PA_3.png"),
-                                         labels = c(i18n()$t("Zielgebiete"),i18n()$t("Parkplatz"), i18n()$t("Neue Wohngebiete"), i18n()$t("Agenten Ausgangspunkte"),
-                                                    i18n()$t("Schutzgebiete – streng"), i18n()$t("Schutzgebiete – umfassend"), i18n()$t("Schutzgebiete – teilweise")),
-                                         labelStyle = "font-size: 15px; text-align: left")|>
-              leaflet::addLegend(title = i18n()$t("Wegnutzung:"), position = "topright", labels = c(i18n()$t("kein"), i18n()$t("niedrigste"), i18n()$t("mittlere"), i18n()$t("hohe"), i18n()$t("höchste")) , colors = c("darkgrey", "lightblue", "steelblue", "#182db5", "#37046e"))|>
+            map <- vftMapLegends(map) |>
               leaflet.extras::setMapWidgetStyle(list(background = "white"))
 
           }else{
@@ -788,6 +873,10 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
             map <- leaflet::leafletProxy("mapAreaLeaflet")|>
               leaflet::clearShapes()|>leaflet::clearGeoJSON()|>leaflet::clearImages()|>
               vftClearNetworkLines(group = "paths")
+
+            #the overlays are re-added below from the current inputs, so the
+            #block that names them is rebuilt with them
+            map <- vftMapLegends(map)
           }
           }else{
             #create map if null
@@ -796,13 +885,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
               leaflet::addMapPane("layer1", zIndex = 410)|> leaflet::addMapPane("layer2", zIndex = 420)|> leaflet::addMapPane("layer3", zIndex = 450) |>
               leaflet::addProviderTiles("OpenStreetMap.CH", options = leaflet::providerTileOptions(opacity = 0.5, zIndex = 400))
 
-            map <- map |>
-              leaflegend::addLegendImage(position = "topright",title = "Formen:", images = c("www/AOI.png", "www/parking.png", "www/bewohnen.png", "www/Start.png",
-                                                                                             "www/PA_1.png", "www/PA_2.png", "www/PA_3.png"),
-                                         labels = c(i18n()$t("Zielgebiete"),i18n()$t("Parkplatz"), i18n()$t("Neue Wohngebiete"), i18n()$t("Agenten Ausgangspunkte"),
-                                                    i18n()$t("Schutzgebiete – streng"), i18n()$t("Schutzgebiete – umfassend"), i18n()$t("Schutzgebiete – teilweise")),
-                                         labelStyle = "font-size: 15px; text-align: left")|>
-              leaflet::addLegend(title = "Wegnutzung:", position = "topright", labels = c(i18n()$t("kein"), i18n()$t("niedrigste"), i18n()$t("mittlere"), i18n()$t("hohe"), i18n()$t("höchste")) , colors = c("darkgrey", "lightblue", "steelblue", "#182db5", "#37046e"))|>
+            map <- vftMapLegends(map) |>
               leaflet.extras::setMapWidgetStyle(list(background = "white"))
             }
 
@@ -1641,6 +1724,10 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
           ) |> leaflet::clearGroup("AOI")
         }
 
+        #the shape legend names the overlays that are ON, so every one of
+        #these toggles has to re-issue it - see vftMapLegends()
+        vftRefreshMapLegends()
+
       }, ignoreInit = TRUE)
 
       #observe PA ####
@@ -1668,6 +1755,8 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
           proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet"
           ) |> leaflet::clearGroup("PA")
         }
+
+        vftRefreshMapLegends()
 
       }, ignoreInit = TRUE)
 
@@ -1720,6 +1809,8 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
           }
         }
 
+        vftRefreshMapLegends()
+
       }, ignoreInit = TRUE)
 
       obsResidential <- shiny::observeEvent(input$ResidentialCheckbox, {
@@ -1734,6 +1825,8 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
               leaflet::clearGroup("residential")
           }
         }
+
+        vftRefreshMapLegends()
 
       }, ignoreInit = TRUE)
 
@@ -1751,6 +1844,8 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
           proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet"
           ) |> leaflet::clearGroup("startingPoints")
         }
+
+        vftRefreshMapLegends()
 
       }, ignoreInit = TRUE)
 
