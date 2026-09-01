@@ -1021,9 +1021,17 @@ step1_server <- function(id, i18n,
       shiny::showModal(
         shiny::modalDialog(footer = actionButton(inputId = NS(id, buttonVersion), label = i18n()$t("Weiter zu Schritt 2."), class = "btn-lg", style = "background-color:#006268; color:#ffffff" ),
                            shiny::h2(i18n()$t("Sie haben Schritt 1 geschafft!") ),
-                           shiny::h3(shiny::HTML(as.character(i18n()$t("Zu Beginn des nächsten Schrittes wird automatisch eine Datei in Ihren <b>'Download'</b>-Ordner heruntergeladen.") ))),
+                           #Rewritten 2026-09-01. This used to promise that a
+                           #file would be downloaded to the user's 'Download'
+                           #folder at the start of the next step, which was
+                           #true of the old autosave and is not true of
+                           #anything now: progress is kept in the browser and
+                           #nothing is downloaded unless the user asks. See
+                           #R/state_browser.R.
+                           shiny::h3(shiny::HTML(as.character(i18n()$t("Ihr Fortschritt wird auf diesem Gerät automatisch in Ihrem Browser gespeichert.") ))),
                            h3(),
-                           shiny::h4(shiny::HTML(as.character(i18n()$t("Dies ist eine <b>Speicherung</b> Ihres Fortschritts. Am Ende <b>jedes Schritts</b> wird eine <b>neue Speicherung</b> heruntergeladen.") ))),
+                           shiny::h4(shiny::HTML(as.character(i18n()$t("Wird die Sitzung unterbrochen, bietet Ihnen die App beim nächsten Besuch an, dort weiterzumachen.") ))),
+                           shiny::h4(shiny::HTML(as.character(i18n()$t("Mit dem <b>Disketten-Symbol</b> neben dem Titel speichern Sie jederzeit eine vollständige Datei.") ))),
                            shiny::h3(),
                            shiny::div(style = "white-space:nowrap",
                                       shiny::h4(shiny::HTML(as.character(i18n()$t("Bei Ihrer <b>nächsten Sitzung</b>, können Sie mit <b>dieser Taste</b><br>gespeicherte Inhalte wieder laden!"))), img(src = "www/arrow_show.png", style = "float:right;display:inline-block;height:150px; margin-right:-200px;vertical-align:middle;margin-top:-90px"), style = "text-align:right"),
@@ -1228,7 +1236,20 @@ step1_server <- function(id, i18n,
     #discard modal and then gave again without leaving the step. Both writes land
     #in one reactive tick, so the observer still runs exactly once, reading the
     #value - the NULL is an invalidation, not an event.
+    #
+    #It also clears `isNewShape`, and that half is NEW. An outline that has been
+    #handed over is not a new one any more, whatever it was a moment ago. Only
+    #enter() used to say so, and that was enough while confirming step 1 moved
+    #the user to step 2: leaving and coming back was the only way to reach a
+    #second confirmation. Step 1 stays put now - see the confirm handler in
+    #app_server() - so a user who draws a shape, confirms, and presses again
+    #would arrive here a second time with the flag still TRUE. The drawing
+    #branch would re-combine and re-buffer, produce a `shapeLarger` equal to the
+    #stored one but not identical() to it, and vftCommit() would offer to throw
+    #the whole walk away over a perimeter nobody had changed. Cleared here, the
+    #second press is a reconfirmUnchanged(), which is exactly what it is.
     reportConfirm <- function(value){
+      r1$isNewShape <- FALSE
       r1$confirm <- NULL
       r1$confirm <- value
     }
@@ -1239,7 +1260,8 @@ step1_server <- function(id, i18n,
     #new dataset." A visit to step 1 that finalises no outline has created
     #nothing, so its confirm hands the app back the very objects the app already
     #holds: vftCommit() compares them identical(), finds nothing changed, asks
-    #nothing, discards nothing, and walks on to step 2.
+    #nothing, discards nothing, and leaves the user on step 1 to choose where
+    #to go next.
     #
     #Without this the drawing branch below would re-combine and re-buffer the
     #perimeter on the way out. The result is equal to the stored one and not

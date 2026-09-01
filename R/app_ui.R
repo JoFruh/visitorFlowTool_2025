@@ -14,6 +14,14 @@ app_ui <- function(){
   #resource path in .onLoad (R/zzz.R).
   shiny::tags$script(src = "www/vft-shim.js"),
 
+  #Crash recovery. The server pushes a small snapshot of the session at each
+  #step confirmation and this keeps it in the browser's own localStorage, so a
+  #crash, a closed tab or a lost connection does not cost the user their
+  #perimeter, their areas of interest and their step-2 choices. Device-local:
+  #nothing is written to the server's disk. See R/state_browser.R for what is
+  #sent and inst/app/www/vft-state.js for where it is kept.
+  shiny::tags$script(src = "www/vft-state.js"),
+
   #A queued progress bar goes red and shows the RUNNING job's percentage instead
   #of its own, so the user can see they are waiting and roughly for how long. The
   #class is toggled on one bar at a time rather than restyled globally, because a
@@ -33,8 +41,12 @@ app_ui <- function(){
     });
   ")),
 
-  shinyjs::hidden( shiny::downloadButton("downloadSave") ),
-  # shinyjs::hidden( shiny::downloadButton("downloadSaveRaster") ),
+  #The hidden downloadButton("downloadSave") that stood here is gone. It existed
+  #to be fired by shinyjs::click() at two step confirmations, which downloaded
+  #a timestamped .RData nobody had asked for. Saving is explicit now: the disk
+  #icon in the nav bar opens a dialog, and the real download link lives in that
+  #dialog - one id, in the DOM only while the dialog is open. See
+  #vftStateServer() in R/state_browser.R.
 
   #the step nav bar, OUTSIDE the tabsetPanel so it is on screen whichever step
   #is showing. Renders nothing unless VFT_NAV=1. See vftStepNav() below.
@@ -385,6 +397,7 @@ vftStepNav <- function(i18n = NULL){
   titleTxt <- sub("[[:space:]:]+$", "",
                   navTr("Besucherlenkungs-Tool: ", "Besucherlenkungs-Tool"))
   langTip  <- navTr(":nav_lang:", "Sprache")
+  saveTip  <- navTr(":nav_save:", "Sitzung speichern")
 
   shiny::tagList(
     shiny::tags$style(shiny::HTML("
@@ -490,7 +503,13 @@ vftStepNav <- function(i18n = NULL){
          With `flex:1 1 auto` on the centre instead, shrink is distributed in
          proportion to each zone's base width, so the buttons - much the widest
          zone - would take about four fifths of it and ellipsise first. */
-      #vftNav .vft-nav-left  { flex:0 1 auto; min-width:0; }
+      /* a flex row, because the save icon sits beside the title rather than in
+         the right-hand icon stack - saving is the one action in this bar that
+         is about the session as a whole, and the user asked for it next to the
+         name of the tool. */
+      #vftNav .vft-nav-left  { flex:0 1 auto; min-width:0; display:flex;
+                               align-items:center;
+                               gap:calc(var(--nav-sep) * 0.7); }
       #vftNav .vft-nav-title { font-size:var(--nav-title); font-weight:700;
                                line-height:1.1; margin:0;
                                overflow-wrap:break-word; }
@@ -652,6 +671,16 @@ vftStepNav <- function(i18n = NULL){
                               padding:0; border:none; background-color:transparent;
                               box-shadow:none;
                               background-size:cover; background-position:center; }
+      /* the save icon is drawn, not fetched: an inline SVG data URI rather than
+         a fourth PNG in inst/app/www. It costs no request, scales with
+         --nav-icon instead of being resampled, and the stroke colour is in the
+         markup where the rest of the bar's colours are. Written with %22 for
+         its own quotes so the whole thing fits inside url('...') with no
+         escaping. */
+      #vftNav .vft-nav-save { flex:0 0 auto; opacity:0.92;
+        background-image:url('data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23ffffff%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z%22/%3E%3Cpolyline points=%2217 21 17 13 7 13 7 21%22/%3E%3Cpolyline points=%227 3 7 8 15 8%22/%3E%3C/svg%3E'); }
+      #vftNav .vft-nav-save:hover,
+      #vftNav .vft-nav-save:focus { opacity:1; }
 
       /* ZG definieren | ZG bearbeiten | Naherholung simulieren | Szenarien
          erstellen, plugged into each other like
@@ -935,6 +964,43 @@ vftStepNav <- function(i18n = NULL){
       .vft-nav-contact { color:#006268; margin:4px 0 0 15px; font-size:12px;
                          font-family:'FranklinGFM','FranklinGothic','Franklin Gothic Book',
                                      'Libre Franklin',Arial,sans-serif; }
+
+      /* ---- 'Choose a next action' -----------------------------------------
+         Steps 1 and 2 no longer hand the user on by themselves, so a confirm
+         there changes nothing the eye can see. This line is what says where to
+         look next. Hidden from parse; vftNavHint() in R/navigation.R switches
+         the one class, the same way every other runtime change to this bar is
+         made - see the note above vftStepNav().
+
+         Centred on the PAGE, not on the button row: .vft-nav-center is the
+         middle item of a flex row whose left zone (the title) and right zone
+         (language, logo, icons) are not exactly equal, so the two centres are
+         a few dozen pixels apart. That is well inside the width of the row it
+         points at - the arrow lands under a button either way - and matching
+         them exactly would mean duplicating both zones here as hidden spacers.
+
+         The arrow points UP, at the buttons. It bounces four times and then
+         holds still: long enough to catch someone who has just pressed
+         Bestaetigen, short enough not to nag for the rest of the step.
+         Showing it again removes the class, reflows and puts it back (see
+         vftNavHint()), so a second confirm on the same step bounces once more. */
+      .vft-nav-hint { display:none; align-items:center; justify-content:center;
+                      gap:7px; margin:6px 0 0; color:#006268; font-size:13px;
+                      font-weight:700;
+                      font-family:'FranklinGFB','FranklinGothic','Franklin Gothic Book',
+                                  'Libre Franklin',Arial,sans-serif; }
+      .vft-nav-hint.vft-nav-hint--on { display:flex; }
+      .vft-nav-hint-arrow { font-size:18px; line-height:1;
+                            animation:vftNavHintBounce 1.1s ease-in-out 4; }
+      @keyframes vftNavHintBounce {
+        0%, 100% { transform:translateY(0); }
+        50%      { transform:translateY(-5px); }
+      }
+      /* an arrow that never stops moving is worse than no arrow for anyone who
+         has asked their machine for less of it. */
+      @media (prefers-reduced-motion: reduce){
+        .vft-nav-hint-arrow { animation:none; }
+      }
     ")),
     #kept from the old markup: it is what names the browser tab. Outside the
     #flex row, so it cannot become a flex item of it.
@@ -945,7 +1011,29 @@ vftStepNav <- function(i18n = NULL){
     shiny::tags$div(id = "vftNav", class = "vft-nav-folded",
       shiny::tags$div(class = "vft-nav-left",
         withData(shiny::tags$div(class = "vft-nav-title", titleTxt[["de"]]),
-                 "data-i18n-", titleTxt)
+                 "data-i18n-", titleTxt),
+        #### the explicit save ####
+        #
+        #Next to the name of the tool rather than in the icon stack on the
+        #right, because it is the one control in this bar that acts on the
+        #session as a whole rather than on the step being shown.
+        #
+        #An actionButton, not a downloadButton: pressing it opens a dialog that
+        #asks for a name, and the real download link lives in that dialog's
+        #footer (see vftStateServer() in R/state_browser.R). A web page cannot
+        #choose a folder, so the browser's own save dialog is where the file
+        #lands - which is also why the link has to be pressed by the user
+        #rather than clicked from R.
+        #
+        #This replaces the hidden downloadButton that used to sit at app level
+        #and be fired by shinyjs::click() at two step confirmations. Automatic
+        #saving is the browser snapshot's job now (R/state_browser.R); nothing
+        #reaches the user's Downloads folder unless they ask for it.
+        withData(
+          shiny::actionButton(inputId = "saveButton", label = "",
+                              class = "vft-nav-icon vft-nav-save",
+                              title = saveTip[["de"]]),
+          "data-tip-", saveTip)
       ),
       shiny::tags$div(class = "vft-nav-center", center),
       shiny::tags$div(class = "vft-nav-right",
@@ -967,6 +1055,23 @@ vftStepNav <- function(i18n = NULL){
                               style = "background-image:url('infoIcon.png');")
         )
       )
+    ),
+    #### "Choose a next action" ####
+    #
+    #Confirming step 1 or step 2 writes that step's results and leaves the user
+    #standing on it - see the two `then =` callbacks in R/app_server.R. Where to
+    #go next is a choice from the bar above, not one the app makes for them, and
+    #a confirm button that visibly does nothing is worse than one that moves the
+    #page: this line is what points at the choice. (Steps 3 and 4 and the
+    #Szenarien page still hand over by themselves; each of those is a stage of
+    #one piece of work rather than a place to stop.)
+    #
+    #English at every language setting, on purpose - it is the one string in
+    #this bar that is not in the translation CSVs and carries no data-i18n-*
+    #attributes, so the client-side language swap below leaves it alone.
+    shiny::tags$div(id = "vftNavHint", class = "vft-nav-hint",
+      shiny::tags$span(class = "vft-nav-hint-arrow", shiny::HTML("&#8593;")),
+      "Choose a next action"
     ),
     #### swapping the language, entirely on the client ####
     #

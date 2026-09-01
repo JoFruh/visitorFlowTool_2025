@@ -99,6 +99,88 @@ vftNavBannerProxyServer <- function(r, input, session = shiny::getDefaultReactiv
   invisible(NULL)
 }
 
+#' The chosen language, as ONE app-level fact.
+#'
+#' `r$currentLang` is what every step's enter() reads to decide which banner to
+#' show, which language to put its own selector in, and - through
+#' `shiny.i18n::update_lang()` - which language the client-side translation of
+#' the whole page runs in. So a stale value there does not merely mislabel one
+#' control: entering a step REWRITES the page's language from it.
+#'
+#' Nothing kept it current. It was written in seven places, all of them confirm
+#' handlers in app_server(), all of them from the module's returned
+#' `currentLang`, and that return is `reactive(i18n()$get_translation_language())`
+#' - a reactive over an R6 field. The field is mutated in place, which is not a
+#' reactive event, and the only reactive it reads (`i18n()`) is a constant. So it
+#' caches the first language it is ever asked for and answers that forever. While
+#' the six modules were rebuilt on every visit that was invisible: a fresh module
+#' meant a fresh reactive, evaluated on the spot. Stage 5 made them singletons,
+#' the reactives stopped being rebuilt, and the cached "de" they were holding
+#' became the value every confirm wrote back.
+#'
+#' The second half of the same defect: with the selector hoisted into the nav bar
+#' (vftNavBannerProxyServer above), a language change is a change to the CURRENT
+#' step's hidden selector, and three of the six steps' own observers never wrote
+#' `r$currentLang` at all. Choosing French on step 3 and walking to step 4 there-
+#' fore carried "de" into step 4's enter(), which called `update_lang("de")` and
+#' put the page back into German - with the nav selector still reading Français,
+#' because nothing had asked it to change.
+#'
+#' Hence one owner. Every way a language can be chosen is an input event on a
+#' select: the app-level one in the nav bar, or one of the six per-step ones
+#' (which are what the nav bar drives, and what the user clicks directly in a
+#' build without the bar). All seven are observed here, and this is the only
+#' place `r$currentLang` is written outside a restore.
+#'
+#' The Translator is set here too. It is the same R6 object every module holds,
+#' so setting it once covers the steps whose own observers forget to - step 3's
+#' English branch never called it, and no "it" branch anywhere does.
+#'
+#' The mirror at the end is for the path that has no input event behind it: a
+#' restore writes `r$currentLang` out of a save file or the browser snapshot, and
+#' the nav bar - static markup that swaps its labels on `shiny:inputchanged` -
+#' would otherwise go on showing the language the session started in. Guarded on
+#' the selector's own value so it sends nothing on the ordinary path, where the
+#' selector is already where the user put it.
+vftLangServer <- function(r, i18n, input, session = shiny::getDefaultReactiveDomain()){
+
+  langs <- c("de", "fr", "en")
+
+  set <- function(lang){
+    if(is.null(lang) || !nzchar(lang)) return(invisible(NULL))
+    r$currentLang <- lang
+    #not every language the selectors can name is one the CSVs carry ("it" is in
+    #two of the step observers and in none of the translation files), and
+    #set_translation_language() stops with an error on those. The banner and the
+    #client-side swap still do what they can with it, exactly as before.
+    if(lang %in% langs) try(i18n$set_translation_language(lang), silent = TRUE)
+    invisible(NULL)
+  }
+
+  #the nav bar's own selector. NULL - and so never firing - in a build where
+  #vftStepNav() rendered nothing.
+  shiny::observeEvent(input$languageSelect, set(input$languageSelect))
+
+  #the six hidden per-step selectors. Fully-qualified ids, same as the proxy
+  #above: this runs at app level, outside every module namespace. local() so
+  #each observer closes over its own id rather than over the loop variable.
+  for(step in names(VFT_BANNER_PROXY)) local({
+    id <- shiny::NS(step, VFT_BANNER_PROXY[[step]]$lang)
+    shiny::observeEvent(input[[id]], set(input[[id]]))
+  })
+
+  if(vftNavEnabled()){
+    shiny::observeEvent(r$currentLang, {
+      lang <- r$currentLang
+      if(is.null(lang) || identical(shiny::isolate(input$languageSelect), lang))
+        return(invisible(NULL))
+      shiny::updateSelectInput(session, inputId = "languageSelect", selected = lang)
+    })
+  }
+
+  invisible(NULL)
+}
+
 #' The visit counter for one step, as a reactive read.
 #'
 #' Meant to be the expression of the `observeEvent()` that builds that step:
@@ -159,6 +241,54 @@ vftStepEntered <- function(step, session = shiny::getDefaultReactiveDomain()){
   nav <- tryCatch(session$userData$vftNav, error = function(e) NULL)
   if(is.null(nav) || is.null(nav[[step]])) return(FALSE)
   shiny::isolate(nav[[step]]()) > 0L
+}
+
+#' Show or hide the "Choose a next action" line under the banner.
+#'
+#' Steps 1 and 2 confirm without moving anywhere (their `then =` callbacks in
+#' app_server()), so the only sign the write happened would otherwise be the nav
+#' bar quietly lighting another button up. This is the line that says so - see
+#' the markup and the CSS in `vftStepNav()`.
+#'
+#' Shown by those two confirms, hidden by `vftGoToStep()`: once the user has
+#' chosen, the instruction to choose has served its purpose. Nothing else calls
+#' it, and no step needs to know it exists.
+#'
+#' Showing ALWAYS sends, even when the line is already up, and it restarts the
+#' arrow's animation on the way - a second confirm on the same step is exactly
+#' the case where the hint is already showing and the user still needs to see
+#' that their press did something. That is one `runjs` and not addClass, because
+#' a CSS animation only re-runs if the class is removed, the element is
+#' reflowed, and the class is put back; shinyjs would send those as two messages
+#' in one batch, the browser would apply them in the same frame, and the arrow
+#' would sit still. HIDING is filtered against the remembered state, so the
+#' navigation that follows a confirm sends nothing when no hint is up - the same
+#' economy `vftNavBarServer()` practises on its toggleState calls, and it
+#' matters here for the same reason: every message batch the client answers
+#' costs a full manageHiddenOutputs() sweep.
+#'
+#' `withReactiveDomain()`, because shinyjs namespaces against the DOMAIN rather
+#' than against any session it is handed, and this is called from confirm
+#' handlers and from `vftGoToStep()` - both of which can run under a domain that
+#' is not the app session (a provider's callback, a module's enter()). The id is
+#' app level and unnamespaced, so getting that wrong would silently address
+#' nothing.
+vftNavHint <- function(on, session = shiny::getDefaultReactiveDomain()){
+  if(!vftNavEnabled() || is.null(session)) return(invisible(NULL))
+  on <- isTRUE(on)
+  if(!on && !isTRUE(session$userData$vftNavHintOn)) return(invisible(NULL))
+
+  shiny::withReactiveDomain(session, {
+    if(on)
+      shinyjs::runjs(paste0(
+        "(function(){var el=document.getElementById('vftNavHint'); if(!el) return;",
+        "el.classList.remove('vft-nav-hint--on'); void el.offsetWidth;",
+        "el.classList.add('vft-nav-hint--on');})();"))
+    else
+      shinyjs::removeClass(id = "vftNavHint", class = "vft-nav-hint--on")
+  })
+  session$userData$vftNavHintOn <- on
+  invisible(NULL)
 }
 
 #' Go to a step: record it, show its tab, and ask its server to run.
@@ -332,6 +462,12 @@ vftGoToStep <- function(r, step, session = shiny::getDefaultReactiveDomain(),
   #no `code`, and the nav bar still has to highlight it. Reactive on purpose -
   #it is what makes the bar follow navigation it did not itself initiate.
   r$navStep <- step
+
+  #The user has chosen, so the line asking them to choose comes down. Here and
+  #not in the two confirm handlers because EVERY way off steps 1 and 2 arrives
+  #here - a nav bar button, a banner letter, the restore path, a provider
+  #completing a deferred move - and the hint has to answer all of them.
+  vftNavHint(FALSE, session)
 
   vftDbg(paste0("NAV -> ", step))
   shiny::updateTabsetPanel(session = session, inputId = "tabs", selected = spec$tab)
@@ -581,12 +717,12 @@ vftNavBarServer <- function(r, input, session = shiny::getDefaultReactiveDomain(
     #ignoreInit so the first confirm of a fresh session is a no-op (already
     #folded); ignoreNULL = FALSE so a shape being cleared counts too.
     #
-    #Guarded on where the user IS. Step 1's confirm runs its vftGoToStep() to
-    #step 2 synchronously inside vftCommit(), so by the time this deferred
-    #observer runs r$navStep is outside the group and it folds. The restore path
-    #also writes r$shape, and it can land the session directly on step 5 - there
-    #the guard holds the chain open, and the ring test below would reopen it
-    #anyway.
+    #Guarded on where the user IS. Confirming step 1 leaves them standing on it
+    #now - it no longer moves anyone to step 2 - so r$navStep still reads
+    #"step1" when this deferred observer runs, which is outside the group, and
+    #the chain folds. The restore path also writes r$shape, and it can land the
+    #session directly on step 5 - there the guard holds the chain open, and the
+    #ring test below would reopen it anyway.
     shiny::observeEvent(r$shape, {
       if(shiny::isolate(r$navStep) %in% VFT_NAV_FOLD) return(invisible(NULL))
       vftDbg("NAV FOLD -> new outline, folded back")

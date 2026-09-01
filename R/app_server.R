@@ -50,6 +50,15 @@ app_server <- function(input, output, session){
   #unchanged, hidden proxy input belongs to r$navStep. See R/navigation.R.
   vftNavBannerProxyServer(r, input, session)
 
+  #the one owner of `r$currentLang` and of the Translator's language: every
+  #selector that can choose one - the nav bar's and the six hidden per-step ones
+  #- is observed in one place, so a language chosen on any step is the language
+  #the next step is entered in. This replaces the seven `r$currentLang <-
+  #stepNreturn$currentLang()` writes that used to sit in the confirm handlers
+  #below, none of which could report a change made after the module was built.
+  #See R/navigation.R.
+  vftLangServer(r, i18n, input, session)
+
   #the lazy data layer: one observe that derives whatever a step is about to
   #need, and completes a navigation that was waiting for it. Nothing is computed
   #because of where the user has been, only because something is about to read
@@ -63,6 +72,11 @@ app_server <- function(input, output, session){
   #vftCommit(), which is what raises that modal when the write costs something.
   vftCommitServer(r, session)
 
+  #the disk icon's save dialog, and the crash-recovery prompt. One pair of
+  #observers for the session. The snapshot itself is written from the `then =`
+  #of each vftCommit() below, not from here - see R/state_browser.R.
+  vftStateServer(r, input, session)
+
   #accompanying non reactive (nr) variables, to allow for back and forth access between step5 and newVersions
   r$triggerNewVersions_nr <- 1
   r$triggerStep5_nr <- 1
@@ -71,178 +85,43 @@ app_server <- function(input, output, session){
   r$needHelp <- FALSE
 
 
-  #SAVE ENVBASE TO USER (OFFER OPTION TO DOWNLOAD)
-  # Downloadable csv of selected dataset ----
+  #### the explicit save ####
+  #
+  #The FULL session state, written to a file the user names and the browser
+  #downloads. This is the only thing that preserves a finished simulation, and
+  #it is the file step 1's loader reads back.
+  #
+  #It is no longer clicked from R. It used to be a hidden button fired by
+  #shinyjs::click() at two step confirmations, so every user collected
+  #timestamped .RData files in their Downloads folder without asking for them;
+  #automatic saving is the browser snapshot's job now (vftSnapshotWrite() in
+  #R/state_browser.R), and this link exists only inside the save dialog the disk
+  #icon opens. suspendWhenHidden = FALSE because the dialog is not on screen
+  #when the session starts.
+  #
+  #What used to be 130 lines of envBase_ assembly here is VFT_STATE_KEYS plus
+  #vftStateFromR()/vftStateWrite() in R/state.R - one place that knows the
+  #format, shared with the restore path and with the browser snapshot. The
+  #format itself is unchanged: the same 30 envBase_ names, the same gzip level.
   output$downloadSave <- shiny::downloadHandler(
     filename = function(){
-      dateTime <- gsub(":|-| ", "_",Sys.time())
-      dateTime <- substr(dateTime, 1,nchar(dateTime)-3)
-
-      #save version of SM that will need to be uploaded
-      # if(r$step == 4){r$SMdateTime <- dateTime}
-      #stepName not same name as programming name
+      #The name the user typed in the dialog, sanitised. Evaluated when the
+      #link is requested, so it is whatever is in the box at that moment.
       #
-      #READ THIS BEFORE CHANGING IT, and preferably decide it in the save
-      #rewrite rather than here. `r$step` is an INTEGER (VFT_STEPS' `code`), and
-      #switch() on a number selects BY POSITION and ignores the names entirely -
-      #so "2", "3", ... are decoration and what actually happens is
-      #stepName <- c(...)[r$step]. It is not obvious which of the two readings
-      #was meant, and they disagree: the two checkpoints that still fire are the
-      #step-2 confirm (r$step is 3 by then) and the step-4 confirm (r$step is 5),
-      #and positionally those come out "3_schnell" and "5_simulation" while the
-      #names would make them "ignore" and "4_genau". The positional answer is the
-      #one users have been getting and the one that reads sensibly, so it is left
-      #exactly as it was.
-      #
-      #Codes 6-8 were the Resultate page and its variants and are gone with it
-      #(2026-08-27); nothing can write them, so the two entries are dropped. The
-      #five that remain cover positions 1-5, which is every value `code` now
-      #takes.
-      stepName <- switch(r$step,
-        "2" = "2_SM",
-        "3" = "ignore",
-        "4" = "3_schnell",
-        "5" = "4_genau",
-        "6" = "5_simulation"
-      )
-#"2_SM","4_ZG_genau"
-
-      return(paste0("visitorFlowSave_step",stepName, "_", dateTime, ".RData"))
+      #This replaces a switch() on r$step, an INTEGER, which therefore selected
+      #by POSITION and ignored its own "2" =, "3" = names entirely - they
+      #disagreed with the positions and it was never clear which reading was
+      #meant. Nobody has to decide now: vftSaveDefaultName() prefills the box
+      #from the step registry and the user can overwrite the whole thing.
+      vftSaveFileName(input$saveName, r)
     },
     content = function(file){
       #known general-setup hot spot: a save() of the whole session state on the
-      #thread every other user is waiting on. It used to fire at all eight step
-      #transitions; it now runs at three checkpoints only (see the dropped-site
-      #comments below). Labelled so the stall log attributes it by name rather
-      #than to "unattributed".
+      #thread every other user is waiting on. It fires once, when a user asks
+      #for it, rather than at eight (then three) step transitions. Labelled so
+      #the stall log attributes it by name rather than to "unattributed".
       vftTime("app:downloadSave", {
-      #save all elements of envBase (a bit of a detour by saving as variables first)
-      envBase_step <- r$step
-      envBase_shape <- r$shape
-      envBase_toSelectSpAfter <- r$toSelectSpAfter
-      # envBase_SM_pres <- r$SM_pres
-      # envBase_SM_noPres <- r$SM_noPres
-      envBase_SMcolors <- r$SMcolors
-      envBase_network <- r$network
-      envBase_parking <- r$parking
-      envBase_residential <- r$residential
-      envBase_minThresh <- r$minThresh
-      envBase_confirm <- r$confirm
-      envBase_finalPolygons <- r$finalPolygons
-      envBase_networkList <- r$networkList
-      envBase_versionsUI <- r$versionsUI
-      envBase_step6FirstRun <- r$step6FirstRun
-      envBase_weightInputs <- r$weightInputs
-      envBase_weightNames <- r$weightNames
-
-      envBase_needHelp <- r$needHelp
-      envBase_species <- r$species
-
-      #need to keep step6FirstRun TRUE, if versionsUI is NULL
-      #reason: original version is generated only on first run (otherwise versionsUI is used)
-      if(is.null(envBase_versionsUI)){
-        envBase_step6FirstRun <- TRUE
-      }
-
-      envBase_isSkip <- r$isSkip
-      envBase_triggerNewVersions_nr <- r$triggerNewVersions_nr
-      envBase_triggerstep6_nr <- r$triggerstep6_nr
-      envBase_pathUsage <- r$pathUsage
-      envBase_newVersionsFirstRun <- r$newVersionsFirstRun
-      # envBase_SMdateTime <- r$SMdateTime #not needed anymore?
-      envBase_groupSave_all <- r$groupSave_all
-      envBase_groupSave_sens <- r$groupSave_sens
-      envBase_groupSave_type <- r$groupSave_type
-      envBase_groupSave_class <- r$groupSave_class
-
-      envBase_checkboxSave <- r$checkboxSave
-      envBase_filterList <- r$filterList
-      # envBase_weightInputs <- r$weightInputs
-
-      #The sensitivity raster has to travel in the save file as a plain R object,
-      #because a SpatRaster is an external pointer and does not survive save().
-      #
-      #This used to be terra::as.data.frame(xy = TRUE, na.rm = FALSE) - one row
-      #per cell INCLUDING NAs, carrying two full-precision coordinate doubles per
-      #cell that are entirely redundant for a regular grid, and dropping the CRS
-      #(hence the explicit crs<- on the restore path below). terra::wrap() holds
-      #the same information as a PackedSpatRaster. Measured at 100 m resolution
-      #over a 100 km area (1M cells): 20.0 MB -> 4.0 MB retained per session and
-      #0.11s -> 0.01s to build.
-      #
-      #The RAM is the point, not the time: this is cached for the life of the
-      #session, on a host where daemons have already been OOM-killed.
-      #
-      #Backward compatible on purpose: terra::rast() has methods for BOTH a
-      #data.frame and a PackedSpatRaster, so the restore path below reads old and
-      #new save files without branching.
-      #
-      #Cached because SM_pres only changes in step 2 (and on resume), so this is
-      #built once and reused by every later checkpoint rather than recomputed on
-      #the main thread each time.
-      #
-      #A checkpoint taken before step 2 has been confirmed has no sensitivity
-      #matrix, and that is a legitimate save file: the restore path below already
-      #tests `!is.null(envBase_SM_pres)` and skips it. The WRITE side did not, and
-      #terra::wrap(NULL) does not return NULL - it aborts ("unable to find an
-      #inherited method for 'wrap' for signature x = \"NULL\""), out of a download
-      #handler, so the browser gets an error page instead of the file. Reachable
-      #since the nav bar started offering step 3 straight after step 1: nothing
-      #between there and the step-4 checkpoint needs SM_pres, so nothing stops a
-      #user routing around step 2 and reaching this line with it unset.
-      if(is.null(r$SM_pres_packed) && !is.null(r$SM_pres)){
-        r$SM_pres_packed <- terra::wrap(r$SM_pres)
-      }
-      envBase_SM_pres <- r$SM_pres_packed
-
-      #save MinCutThreshold
-      envBase_minCutThresh <- r$minCutThresh
-
-      return(save(envBase_step,
-                  envBase_shape,
-                  envBase_toSelectSpAfter,
-                  envBase_SM_pres,
-                  # envBase_SM_noPres,
-                  envBase_SMcolors,
-                  envBase_network,
-                  envBase_parking,
-                  envBase_residential,
-                  envBase_minThresh,
-                  envBase_isSkip,
-                  envBase_confirm,
-                  envBase_finalPolygons,
-                  envBase_networkList,
-                  envBase_versionsUI,
-                  envBase_triggerNewVersions_nr,
-                  envBase_triggerstep6_nr,
-                  envBase_pathUsage,
-                  envBase_step6FirstRun,
-                  envBase_newVersionsFirstRun,
-                  envBase_groupSave_all ,
-                  envBase_groupSave_sens,
-                  envBase_groupSave_type,
-                  envBase_groupSave_class,
-                  envBase_checkboxSave,
-                  envBase_filterList,
-                  envBase_weightInputs,
-                  envBase_weightNames,
-                  envBase_needHelp,
-                  envBase_species,
-                  envBase_minCutThresh, file = file,
-                  #save() defaults to gzip at compression_level 6, which is pure
-                  #main-thread CPU over the whole session state -- the raster,
-                  #the network, the polygons, the basemap -- on the thread every
-                  #other user is waiting on. Measured on a
-                  #91.6 MB representative payload:
-                  #  level 6 (default) 4.94 s -> 17.8 MB
-                  #  level 3           2.03 s -> 20.2 MB
-                  #  level 1           0.87 s -> 24.1 MB
-                  #  none              0.11 s -> 91.6 MB
-                  #Level 1 is 5.7x less blocking for a 35% larger file, and the
-                  #format is unchanged so load() reads it exactly as before.
-                  #Uncompressed would be faster still but quadruples what the
-                  #user has to download.
-                  compress = "gzip", compression_level = 1)) #envBase_SMdateTime,
+        vftStateWrite(vftStateFromR(r, VFT_STATE_KEYS), file)
       })
     }
   )
@@ -328,7 +207,6 @@ app_server <- function(input, output, session){
         #reading them here would only put NULLs into `r` and make every one of
         #them look "not derivable but present".
         r$needHelp <- step1return$needHelp()
-        r$currentLang <- step1return$currentLang()
         # r$parking <- step1return$parking()
 
         #A new perimeter is the most expensive write in the app: everything
@@ -345,146 +223,81 @@ app_server <- function(input, output, session){
         #branches normalise the shape differently; a provider derives it from
         #`shape` alone on the restore path, where no save file has ever carried it.
         #
-        #autosave dropped here, on leaving step 1 (shape + path network). downloadSave
-        #materialises the raster and save()s the whole session state on the
-        #shared main thread, and it used to fire at all eight step transitions.
-        #It now runs only at the three checkpoints where losing work is
-        #expensive: the sensitivity matrix, the confirmed network + parking,
-        #and the finished simulation. Restore with:
-        #  shinyjs::click("downloadSave", asis = FALSE)
+        #### where the crash snapshot is written ####
+        #
+        #In the `then =` below, and in the `then =` of every other vftCommit()
+        #in this file. Two reasons it goes there and not beside the commit:
+        #`then` does not run when the invalidation modal is cancelled, so a
+        #snapshot is never taken of a state the user declined to create; and a
+        #confirm is exactly the moment worth not losing.
+        #
+        #What it costs is nothing like what the old autosave cost. That
+        #materialised the sensitivity raster and save()d the whole session
+        #state - 17.8-24.1 MB gzipped - on the thread every other user is
+        #waiting on, and downloaded it to their Downloads folder unasked.
+        #The snapshot is the perimeter, the areas of interest and the choices
+        #(VFT_SNAPSHOT_KEYS in R/state.R), and it goes to the browser.
         vftCommit(r,
                   list(shape       = step1return$ffshape(),
                        shapeLarger = step1return$shapeLarger()),
                   session, step = "step1",
-                  then = function() vftGoToStep(r, "step2", session))
+                  #### confirming step 1 does NOT move the user on ####
+                  #
+                  #It used to be `then = function() vftGoToStep(r, "step2",
+                  #session)`. Steps 1 and 2 are the two places in the walk where
+                  #what comes next is a genuine choice - the perimeter alone
+                  #opens the sensitivity matrix, the whole simulation chain and
+                  #Hitzeminderung, and none of them is more "next" than the
+                  #others - so the app writes the result and leaves the user
+                  #standing on the step to make it. Steps 3 and 4 and the
+                  #Szenarien page still hand over by themselves: each of those
+                  #is a stage of one piece of work, not a fork.
+                  #
+                  #What the user then sees is the nav bar: the buttons this
+                  #write unlocks light up, and vftNavHint() puts an arrow and
+                  #"Choose a next action" under them, because a confirm that
+                  #moves nothing needs to say that it did something. The line
+                  #comes down again inside vftGoToStep(), whichever button they
+                  #press. See vftStepNav() in R/app_ui.R.
+                  then = function(){
+                    vftNavHint(TRUE, session)
+                    vftSnapshotWrite(r, session)
+                  })
 
       }else if(step1return$confirm() == -1){
 
-        #load objects
-        load(step1return$datapath())
-
-        #populate envBase with saved data
-        if(exists("envBase_step")){r$step <- envBase_step}
-        if(exists("envBase_shape")){r$shape <- envBase_shape}
-        if(exists("envBase_toSelectSpAfter")){r$toSelectSpAfter <- envBase_toSelectSpAfter}
-        # if(exists("envBase_SM_noPres")){r$SM_noPres <- envBase_SM_noPres}
-        if(exists("envBase_SMcolors")){r$SMcolors <- envBase_SMcolors}
-        if(exists("envBase_network")){r$network <- envBase_network}
-        if(exists("envBase_parking")){r$parking <- envBase_parking}
-        if(exists("envBase_residential")){r$residential <- envBase_residential}
-        if(exists("envBase_minThresh")){r$minThresh <- envBase_minThresh}
-        if(exists("envBase_isSkip")){r$isSkip <- envBase_isSkip}
-
-        if(exists("envBase_confirm")){r$confirm <- envBase_confirm}
-        if(exists("envBase_finalPolygons")){r$finalPolygons <- envBase_finalPolygons}
-        if(exists("envBase_networkList")){r$networkList <- envBase_networkList}
-        if(exists("envBase_versionsUI")){r$versionsUI <- envBase_versionsUI}
-        if(exists("envBase_step6FirstRun")){r$step6FirstRun <- envBase_step6FirstRun}
-
-        #double check that step5FirstRun is TRUE when versionsUI is empty (but this should never occur)
-        if(is.null(r$versionsUI)){
-          r$step6FirstRun <- TRUE
-        }
-
-        if(exists("envBase_triggerNewVersions_nr")){r$triggerNewVersions_nr <- envBase_triggerNewVersions_nr}
-        if(exists("envBase_triggerstep6_nr")){r$triggerstep6_nr <- envBase_triggerstep6_nr}
-        if(exists("envBase_pathUsage")){r$pathUsage <- envBase_pathUsage}
-        if(exists("envBase_newVersionsFirstRun")){r$newVersionsFirstRun <- envBase_newVersionsFirstRun}
-        #envBase_basemap is deliberately NOT read back. step1 never assigned it,
-        #so every save file that carries it carries a NULL; load() tolerates the
-        #extra object, and current save files no longer write it at all.
-        if(exists("envBase_dateTime")){r$dateTime <- envBase_dateTime}
-
-        if(exists("envBase_groupSave_all")){r$groupSave_all <- envBase_groupSave_all}
-        if(exists("envBase_groupSave_sens")){r$groupSave_sens <- envBase_groupSave_sens}
-        if(exists("envBase_groupSave_type")){r$groupSave_type <- envBase_groupSave_type}
-        if(exists("envBase_groupSave_class")){r$groupSave_class <- envBase_groupSave_class}
-        if(exists("envBase_checkboxSave")){r$checkboxSave <- envBase_checkboxSave}
-        if(exists("envBase_filterList")){r$filterList <- envBase_filterList}
-        if(exists("envBase_weightNames")){r$weightNames <- envBase_weightNames}
-        if(exists("envBase_weightInputs")){r$weightInputs <- envBase_weightInputs}
-        if(exists("envBase_needHelp")){r$needHelp <- envBase_needHelp}
-        if(exists("envBase_species")){r$species <- envBase_species}
-        if(exists("envBase_minCutThresh")){r$minCutThresh <- envBase_minCutThresh}
-
-
-        #The two national COGs used to be opened and cropped right here, on the
-        #main thread, for every restore - including restores to steps that read
-        #neither of them. They are providers now, so vftGoToStep() below derives
-        #whatever the restored step actually needs, in a daemon, and holds the
-        #navigation until it lands. Save files have never carried the rasters, so
-        #nothing is lost and nothing about the format changes.
+        #### restoring an uploaded save file ####
         #
-        #envBase_network arrives with its node columns already attached, so
-        #VFT_KEY_READY's column test marks `networkNodes` done and no restore ever
-        #rebuilds the network.
-        r$currentLang <- step1return$currentLang()
-
-        #Load the saved sensitivity matrix. terra::rast() has methods for both
-        #shapes this can arrive in - a PackedSpatRaster from a current save file,
-        #or the xy data.frame older files carry - so both restore here without
-        #branching. Only the data.frame form loses the CRS, hence the crs<-
-        #below; on a packed raster it is a harmless no-op (it is already 4326).
+        #confirm() == -1 is step 1's sentinel for "a save file was chosen"; the
+        #module stashes the temp path and does not read the file itself.
         #
-        #The guard used to be `length(envBase_SM_pres > 0)`, which compares the
-        #whole object against 0 and takes the length of the RESULT. That is never
-        #0 for a non-empty data.frame, so it never actually guarded anything -
-        #and it ERRORS outright on a PackedSpatRaster ("comparison (>) is
-        #possible only for atomic and list types"), which would have made every
-        #new save file unloadable.
-        if(exists("envBase_SM_pres")){
-          if(!is.null(envBase_SM_pres)){
-            r$SM_pres <- terra::rast(envBase_SM_pres)
-            terra::crs(r$SM_pres) <- "epsg:4326"
-            #Deliberately NOT reusing the loaded object as the save cache: an old
-            #file hands back a 20 MB data.frame, and keeping it would both retain
-            #it for the session and write the old fat form again at the next
-            #checkpoint. Leaving this NULL costs one terra::wrap() (~0.01s) and
-            #means every file this session writes is the compact form.
-            r$SM_pres_packed <- NULL
-          }
-        }
-
-        #### STAGE 6: resume ####
+        #This was a load() into the observer's own frame followed by forty
+        #`if(exists("envBase_x")){ r$x <- envBase_x }` lines and the resume
+        #ladder. All of it is two calls now, in R/state.R, shared with the
+        #browser snapshot - which is the point: there is one function that
+        #knows how to write state into `r`, and one registry that knows what
+        #state is.
         #
-        #This was five hand-written branches, one per step code, with no branch
-        #at all for the last step and one (`r$step == 1`) that bumped a
-        #reactiveVal nothing observed - so a save taken at step 1 restored its
-        #data and then sat on whatever tab was already showing. All of it is two
-        #calls now, and neither of them is a list of steps: vftRestoreStep()
-        #reads the registry, so a step added or removed there needs nothing here.
-        #
-        #It answers a question the ladder never asked. The number in the file
-        #says where the user WAS; whether that step can be entered is a question
-        #about what else the file carried, and the registry already knows. A save
-        #that names step 5 but has no `species` in it used to be honoured: step 5
-        #was built, read NULL, and failed somewhere in the middle. It now resumes
-        #at the furthest step that can actually run and says so.
-        #
-        #REACHABLE, not available, which is the capability this buys: a save
-        #carrying nothing but `shape` is a legal file now. It names step 2, step 2
-        #needs only `shape`, and the buffered perimeter, the attractiveness crop
-        #and the path network are derived by the provider layer when a step that
-        #reads them is entered - not rebuilt eagerly on the way in. vftGoToStep()
-        #holds the navigation until they land, with the progress bar showing.
-        wanted <- vftStepForCode(r$step)
-        resume <- vftRestoreStep(r)
+        #vftStateRead() also fixes something the ladder got wrong. exists() was
+        #tested against the OBSERVER's frame, which persists between two loads
+        #in one session, so a second file silently inherited the first one's
+        #value for every key it happened not to carry. Reading into a fresh
+        #empty environment makes that impossible by construction.
+        vals <- vftStateRead(step1return$datapath())
 
-        if(!is.null(wanted) && !identical(wanted, resume)){
-          vftDbg(paste0("RESTORE: save names ", wanted, ", resuming at ", resume,
-                        " (missing: ",
-                        paste(vftStepMissing(r, wanted), collapse = ", "), ")"))
-          #Said out loud rather than logged only: landing somewhere other than
-          #where the file was taken is confusing enough to be worth a line, and
-          #the alternative the ladder took - honour the number and let the module
-          #fail - is worse.
-          try(shiny::showNotification(
-            paste0("Die Datei reicht nur bis \u201e", VFT_STEPS[[resume]]$label,
-                   "\u201c - dort geht es weiter."),
-            type = "warning", duration = 8, session = session), silent = TRUE)
-        }
+        #The language comes from the selector, not from the file: what the user
+        #is reading the app in now beats what whoever made the file was reading
+        #it in. Written onto the list rather than onto `r` around the call, so
+        #it cannot depend on where in vftApplyState() the key loop happens to
+        #sit.
+        #
+        #`r$currentLang` and not `step1return$currentLang()`: the module's return
+        #is a reactive over an R6 field that never invalidates, so it answers
+        #with the language of the FIRST time anything asked it - see
+        #vftLangServer() in R/navigation.R, which owns this key now.
+        vals$currentLang <- shiny::isolate(r$currentLang)
 
-        vftGoToStep(r, resume, session)
+        vftApplyState(r, vals, session)
       }
     }, ignoreInit = TRUE)
 
@@ -546,7 +359,6 @@ app_server <- function(input, output, session){
         vftDbg("PRE-TRIGGER STEP 2")
         #save returns that are not part of the dependency graph
         r$needHelp <- step2return$needHelp()
-        r$currentLang <- step2return$currentLang()
 
         vftDbgCat("STEP 3_2")
 
@@ -574,12 +386,23 @@ app_server <- function(input, output, session){
                        weightNames     = step2return$weightNames()),
                   session, step = "step2",
                   then = function(){
-                    #activate download. vftGoToStep sets r$step, which
-                    #downloadSave reads to name the file, so it has to come
-                    #before the click.
-                    vftGoToStep(r, "step3", session)
-                    shinyjs::click("downloadSave", asis = FALSE)
-                    # shinyjs::click("downloadSaveRaster", asis = FALSE)
+                    #### confirming step 2 does NOT move the user on ####
+                    #
+                    #Same as step 1's confirm above, and for the same reason:
+                    #with the matrix written, the simulation chain and the
+                    #Szenarien page are both open and neither is the obvious
+                    #next thing. The bar is where that is decided, and this is
+                    #the line that points at it. The `vftGoToStep(r, "step3",
+                    #session)` that stood here is gone.
+                    vftNavHint(TRUE, session)
+
+                    #The sensitivity matrix itself is far too big for the
+                    #browser (~4 MB packed, most of a localStorage quota on its
+                    #own) and is deliberately not in VFT_SNAPSHOT_KEYS. What
+                    #this preserves is the work that produced it: the species,
+                    #the groups, the filters and the weights. A recovered
+                    #session re-runs the SDM from exactly those choices.
+                    vftSnapshotWrite(r, session)
                   })
 
         vftDbgCat("STEP 3_3")
@@ -664,7 +487,6 @@ app_server <- function(input, output, session){
         # r$DULN <- step3return$DULN()
         # r$DULN_all <- step3return$DULN_all()
         r$needHelp <- step3return$needHelp()
-        r$currentLang <- step3return$currentLang()
 
         #THE write this whole change is about. A new attractiveness threshold is
         #a new set of areas of interest, and everything cut from them - the
@@ -679,27 +501,21 @@ app_server <- function(input, output, session){
         #its confirm observer disabled on the way out - have to come back, or the
         #user would be left on a step they cannot leave.
         #
-        #autosave dropped here, on leaving step 3 (threshold choice). downloadSave
-        #materialises the raster and save()s the whole session state on the
-        #shared main thread, and it used to fire at all eight step transitions.
-        #It now runs only at the three checkpoints where losing work is
-        #expensive: the sensitivity matrix, the confirmed network + parking,
-        #and the finished simulation. Restore with:
-        #  shinyjs::click("downloadSave", asis = FALSE)
-
         vftDbg(input$`step3-confirmButton3`)
 
         vftCommit(r,
                   list(minThresh = step3return$minThresh(),
                        isSkip    = step3return$isSkip()),
                   session, step = "step3",
-                  then     = function() vftGoToStep(r, "step4", session),
+                  then     = function(){
+                    vftGoToStep(r, "step4", session)
+                    vftSnapshotWrite(r, session)
+                  },
                   onCancel = function(){
                     shinyjs::enable(id = "step3-confirmButton3")
                     shinyjs::enable(id = "step3-skipButton")
                   })
       }else if(step3return$isSkip() == TRUE ){
-        r$currentLang <- step3return$currentLang()
 
         #Skipping produces no threshold, so it supersedes nothing and never
         #raises the modal: whatever areas of interest exist are kept and step 4
@@ -707,14 +523,10 @@ app_server <- function(input, output, session){
         #vftCommit() anyway, so that the rule "a step's results are written in
         #one place, by one function" holds for every exit from every step.
         vftCommit(r, list(isSkip = step3return$isSkip()), session, step = "step3",
-                  then = function() vftGoToStep(r, "step4", session))
-        #autosave dropped here, on leaving step 3 via the skip path. downloadSave
-        #materialises the raster and save()s the whole session state on the
-        #shared main thread, and it used to fire at all eight step transitions.
-        #It now runs only at the three checkpoints where losing work is
-        #expensive: the sensitivity matrix, the confirmed network + parking,
-        #and the finished simulation. Restore with:
-        #  shinyjs::click("downloadSave", asis = FALSE)
+                  then = function(){
+                    vftGoToStep(r, "step4", session)
+                    vftSnapshotWrite(r, session)
+                  })
       }else{
         #a banner letter, meaning "go back to an earlier step". See
         #vftGoBack() in R/navigation.R.
@@ -725,19 +537,14 @@ app_server <- function(input, output, session){
 
     shiny::observeEvent(step3return$skip(), {
       if(step3return$isSkip() > 0 ){
-        r$currentLang <- step3return$currentLang()
 
         #the skip BUTTON, as opposed to the confirm handler's skip branch above.
         #Same write, same reasoning: nothing is superseded by skipping.
         vftCommit(r, list(isSkip = step3return$isSkip()), session, step = "step3",
-                  then = function() vftGoToStep(r, "step4", session))
-        #autosave dropped here, on leaving step 3 via the skip button. downloadSave
-        #materialises the raster and save()s the whole session state on the
-        #shared main thread, and it used to fire at all eight step transitions.
-        #It now runs only at the three checkpoints where losing work is
-        #expensive: the sensitivity matrix, the confirmed network + parking,
-        #and the finished simulation. Restore with:
-        #  shinyjs::click("downloadSave", asis = FALSE)
+                  then = function(){
+                    vftGoToStep(r, "step4", session)
+                    vftSnapshotWrite(r, session)
+                  })
       }
     }, ignoreInit = TRUE)
 
@@ -802,7 +609,6 @@ app_server <- function(input, output, session){
         # shinyjs::reset
         #save returns that are not part of the dependency graph
         r$needHelp <- step4return$needHelp()
-        r$currentLang <- step4return$currentLang()
 
         #CREATE NETWORK LIST ####
         #Package together all aspects that can be altered and results (network,
@@ -885,11 +691,17 @@ app_server <- function(input, output, session){
                     r$step6FirstRun <- TRUE
                     r$newVersionsFirstRun <- TRUE
 
-                    #activate download. vftGoToStep sets r$step, which
-                    #downloadSave reads to name the file, so it has to come
-                    #before the click.
+                    #vftGoToStep sets r$step, which the snapshot records, so it
+                    #has to come first - a snapshot taken before it would name
+                    #step 4 and resume the user one step behind where they were.
                     vftGoToStep(r, "step5", session)
-                    shinyjs::click("downloadSave", asis = FALSE)
+
+                    #The Zielgebiete are in VFT_SNAPSHOT_KEYS, so this is the
+                    #confirmation that puts real geometry in the browser. The
+                    #network and the (empty) scenario list are not: both are
+                    #rebuilt from `finalPolygons` and `minThresh` by the
+                    #provider layer and vftPrepareThen().
+                    vftSnapshotWrite(r, session)
 
                     r$triggerStep5_nr <- 1
                   },
@@ -991,7 +803,6 @@ app_server <- function(input, output, session){
       #vftMirror()'s job now, and have already happened. Leaving them would not
       #be wrong, only a second copy of the rule.
 
-      r$currentLang <- step5return$currentLang()
 
       #
       if(step5return$newVersions() > 0 & r$triggerStep5_nr == 1){
@@ -1035,8 +846,14 @@ app_server <- function(input, output, session){
     #step5_server.R:2196 for as long as the file has existed. The forward branch
     #that used to be here - go to finalStep, then click downloadSave - was
     #therefore never once reached, which is also what became of the third
-    #autosave checkpoint. Where the finished simulation gets written is the save
-    #rewrite's to decide; do not re-add a click here without deciding it.
+    #autosave checkpoint.
+    #
+    #Settled 2026-09-01, and it is settled by not existing: a finished
+    #simulation is preserved by the user pressing the disk icon, because it is
+    #the one thing in this app that cannot go in the browser snapshot (a
+    #pathUsage graph per scenario - see VFT_SNAPSHOT_KEYS in R/state.R). Do not
+    #re-add an automatic save here; nothing should reach a user's Downloads
+    #folder that they did not ask for.
     shiny::observeEvent(step5return$confirm(), {
       #a banner letter, meaning "go back to an earlier step". See
       #vftGoBack() in R/navigation.R.
@@ -1201,15 +1018,13 @@ app_server <- function(input, output, session){
         vftDbg("PRE-TRIGGER STEP 5 return")
         vftDbgCat("TESTFb")
 
-        #activate download
-        #autosave dropped here, on returning from newVersions. downloadSave
-        #materialises the raster and save()s the whole session state on the
-        #shared main thread, and it used to fire at all eight step transitions.
-        #It now runs only at the three checkpoints where losing work is
-        #expensive: the sensitivity matrix, the confirmed network + parking,
-        #and the finished simulation. Restore with:
-        #  shinyjs::click("downloadSave", asis = FALSE)
-
+        #No snapshot on this path, and not by omission. Coming back from the
+        #Szenarien page produces scenarios, and scenarios are exactly what the
+        #browser snapshot cannot hold - one copy of the path network per
+        #version (see VFT_SNAPSHOT_KEYS in R/state.R). Nothing else changed
+        #here that is not already in the browser from the step-4 confirm, so a
+        #write would cost a serialisation and preserve nothing new. Scenarios
+        #are preserved by the disk icon's full save.
         vftGoToStep(r, "step5", session)
         vftDbgCat("TESTFc")
 
@@ -1256,5 +1071,26 @@ app_server <- function(input, output, session){
   # }
 
 
+  #### open on step 1, explicitly ####
+  #
+  #A session used to arrive on step 1 by three coincidences rather than by a
+  #decision: the tabsetPanel shows its first panel by default, step 1's observer
+  #has ignoreInit = FALSE so it builds on the first flush, and vftNavBarServer()
+  #SEEDS r$navStep to "step1" when it finds it NULL purely so the bar has
+  #something to ring. Nothing navigated. r$step stayed NULL, so until the first
+  #confirm the app could not say which step it was on - and every one of those
+  #three had to keep being true independently.
+  #
+  #This says it once instead. vftGoToStep() shows the tab, sets r$step and
+  #r$navStep, bumps step 1's visit counter and runs the module's enter() - the
+  #same path every other arrival at every other step takes. `check = FALSE`
+  #because step 1 has no `needs` and there is nothing to gate on.
+  #
+  #LAST in the body, after every observer above is registered, so the counter
+  #bump has something to reach. It is also before any client message: the
+  #crash-recovery prompt (vftStateServer, above) cannot answer until the browser
+  #has connected and sent its snapshot back, so a restore that lands on step 4
+  #still wins - it simply happens later.
+  vftGoToStep(r, "step1", session)
 
 }
