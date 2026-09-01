@@ -985,11 +985,17 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
         #underneath is left alone on purpose: hiding it would take its
         #offsetWidth to 0 and leave leaflet waiting for a resize() it will not
         #get. See step5_ui.R.
+        #sized by the frame, not by itself. It used to be drawn at a hardcoded
+        #884x600 - the frame's old fixed size - so once the frame started
+        #tracking the screen height the image kept its full size and spilled out
+        #over the scenario sidebar to its right. 100%/100% with object-fit
+        #keeps it inside the frame at any height and keeps its aspect ratio;
+        #.vft-map5-frame's overflow:hidden is the backstop. See
+        #R/layout_helpers.R.
         output$mapArea_UI <- renderUI({
-          shiny::tags$img(src    = paste0("noSimYet_", noSimLang, ".png"),
-                          width  = 884,
-                          height = 600,
-                          alt    = i18n()$t("Noch keine Simulation"))
+          shiny::tags$img(src   = paste0("noSimYet_", noSimLang, ".png"),
+                          style = "width:100%; height:100%; object-fit:contain;",
+                          alt   = i18n()$t("Noch keine Simulation"))
         })
         shinyjs::show(id = "mapPlaceholder")
 

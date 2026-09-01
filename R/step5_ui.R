@@ -104,15 +104,28 @@ vftDbg("UI6")
                               #a resize() callback that only Shiny's own visibility machinery
                               #fires. z-index 1200 clears leaflet's own highest layer
                               #(.leaflet-top/.leaflet-bottom at 1000).
+                              #
+                              #The frame's 884x600 used to be repeated in three
+                              #places - here, on the leafletOutput, and on the
+                              #placeholder - and all three had to agree or the
+                              #white overlay stopped covering the map. They now
+                              #agree by construction: .vft-map5-frame is the one
+                              #that carries a size (--vft-h-step5, so it tracks
+                              #the screen - see R/layout_helpers.R), and the map
+                              #and the overlay are both 100% of it. The 884
+                              #became the frame's MAX-width, so it is unchanged
+                              #on a wide screen. The height = 600 below is left
+                              #in as the tall-screen value the clamp ceilings
+                              #at; the stylesheet overrides it.
                               div(style = "display: flex; justify-content: center;",
-                                  div(style = "width: 884px;height:600px; position: relative;",
+                                  div(class = "vft-map5-frame",
                                     # leaflet::leafletOutput(shiny::NS(id, "pathUsageMap"), height = 500px)
                                     leaflet::leafletOutput(NS(id, "mapAreaLeaflet"),
                                                            height = 600, width = 884),
                                     shiny::div(
                                       id = NS(id, "mapPlaceholder"),
                                       style = paste("position: absolute; top: 0; left: 0;",
-                                                    "width: 884px; height: 600px;",
+                                                    "width: 100%; height: 100%;",
                                                     "z-index: 1200; background-color: #ffffff;"),
                                       shiny::uiOutput(NS(id, "mapArea_UI"))
                                     )
@@ -205,7 +218,12 @@ vftDbg("UI6")
 
                     #list of version boxes
 
-                    shiny::column(12, style='border: 1px solid black; vertical-align:middle; align: center; height:400px; width: 200px; overflow-y: scroll;',
+                    #height on the class - --vft-h-step5-list in
+                    #R/layout_helpers.R - so the launch button below the list
+                    #stays on screen with it on a short monitor. Still 400px
+                    #on a tall one, and the box already scrolls.
+                    shiny::column(12, class = "vft-fit-vlist",
+                                  style='border: 1px solid black; vertical-align:middle; align: center; width: 200px; overflow-y: scroll;',
 
                            shinyjs::useShinyjs(),
                            shinyjs::inlineCSS(list(.selected = "border-width: thick; border-color: green")),

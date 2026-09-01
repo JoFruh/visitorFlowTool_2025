@@ -3,7 +3,13 @@
 step1_ui <- function(id, i18n){
 languageTable <- read.csv2(vftData("tables/translation_de.csv"))
 vftDbg("UI1")
-            shiny::fluidPage(
+            #vft-fit-page: this step is a flex column the height of the pane, and
+            #the row marked vft-grow below - the map - takes whatever the rows
+            #around it are not using. That is what lets the map run to the bottom
+            #of the screen WHILE the confirm buttons are still hidden, and hand
+            #the space back by itself the moment they are shown. See
+            #R/layout_helpers.R.
+            shiny::fluidPage(class = "vft-fit-page",
               #activate translation for this ui
               shiny.i18n::usei18n(i18n),
               #the page banner (language select, title, logo, help/info) now
@@ -18,12 +24,17 @@ vftDbg("UI1")
                 shiny::actionButton(inputId = shiny::NS(id, "helpButton1"), label = ""),
                 shiny::actionButton(inputId = shiny::NS(id, "infoButton1"), label = "")
               ),
-              shiny::fluidRow(
+              #vft-step1-head on both rows between the banner and the map: the
+              #title, the intake block and the 'load saved data' button were set
+              #at the app's default heading sizes and took about 150px off the
+              #one thing this step is for. R/layout_helpers.R sets them a couple
+              #of steps smaller at every screen height, not just a short one.
+              shiny::fluidRow(class = "vft-step1-head",
                 shiny::column(12, align = "center",
                        shiny::h3(shiny::strong(i18n$t("Definieren den Bereich in der Schweiz.") ) )
                 )
               ),
-              shiny::fluidRow(
+              shiny::fluidRow(class = "vft-step1-head",
                 shiny::column(3, align = "center",
                 shiny::h4(i18n$t("Eine Kontur einreichen:") ),
                          shiny::h6(shiny::HTML(paste0(i18n$t("eine"), "<strong> .kml</strong>", i18n$t("Datei"), "<br>", i18n$t("oder als"), "<strong> Shapefile</strong><br>", i18n$t("durch mehrerer Dateien"), "<br>(<strong>.shp, .dbf, .shx</strong> etc.)" )) ), #
@@ -112,7 +123,11 @@ vftDbg("UI1")
             #          )))
             #
             # ),
-            shiny::fluidRow(
+            #the grow row: the map takes every pixel the rows above and below it
+            #leave, so it ends at the bottom of the screen whether or not the
+            #confirm buttons are showing. height = 600 stays as what it used to
+            #be on a tall monitor; the stylesheet overrides it.
+            shiny::fluidRow(class = "vft-grow",
               shiny::column(12, align = "center",
                      leaflet::leafletOutput(shiny::NS(id, "areaSelectMap"), height = 600),
               )

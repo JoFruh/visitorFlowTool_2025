@@ -56,6 +56,14 @@ app_ui <- function(){
   #when the language changes and swaps them on the client instead.
   vftStepNav(i18n),
 
+  #one height scale for all six step pages, so that a short screen shrinks the
+  #maps and the scroll boxes instead of pushing the confirm button - always the
+  #last thing in a step - off the bottom. It owns `--vft-nav-h`, which the bar's
+  #own `--nav-h` reads, and it gates on the same vftNavEnabled() the bar does so
+  #a build without the bar does not reserve room for one. See
+  #R/layout_helpers.R.
+  vftFitHeightCSS(),
+
   shiny::tabsetPanel(id = "tabs", type = "hidden",
 
                      shiny::tabPanel( "tab_step1",
@@ -413,7 +421,12 @@ vftStepNav <- function(i18n = NULL){
          #vftNav - size containment on an element the rest of the app's CSS
          does not expect it on - for no gain. */
       #vftNav {
-        --nav-h:     clamp(70px,   5.20vw, 100px);
+        /* the one size in this scale the STEP pages also need, so it is
+           defined once, at :root, in vftFitHeightCSS() - R/layout_helpers.R -
+           and read from there here. It is the same clamp(70px, 5.20vw, 100px)
+           it has always been; it just has a second reader now, `--vft-fit`,
+           which is the height left over for whichever step is showing. */
+        --nav-h:     var(--vft-nav-h);
         --nav-font:  clamp(10.5px, 0.80vw,  15px);
         --nav-pad:   clamp(6px,    0.62vw,  14px);
         --nav-btn-h: clamp(34px,   2.55vw,  50px);

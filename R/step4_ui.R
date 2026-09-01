@@ -1,7 +1,11 @@
 #### Step 1 UI - determine area ####
 step4_ui <- function(id, i18n){
 vftDbg("UI5")
-      shiny::fluidPage(
+      #vft-fit-page + vft-grow on the map row below: the map takes whatever the
+      #heading rows above and the confirm/reset/download row below do not use,
+      #so it runs down to the buttons instead of stopping 200px short of them.
+      #See R/layout_helpers.R.
+      shiny::fluidPage(class = "vft-fit-page",
         #activate translation for this ui
         shiny.i18n::usei18n(i18n),
         shinyjs::useShinyjs(),
@@ -40,13 +44,17 @@ vftDbg("UI5")
                         )
           ) ),
 
-              shiny::fluidRow(
+              shiny::fluidRow(class = "vft-grow",
                 shiny::column(12, align = "center",
                               shinyjs::useShinyjs(),
                               shinyjs::inlineCSS(list(.cutModeOn = "border-color: red; border-style: solid; border-width:5px;")),
                               shinyjs::inlineCSS(list(.cutModeOff = "border-color: black; border-style: solid; border-width:0px;")),
 
-                              shiny::div(id= "mapFrame", class = "cutModeOff",
+                              #mapFrame carries the cut-mode border, so it is the
+                              #box that has to be full height - the map fills it,
+                              #and the 5px red border in cut mode comes off the
+                              #map rather than making the page 10px taller.
+                              shiny::div(id= "mapFrame", class = "cutModeOff vft-grow-fill",
                        shinycssloaders::withSpinner(  leaflet::leafletOutput(shiny::NS(id, "finalAOIMap"), height = 500), type = 3, color = "#069869", color.background = "white" )
                               )
                        )

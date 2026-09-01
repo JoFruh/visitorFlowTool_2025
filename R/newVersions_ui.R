@@ -1,7 +1,18 @@
 #### Step 1 UI - determine area ####
 newVersions_ui <- function(id, i18n){
 vftDbg("UI6")
-      shiny::fluidPage(
+      #vft-fit-page: this step is a flex column exactly as tall as the pane, and
+      #the CONTENT row below - marked vft-nv-body - takes whatever the head
+      #leaves. It used to reserve a flat 60px for that head instead, and that
+      #was always wrong: the head is the two h4 lines PLUS the context radio
+      #group, which is server-rendered (contextChoice_ui) and so was invisible
+      #to the static measurement that set the 60. Measured, it is 89-126px
+      #depending on which short-screen media tier is active, so the band was 29
+      #to 66px too tall and the map and the confirm button hung below the
+      #bottom of the screen. Nothing is reserved now, so no number can be
+      #wrong: the radio row appearing, a translation wrapping to two lines or a
+      #media query firing all just move the boundary. See R/layout_helpers.R.
+      shiny::fluidPage(class = "vft-fit-page",
         #activate translation for this ui
         shiny.i18n::usei18n(i18n),
               #the page banner (language select, title, logo, help/info) now
@@ -35,7 +46,13 @@ vftDbg("UI6")
 
 
                #CONTENT
-               shiny::fluidRow(
+               #the row that absorbs this page's slack. It is NOT marked
+               #vft-grow: that class carries generic rules for the columns
+               #inside it (`.vft-grow > [class*="col-"] > *`), which would win
+               #on specificity over `.vft-nv-col > *` and stretch every button
+               #and caption in the sidebar. vft-nv-body sizes this row and
+               #stops there; the two columns keep their own internal flex.
+               shiny::fluidRow(class = "vft-nv-body",
                  shiny::column(1, align = "center",
                         shiny::fluidRow(
 
@@ -84,7 +101,14 @@ vftDbg("UI6")
                  #MAIN MAP ####
 
                  #code to alter legends manually (for left align etc.)
-                 shiny::column(9, align = "center",
+                 #vft-nv-col: this column and the scenario sidebar are the same
+                 #height and each flexes internally, so their bottoms line up -
+                 #the map ends where the confirm button ends. The map is the
+                 #slack-taker here (vft-nv-mapslot), which also means the
+                 #paint-tool block below it, hidden until the heat-mitigation
+                 #context shows it, comes out of the map rather than out of the
+                 #bottom of the page. See R/layout_helpers.R.
+                 shiny::column(9, align = "center", class = "vft-nv-col",
                                tags$head(
                                  tags$style(
                                    ".leaflet .legend {
@@ -104,7 +128,15 @@ vftDbg("UI6")
                                             position: relative; display: inline-block;
                                             width: 130px; height: 104px; cursor: pointer; margin: 0;
                                             }
-                                   .paintLevelCheckbox {
+                                   /* `input.` and not a bare class: bootstrap sets
+                                      `input[type=checkbox]{margin:4px 0 0}`, which is one
+                                      specificity point above a lone class and so kept winning
+                                      here. On an absolutely positioned overlay with top:0 that
+                                      margin simply moves it, so this 104px box hung 4px below
+                                      its own track - and being the lowest thing in the map
+                                      column, those 4px were 4px of page, i.e. a scrollbar on
+                                      the pane whenever the paint tools were on show. */
+                                   input.paintLevelCheckbox {
                                             position: absolute; top: 0; left: 0;
                                             width: 100%; height: 100%;
                                             opacity: 0; margin: 0; cursor: pointer; z-index: 2;
@@ -155,7 +187,7 @@ vftDbg("UI6")
                                 ),
 
 
-                                 column(12,
+                                 column(12, class = "vft-nv-mapslot",
 
                                         shinycssloaders::withSpinner(  leaflet::leafletOutput(shiny::NS(id, "versionMap"), height = 600), type = 3, color = "#069869", color.background = "white" )
 
@@ -292,7 +324,11 @@ vftDbg("UI6")
 
                  ),
                 #SIDE BAR
-                shiny::column(2,align = "center",
+                #the scenario sidebar, same height as the map column beside it -
+                #the scenario list is what flexes here, so the confirm button at
+                #the foot of this column and the bottom of the map end on the
+                #same line. See R/layout_helpers.R.
+                shiny::column(2,align = "center", class = "vft-nv-col",
 
                               shiny::fluidRow(shiny::column(12,
                                                             shiny::h4(shiny::HTML(paste0(i18n$t("Erstellen/auswählen Sie"), "<br>", i18n$t("ein Szenario"))))
@@ -309,11 +345,17 @@ vftDbg("UI6")
                        ),
                        shiny::div( style = "height: 10px" ),
 
-                       shiny::fluidRow(style= "padding-left: 25px",
+                       #the row that absorbs this column's slack: the scenario
+                       #list grows and shrinks with the screen so that the
+                       #confirm button under it stays put. The box already
+                       #scrolls, so what a short screen costs is rows of the
+                       #list, not the button.
+                       shiny::fluidRow(class = "vft-nv-listrow", style= "padding-left: 25px",
 
                          #list of version boxes
 
-                         shiny::column(12, align = "center", style='border: 1px solid black; vertical-align:middle; height:400px; width: 200px; overflow-y: scroll;',
+                         shiny::column(12, align = "center", class = "vft-fit-vlist-nv",
+                                       style='border: 1px solid black; vertical-align:middle; width: 200px; overflow-y: scroll;',
 
                                 shinyjs::useShinyjs(),
                                 shinyjs::inlineCSS(list(.selected = "border-width: thick; border-color: green")),
