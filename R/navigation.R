@@ -291,6 +291,161 @@ vftNavHint <- function(on, session = shiny::getDefaultReactiveDomain()){
   invisible(NULL)
 }
 
+#### "Choose your next step" ####
+#
+# Steps 1 and 2 are the two confirms in the walk that write their result and
+# leave the user standing where they are (see the two `then =` blocks in
+# R/app_server.R) - because what comes next is a genuine fork, not a next page.
+# vftNavHint() puts an arrow under the bar to say the write happened, and that
+# line is deliberately quiet - too quiet for a fork that opens unrelated halves
+# of the tool. So both of those confirms also raise this: the bar's top-level
+# choices, in the bar's own colours, big enough to read from across a room.
+#
+# What differs between the two is only which choices are offered. Step 1 has
+# three - the sensitivity matrix, the simulation chain, Hitzeminderung. Step 2
+# has the same list minus the matrix the user has just finished, which it drops
+# by passing `omit`; the ring on that bar button already says where they are.
+#
+# It is a re-presentation of the bar, not a second way to navigate. Each button
+# runs the SAME closure the matching bar button's observer runs - see
+# vftNavBarServer() below - so there is one definition of what "go to step 2"
+# means and no second copy to drift.
+
+#' The choices the modal can offer, in the order they appear.
+#'
+#' Keys are the bar's own translation rows, so the modal and the button it
+#' stands for cannot say different things. `fallback` is the German literal for
+#' a deployment whose CSVs have not been updated - the same degrade-to-German
+#' convention vftNavTr() practises in R/app_ui.R.
+#'
+#' `when` is the same reachability test vftNavBarServer() applies before it
+#' registers that door's observer, asked of vftNavSteps(). A VFT_NAV=step1,step2
+#' build has no simulation chain and no Hitzeminderung, and the modal must not
+#' offer a button whose click nothing is listening for.
+VFT_NEXT_CHOICES <- list(
+  list(id = "vftNextStep2", key = ":nav_step2:",
+       fallback = "Sensibilit\u00E4t der Biodiversit\u00E4t",
+       when = function(steps) "step2" %in% steps),
+  list(id = "vftNextSim",   key = ":nav_step5:",
+       fallback = "Naherholung simulieren",
+       when = function(steps) any(VFT_NAV_FOLD %in% steps)),
+  list(id = "vftNextHitze", key = ":nav_hitze:",
+       fallback = "Hitzeminderung",
+       when = function(steps) "newVersions" %in% steps)
+)
+
+#' The CSS for the modal, kept out of the function body for readability.
+#'
+#' Scoped to `#shiny-modal`, the fixed id shiny::modalDialog() gives its
+#' wrapper, and shipped INSIDE the modal - so it is removed with the modal and
+#' cannot reach any of the app's other modals. It has to be written here rather
+#' than in vftStepNav()'s stylesheet for that reason: the teal has to land on
+#' `.modal-content`, which is Bootstrap's element, not ours.
+#'
+#' Colours are lifted from the bar itself (#006268 the bar, #b3d0d2 the button
+#' fill, white the ring on the current step), and so is the font stack. The
+#' sizes are NOT: the bar's eleven clamp() variables exist because seven buttons
+#' have to fit one row on a laptop, and this box holds three.
+VFT_NEXT_CSS <- "
+#shiny-modal .modal-content { background-color:#006268; border:none;
+    border-radius:4px; box-shadow:0 10px 40px rgba(0,0,0,.35); }
+#shiny-modal .modal-body { padding:34px 30px 38px; }
+#shiny-modal .vft-next-head { color:#ffffff; font-size:30px; font-weight:700;
+    line-height:1.2; text-align:center; margin:0 0 26px;
+    font-family:'FranklinGFB','FranklinGothic','Franklin Gothic Book',
+                'Libre Franklin',Arial,sans-serif; }
+#shiny-modal .vft-next-row { display:flex; gap:18px; justify-content:center;
+    align-items:stretch; flex-wrap:wrap; }
+#shiny-modal .vft-next-btn { flex:1 1 210px; max-width:280px; min-height:96px;
+    background-color:#b3d0d2; color:#006268; font-weight:700; font-size:20px;
+    line-height:1.2; border:2px solid transparent; border-radius:2px;
+    padding:14px 16px; white-space:normal; text-align:center;
+    display:flex; align-items:center; justify-content:center;
+    font-family:'FranklinGFB','FranklinGothic','Franklin Gothic Book',
+                'Libre Franklin',Arial,sans-serif; }
+#shiny-modal .vft-next-btn:hover, #shiny-modal .vft-next-btn:focus {
+    background-color:#ffffff; color:#006268;
+    outline:3px solid #ffffff; outline-offset:3px; }
+@media (max-width:640px){ #shiny-modal .vft-next-row { flex-direction:column; } }
+"
+
+#' Raise the "choose your next step" modal.
+#'
+#' Called from the `then =` of step 1's and step 2's vftCommit() in
+#' app_server() - inside `then`, so it never appears for a write the user
+#' cancelled at the "this will be discarded" modal.
+#'
+#' Translated at SHOW time, not at UI build time, through .vftT(session): the
+#' Translator is an R6 object the language observers mutate in place, so the
+#' modal always comes up in the language the user is in right now. That is the
+#' whole reason this is a modal built per confirm rather than static markup like
+#' the bar, which has to carry all three languages as data- attributes.
+#'
+#' `easyClose = TRUE` with `footer = NULL`: Esc or a click outside puts the user
+#' back on the step they confirmed, to look at it again, and there is no extra
+#' button competing with the ones that matter. The arrow hint is still up behind
+#' it - that is what vftNavHint() is for on these two steps.
+#'
+#' #### it opens on top of another modal ####
+#'
+#' Step 1's confirm goes through openSaveHelpModal() first, so the user reaches
+#' this by pressing a button that calls removeModal(). Both messages land in the
+#' same batch: shiny's modal.js `remove()` starts a Bootstrap hide, and `show()`
+#' then replaces the wrapper's contents out from under it. That works - the
+#' wrapper survives, because its `hidden.bs.modal` handler tests the event
+#' target against the CURRENT #shiny-modal - but this app is on Bootstrap 3
+#' (plain fluidPage, no bslib), whose emulateTransitionEnd fires the old
+#' modal's hide 300ms later regardless and strips `modal-open` off the body.
+#' If this modal is ever seen with the page scrolling behind it, or shifting a
+#' few pixels a moment after it appears, that is what it is - not this markup.
+#' The same batch happens after vftCommit()'s "this will be discarded" modal.
+#' Step 2's confirm has no modal in front of it and does not pay any of this.
+#'
+#' @param session the app-level session.
+#' @param omit ids from VFT_NEXT_CHOICES to leave out. Step 2 passes its own
+#'   button: offering "go to the sensitivity matrix" to someone who has just
+#'   confirmed it would be answered by vftNavBarServer()'s "you are already
+#'   there" guard, so the button would be dead as well as wrong. Step 1 omits
+#'   nothing - it is the one place all three doors are ahead of the user.
+vftNextStepModal <- function(session = shiny::getDefaultReactiveDomain(),
+                             omit = character(0)){
+  if(!vftNavEnabled() || is.null(session)) return(invisible(NULL))
+
+  #only the doors this build actually wired an observer for - see `when` on
+  #VFT_NEXT_CHOICES - minus whatever the caller has just finished. Nothing to
+  #offer means nothing to show; the arrow hint under the bar is still up either
+  #way, so the confirm is never silent.
+  navSteps <- vftNavSteps()
+  choices  <- Filter(function(ch) isTRUE(ch$when(navSteps)) && !ch$id %in% omit,
+                     VFT_NEXT_CHOICES)
+  if(length(choices) == 0) return(invisible(NULL))
+
+  tr <- .vftT(session)
+  #shiny.i18n hands a missing key straight back, so ":nav_step2:" on a button is
+  #what an un-updated CSV would look like. Test for that shape, not for
+  #identical(out, key), because the fallback is a different string.
+  lab <- function(ch){
+    out <- tryCatch(tr(ch$key), error = function(e) ch$key)
+    if(length(out) != 1L || is.na(out) || grepl("^:.*:$", out)) ch$fallback else as.character(out)
+  }
+
+  shiny::showModal(shiny::modalDialog(
+    footer = NULL, easyClose = TRUE, size = "l",
+    shiny::tags$style(shiny::HTML(VFT_NEXT_CSS)),
+    #German literal as the key, matching the `or` column: a CSV that has not
+    #been updated shows readable German rather than a bare key. See .vftT().
+    shiny::tags$div(class = "vft-next-head",
+                    tr("W\u00E4hlen Sie Ihren n\u00E4chsten Schritt")),
+    shiny::tags$div(class = "vft-next-row",
+      lapply(choices, function(ch)
+        shiny::actionButton(inputId = ch$id, label = lab(ch),
+                            class = "vft-next-btn"))
+    )
+  ), session = session)
+
+  invisible(NULL)
+}
+
 #' Go to a step: record it, show its tab, and ask its server to run.
 #'
 #' This is the only supported way to change step. It is deliberately not a
@@ -585,23 +740,44 @@ vftNavBarServer <- function(r, input, session = shiny::getDefaultReactiveDomain(
   #bare read is legal under test and fatal in the app.
   if(is.null(shiny::isolate(r$navStep))) r$navStep <- "step1"
 
+  #### one definition of each move ####
+  #
+  #Each of the three closures below IS what its bar button does, lifted out of
+  #that button's observer so the "choose your next step" modal step 1 raises
+  #(vftNextStepModal() above) can run the same code instead of a second copy of
+  #it. The modal is a re-presentation of this bar; it must not become a second
+  #place where "go to step 2" is defined.
+  #
+  #Not shinyjs::click() on the bar button, which would have needed no closures
+  #at all: a `disabled` button swallows a synthetic click, and the message that
+  #enables step 2 / sim / Hitzeminderung and the modal that offers them are both
+  #consequences of the SAME confirm, so the modal can be on screen in a batch
+  #where the client has not applied the enables yet.
+  #
+  #goHitze and goFold stay NULL in a build whose VFT_NAV does not reach them -
+  #the registration at the end of this function skips whatever is still NULL.
+  goHitze <- NULL
+  goFold  <- NULL
+
+  goStep <- function(step){
+    #clicking the step you are already on would rebuild that module server -
+    #a fresh observer set on top of the live one, until Stage 5 makes the
+    #modules singletons. Nothing to do, so do nothing.
+    #
+    #Asked of the BUTTON, not the step: with the ring on Hitzeminderung the
+    #user IS on newVersions, so a step test swallows the click on "Neue
+    #Versionen" and that button is dead - the one way out of context 4 that
+    #does not go through the radio. newVersions is re-entrant, so the
+    #re-entry is a plain enter(), and with no contextPreset set it opens on
+    #context 1 (or stays on 4 if there are still no Zielgebiete to edit).
+    if(identical(vftNavCurrentId(r), vftNavInputId(step))) return(invisible(NULL))
+    vftGoToStep(r, step, session, check = TRUE)
+  }
+
   for(s in steps){
     local({
       step <- s
-      shiny::observeEvent(input[[vftNavInputId(step)]], {
-        #clicking the step you are already on would rebuild that module server -
-        #a fresh observer set on top of the live one, until Stage 5 makes the
-        #modules singletons. Nothing to do, so do nothing.
-        #
-        #Asked of the BUTTON, not the step: with the ring on Hitzeminderung the
-        #user IS on newVersions, so a step test swallows the click on "Neue
-        #Versionen" and that button is dead - the one way out of context 4 that
-        #does not go through the radio. newVersions is re-entrant, so the
-        #re-entry is a plain enter(), and with no contextPreset set it opens on
-        #context 1 (or stays on 4 if there are still no Zielgebiete to edit).
-        if(identical(vftNavCurrentId(r), vftNavInputId(step))) return(invisible(NULL))
-        vftGoToStep(r, step, session, check = TRUE)
-      }, ignoreInit = TRUE)
+      shiny::observeEvent(input[[vftNavInputId(step)]], goStep(step), ignoreInit = TRUE)
     })
   }
 
@@ -612,7 +788,7 @@ vftNavBarServer <- function(r, input, session = shiny::getDefaultReactiveDomain(
   #there; check = TRUE so it gets the same busy/reentrant/reachable refusal as
   #every other click in this bar.
   if("newVersions" %in% steps){
-    shiny::observeEvent(input$vftNav_hitze, {
+    goHitze <- function(){
       #already behind this door - the same "nothing to do" the six step buttons
       #make, asked the same way. Without it, clicking the ringed Hitzeminderung
       #button re-enters newVersions and redraws the map for no reason.
@@ -643,7 +819,9 @@ vftNavBarServer <- function(r, input, session = shiny::getDefaultReactiveDomain(
       #Nothing takes a reactive dependency on this key outside enter(), which is
       #isolated, so the write costs a flush and no re-render.
       session$onFlushed(function() r$vftContextPreset <- NULL, once = TRUE)
-    }, ignoreInit = TRUE)
+    }
+
+    shiny::observeEvent(input$vftNav_hitze, goHitze(), ignoreInit = TRUE)
   }
 
   #last state pushed to the client, so the observe below can send only changes.
@@ -693,7 +871,7 @@ vftNavBarServer <- function(r, input, session = shiny::getDefaultReactiveDomain(
   #to open), and the button then keeps the disabled attribute vftStepNav()
   #shipped, since nothing below re-enables it either.
   if(any(VFT_NAV_FOLD %in% steps)){
-    shiny::observeEvent(input[[VFT_NAV_FOLD_ID]], {
+    goFold <- function(){
       target <- shiny::isolate(vftNavFoldTarget(r, steps))
       setFolded(FALSE)
       if(is.null(target)){
@@ -702,7 +880,9 @@ vftNavBarServer <- function(r, input, session = shiny::getDefaultReactiveDomain(
       }
       vftDbg(paste0("NAV FOLD -> unfolded, entering ", target))
       vftGoToStep(r, target, session, check = TRUE)
-    }, ignoreInit = TRUE)
+    }
+
+    shiny::observeEvent(input[[VFT_NAV_FOLD_ID]], goFold(), ignoreInit = TRUE)
 
     #### a new outline folds it back up ####
     #
@@ -729,6 +909,43 @@ vftNavBarServer <- function(r, input, session = shiny::getDefaultReactiveDomain(
       setFolded(TRUE)
     }, ignoreInit = TRUE, ignoreNULL = FALSE)
   }
+
+  #### the three buttons of the "choose your next step" modal ####
+  #
+  #Step 1's confirm raises vftNextStepModal() (above); these are what its
+  #buttons do. Each one closes the modal and calls the closure the matching bar
+  #button calls, so the two routes cannot diverge.
+  #
+  #ONE pair of observers for the session, reading a modal that is rebuilt every
+  #time - not a fresh observer per modal. That is the trap vftAskCommit()
+  #documents in R/providers.R: a per-modal observer stays armed after its modal
+  #is gone, and the next modal's click runs the previous one's closure.
+  #
+  #Registered against `session$input` rather than `input` for the same reason
+  #vftCommitServer() does: these ids are app level and unnamespaced, and the
+  #two are the same object here, but saying so at the call site is what stops
+  #someone moving this block into a module later.
+  fromModal <- function(inputId, go){
+    #NULL in a build whose VFT_NAV does not reach that door - the modal would
+    #not offer the button either, but a dead observer is worth not registering.
+    if(is.null(go)) return(invisible(NULL))
+    shiny::observeEvent(session$input[[inputId]], {
+      v <- session$input[[inputId]]
+      #Re-showing the modal re-renders its buttons, and a re-rendered
+      #actionButton reports 0 - a CHANGE, which observeEvent would otherwise
+      #read as a click on the button that has just appeared. Same guard, same
+      #reason, as vftCommitServer() in R/providers.R. It is not hypothetical
+      #here: confirming step 1 a second time raises this modal again.
+      if(is.null(v) || v == 0) return(invisible(NULL))
+      shiny::removeModal(session = session)
+      go()
+    }, ignoreInit = TRUE)
+  }
+
+  if("step2" %in% steps)
+    fromModal("vftNextStep2", function() goStep("step2"))
+  fromModal("vftNextSim",   goFold)
+  fromModal("vftNextHitze", goHitze)
 
   shiny::observe({
     #greyed while this session has async work outstanding, so "wait" is something

@@ -253,14 +253,23 @@ app_server <- function(input, output, session){
                   #Szenarien page still hand over by themselves: each of those
                   #is a stage of one piece of work, not a fork.
                   #
-                  #What the user then sees is the nav bar: the buttons this
-                  #write unlocks light up, and vftNavHint() puts an arrow and
-                  #"Choose a next action" under them, because a confirm that
-                  #moves nothing needs to say that it did something. The line
-                  #comes down again inside vftGoToStep(), whichever button they
-                  #press. See vftStepNav() in R/app_ui.R.
+                  #What the user then sees is the choice itself: the three
+                  #top-level doors the perimeter opens - the sensitivity
+                  #matrix, the simulation chain, Hitzeminderung - re-presented
+                  #full size in vftNextStepModal()'s teal box, over the bar
+                  #whose buttons this write has just lit up. Its three buttons
+                  #run the bar's own closures; see vftNavBarServer().
+                  #
+                  #vftNavHint() fires too, and is not redundant: the modal can
+                  #be dismissed (Esc, a click outside) by someone who wants to
+                  #look at their area again, and the arrow under the bar is
+                  #what is still standing when they do. It comes down inside
+                  #vftGoToStep(), whichever button they eventually press. Step
+                  #2's confirm below does exactly the same, offering the same
+                  #list minus its own button. See vftStepNav() in R/app_ui.R.
                   then = function(){
                     vftNavHint(TRUE, session)
+                    vftNextStepModal(session)
                     vftSnapshotWrite(r, session)
                   })
 
@@ -391,10 +400,19 @@ app_server <- function(input, output, session){
                     #Same as step 1's confirm above, and for the same reason:
                     #with the matrix written, the simulation chain and the
                     #Szenarien page are both open and neither is the obvious
-                    #next thing. The bar is where that is decided, and this is
-                    #the line that points at it. The `vftGoToStep(r, "step3",
-                    #session)` that stood here is gone.
+                    #next thing. The `vftGoToStep(r, "step3", session)` that
+                    #stood here is gone.
+                    #
+                    #So the same two things say so. vftNextStepModal() puts the
+                    #choice itself on screen, minus its own button - the user
+                    #has just finished the sensitivity matrix, and the ring on
+                    #that bar button already says where they are, which leaves
+                    #Naherholung simulieren and Hitzeminderung. vftNavHint()
+                    #puts the arrow under the bar for whoever dismisses the
+                    #modal to look at their matrix again; it comes down inside
+                    #vftGoToStep(), whichever button they eventually press.
                     vftNavHint(TRUE, session)
+                    vftNextStepModal(session, omit = "vftNextStep2")
 
                     #The sensitivity matrix itself is far too big for the
                     #browser (~4 MB packed, most of a localStorage quota on its
