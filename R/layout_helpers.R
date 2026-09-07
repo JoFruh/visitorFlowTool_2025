@@ -342,6 +342,30 @@ vftFitHeightCSS <- function(){
     }
     .vft-nv-listrow > .vft-fit-vlist-nv{ height: 100% !important; }
 
+    /* ---- the scenario sidebar, shared by step 5 and newVersions --------- */
+    /* Both steps put the same column beside their map: a button on top, the
+       scenario list in the middle, a confirm/launch button at the foot. Each
+       piece used to centre itself - or fail to - its own way: an
+       `align:center` inline style, which is not a CSS property at all and so
+       did nothing on step 5; an HTML `align` attribute on some rows and
+       not others; a `padding-left: 25px` on the newVersions list row, nudging
+       a fixed-width box towards the middle by eye. One class does it for both
+       columns now, and the pieces inside them say nothing about alignment. */
+    .vft-scencol{ text-align: center; }
+    /* The list box is a fixed-width col-12. On step 5 that is a floated
+       column, and auto margins cannot centre a float; in the newVersions
+       sidebar the same box is a flex item of its row instead, where the float
+       is ignored and the auto margins are what centre it. The two rules
+       together cover both cases. */
+    .vft-scencol .vft-vlist{
+      float: none;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    /* the buttons keep their own width and sit on the centre of the line
+       rather than being stretched to the column by a flex parent. */
+    .vft-scencol .btn{ display: inline-block; float: none; }
+
     /* ---- and the text, on a short screen -------------------------------- */
     /* Shrinking the maps alone is not enough on steps 3, 4 and 5: their
        headings are six to eight stacked h3/h4/h5 lines, which is more vertical

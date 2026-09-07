@@ -414,6 +414,18 @@ vftStepProduces <- function(step){
 }
 
 #' Human names, for the "this will be discarded" modal.
+#'
+#' These strings are also the TRANSLATION KEYS - the `or` column of the four
+#' translation CSVs - so vftAskCommit() can run each one through .vftT(session)
+#' and get the user's language back. Two consequences:
+#'
+#'   - do not "fix" the ASCII ae/ue/oe spellings below. They are what the CSV
+#'     rows are keyed on; the properly accented German lives in the CSVs' `de`
+#'     column and is what actually shows. A CSV missing the row degrades to the
+#'     literal here, which is readable German rather than a bare key.
+#'   - two keys sharing a label (DULN/DULN_all, SM_pres/SMcolors) is deliberate:
+#'     the modal names results, not `r` slots, and vftInvalidationPreview()
+#'     dedupes on the label before anything is translated.
 VFT_KEY_LABEL <- c(
   network       = "Wegnetz",
   networkNodes  = "Wegnetz-Daten",
@@ -464,12 +476,20 @@ vftInvalidateKeep <- function(r, keys, dep){
   intersect(dep, c("networkList", "versionsUI", "selectedVersion"))
 }
 
-#' What would actually be lost, as text, if `keys` were discarded.
+#' What would actually be lost, if `keys` were discarded.
 #'
 #' Only keys that are BOTH downstream and currently populated: a warning naming
 #' results the user has not produced yet is a warning they learn to click
 #' through. Empty means there is nothing to warn about and the caller should just
 #' go.
+#'
+#' Returns the German labels NAMED BY THEIR KEY, and that pairing is the point:
+#' the label is the translation key (see VFT_KEY_LABEL) so the modal can render
+#' it in the user's language, and the `r` key is what tells vftAskCommit() which
+#' entry is the one that has a count to put in front of it. The count itself
+#' rides along as the `nVersions` attribute rather than being pasted into the
+#' string here - "3 gespeicherte Versionen" is not a row in any CSV, and this
+#' function has no session and so no language to build it in.
 vftInvalidationPreview <- function(r, keys){
   dep <- setdiff(vftDependents(keys), VFT_PSEUDO_KEYS)
   #the same rule vftInvalidate() applies below, asked here as well: a key that
@@ -486,14 +506,13 @@ vftInvalidationPreview <- function(r, keys){
   labs <- labs[!is.na(labs)]
   if(!length(labs)) return(character(0))
 
-  #versionsUI is a list of saved scenarios, and "3 gespeicherte Versionen" tells
-  #the user far more about what they are about to lose than the bare noun.
-  if("versionsUI" %in% live){
-    n <- length(shiny::isolate(r$versionsUI))
-    if(n > 0) labs[names(labs) == "versionsUI"] <-
-      paste0(n, " gespeicherte Version", if(n == 1) "" else "en")
-  }
-  unique(unname(labs))
+  #deduped on the LABEL, not the key: DULN and DULN_all are one thing to the
+  #user. Keeping the first of each pair keeps its name, which is all the caller
+  #needs - the two that collide never differ in how they are rendered.
+  labs <- labs[!duplicated(unname(labs))]
+
+  structure(labs, nVersions = if("versionsUI" %in% names(labs))
+                                length(shiny::isolate(r$versionsUI)) else 0L)
 }
 
 #' Discard `keys`' dependents, so nothing computed from a superseded input can be
@@ -656,6 +675,29 @@ vftApplyCommit <- function(r, values, changed,
   invisible(changed)
 }
 
+#' A step's name in the language the user is in right now.
+#'
+#' The nav bar's `:nav_<step>:` rows are reused rather than a second set being
+#' added, so the sentence "in Schritt '3 ZG definieren'" and the button the user
+#' has to go and press always read the same. Those rows hold the label WITHOUT
+#' its leading digit (see vftStepNav() in R/app_ui.R), so the digit is put back
+#' here - "in Schritt 'ZG definieren'" makes the user go looking for it.
+#'
+#' shiny.i18n hands a missing key straight back, so a CSV that has not been
+#' updated would show a bare ":nav_step3:". Same shape test as
+#' vftNextStepModal(), same fallback: the German literal already in VFT_STEPS.
+vftStepLabelTr <- function(step, tr){
+  lab <- if(!is.null(step)) VFT_STEPS[[step]]$label else NULL
+  if(is.null(lab)) return(NULL)
+
+  short <- sub("^[0-9]+[[:space:]]*", "", lab)
+  out   <- tryCatch(tr(paste0(":nav_", step, ":")), error = function(e) short)
+  if(length(out) != 1L || is.na(out) || grepl("^:.*:$", out)) out <- short
+
+  digit <- regmatches(lab, regexpr("^[0-9]+", lab))
+  if(length(digit)) paste(digit, out) else as.character(out)
+}
+
 #' Ask before a write that costs the user results.
 #'
 #' The pending decision is parked in `session$userData`, NOT closed over by a
@@ -663,27 +705,69 @@ vftApplyCommit <- function(r, values, changed,
 #' this and they are a trap: a cancelled one stays armed, so the NEXT modal's OK
 #' click runs the PREVIOUS modal's closure and writes values the user has since
 #' abandoned. One pair of observers per session, one slot, and cancel empties it.
+#'
+#' Every string is translated HERE, at show time, through .vftT(session) - not
+#' baked into whatever language the app was built in. Same reason as
+#' vftNextStepModal(): the Translator is an R6 object the language selector
+#' mutates in place, and this modal is built fresh per confirm, so reading it at
+#' show time is what makes it follow the user. The keys are the German literals
+#' themselves, so a CSV without the row degrades to readable German.
 vftAskCommit <- function(r, values, changed, atRisk,
                          session = shiny::getDefaultReactiveDomain(),
                          step = NULL, then = NULL, onCancel = NULL){
   session$userData$vftCommitPending <-
     list(r = r, values = values, changed = changed, then = then, onCancel = onCancel)
 
-  what <- if(!is.null(step) && !is.null(VFT_STEPS[[step]]))
-            paste0(" in Schritt '", VFT_STEPS[[step]]$label, "'") else ""
+  tr <- .vftT(session)
+  #a Translator handed a key it does not know returns that key, which is exactly
+  #the degradation this modal wants. Anything OTHER than a single string is not:
+  #it would put a vector into a <p> or a <li>. Same guard as vftNextStepModal().
+  one <- function(key){
+    out <- tryCatch(tr(key), error = function(e) key)
+    if(length(out) != 1L || is.na(out)) key else as.character(out)
+  }
+
+  #the count is an attribute on `atRisk`, not part of the label - see
+  #vftInvalidationPreview(). Put in front of the noun here, where there is a
+  #language to choose the plural in: French and English do not agree with German
+  #on where the number goes, so the whole phrase is one key per number.
+  nVer  <- attr(atRisk, "nVersions")
+  if(is.null(nVer) || !length(nVer)) nVer <- 0L
+  atKey <- names(atRisk)
+  if(is.null(atKey)) atKey <- rep("", length(atRisk))
+
+  items <- vapply(seq_along(atRisk), function(i){
+    if(identical(atKey[[i]], "versionsUI") && nVer > 0){
+      fmt <- one(if(nVer == 1L) "%d gespeicherte Version" else "%d gespeicherte Versionen")
+      out <- tryCatch(sprintf(fmt, nVer), error = function(e) NULL)
+      if(!is.null(out)) return(out)
+    }
+    one(atRisk[[i]])
+  }, character(1))
+
+  #one sentence per shape rather than a translated fragment glued onto a
+  #translated stem: "in Schritt 'X'" is a prepositional phrase in German and a
+  #different construction in French, and there is no word order that survives
+  #being assembled from two halves in three languages.
+  stepLab <- vftStepLabelTr(step, tr)
+  lead <- if(!is.null(stepLab))
+    sprintf(one(paste0("Sie erstellen damit neue Daten in Schritt '%s'. ",
+                       "Die folgenden Ergebnisse bauen darauf auf und werden verworfen:")),
+            stepLab)
+  else
+    one(paste0("Sie erstellen damit neue Daten. ",
+               "Die folgenden Ergebnisse bauen darauf auf und werden verworfen:"))
 
   shiny::showModal(shiny::modalDialog(
-    title = "Neue Daten uebernehmen?",
-    shiny::tags$p(paste0(
-      "Sie erstellen damit neue Daten", what,
-      ". Die folgenden Ergebnisse bauen darauf auf und werden verworfen:")),
-    shiny::tags$ul(lapply(atRisk, shiny::tags$li)),
-    shiny::tags$p(paste0(
+    title = one("Neue Daten uebernehmen?"),
+    shiny::tags$p(lead),
+    shiny::tags$ul(lapply(items, shiny::tags$li)),
+    shiny::tags$p(one(paste0(
       "Abbrechen laesst alles unveraendert - fruehere Schritte koennen Sie ",
-      "jederzeit ansehen, ohne etwas zu verlieren.")),
+      "jederzeit ansehen, ohne etwas zu verlieren."))),
     footer = shiny::tagList(
-      shiny::actionButton("vftInvalidateCancel", "Abbrechen"),
-      shiny::actionButton("vftInvalidateOk", "Neu erstellen und verwerfen",
+      shiny::actionButton("vftInvalidateCancel", one("Abbrechen")),
+      shiny::actionButton("vftInvalidateOk", one("Neu erstellen und verwerfen"),
                           class = "btn-danger")
     ),
     easyClose = FALSE

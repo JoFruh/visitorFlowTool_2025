@@ -328,7 +328,7 @@ vftDbg("UI6")
                 #the scenario list is what flexes here, so the confirm button at
                 #the foot of this column and the bottom of the map end on the
                 #same line. See R/layout_helpers.R.
-                shiny::column(2,align = "center", class = "vft-nv-col",
+                shiny::column(2, class = "vft-nv-col vft-scencol",
 
                               shiny::fluidRow(shiny::column(12,
                                                             shiny::h4(shiny::HTML(paste0(i18n$t("Erstellen/auswählen Sie"), "<br>", i18n$t("ein Szenario"))))
@@ -350,11 +350,11 @@ vftDbg("UI6")
                        #confirm button under it stays put. The box already
                        #scrolls, so what a short screen costs is rows of the
                        #list, not the button.
-                       shiny::fluidRow(class = "vft-nv-listrow", style= "padding-left: 25px",
+                       shiny::fluidRow(class = "vft-nv-listrow",
 
                          #list of version boxes
 
-                         shiny::column(12, align = "center", class = "vft-fit-vlist-nv",
+                         shiny::column(12, class = "vft-fit-vlist-nv vft-vlist",
                                        style='border: 1px solid black; vertical-align:middle; width: 200px; overflow-y: scroll;',
 
                                 shinyjs::useShinyjs(),

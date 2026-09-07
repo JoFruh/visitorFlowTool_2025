@@ -358,6 +358,29 @@ step4_server <- function(id, minThresh, i18n, currentLang,
           )
         }
 
+        #### the step-1 perimeter ####
+        #
+        #Every other step that shows a map draws the outline the user settled on
+        #in step 1; this one did not, so the target areas floated with nothing to
+        #place them against. Same treatment as step 5 gives it - black, weight 5,
+        #no fill, pane "layer2" - so the two maps read as the same area. st_zm()
+        #because an uploaded shapefile may carry a Z dimension leaflet will not
+        #take.
+        #
+        #Drawn last, so it sits above the AOI polygons, and NOT interactive:
+        #every click on this map belongs to the polygon editor (place a vertex,
+        #erase an area, cut a line), and a clickable outline would swallow the
+        #ones that land on its stroke. Its own group keeps it clear of the
+        #clearGroup("eraseable") calls that redraw the polygons.
+        if(!is.null(shape)){
+          map <- map |> leaflet::addPolygons(
+            data = sf::st_zm(sf::st_transform(shape, "epsg:4326"), drop = TRUE, what = "ZM"),
+            stroke = TRUE, fill = FALSE, color = "black", weight = 5,
+            group = "perimeter",
+            options = leaflet::pathOptions(pane = "layer2", interactive = FALSE)
+          )
+        }
+
         map
 
       }))

@@ -45,24 +45,24 @@ step1_server <- function(id, i18n,
     #render banner image from start
     vftSetBanner(id, "www/step1_wsl.png")
 
-    #Welcome window with info
-    shinyjs::delay(500, {
-      shiny::showModal(
-        shiny::modalDialog(footer = actionButton(inputId = NS(id, "begin1"), label = i18n()$t("Los geht's!"), class = "btn-lg", style = "background-color:#006268; color:#ffffff"), size = "l" ,
-                           shiny::selectInput(inputId = shiny::NS(id, "languageSelect_2"), label = NULL, choices = c("Deutsch" = "de", "Français" = "fr" , "English" = "en"),
-                                              selected = "de", width = 100 ),
-                           # h2(i18n()$t("Willkommen beim Visitor Flow Tool!"), align = "center"),
-                           # h4(shiny::HTML(as.character(i18n()$t("(Entwickelt für Computerbildschirme und <b>nicht</b> für Handys)") ) ), align = "center" ),
-                           # h4(),
-                           # h3(i18n()$t("Entdecken Sie die Möglichkeiten zur Planung Biodiversitätsschutz und Naherholungsnutzung in der ganzen Schweiz!"), style = "text-align:center" ),
-                           # h4(),
-                           # h3(i18n()$t("Bei jedem Schritt können Sie oben rechts auf Hilfe und zusätzliche Informationen zugreifen:"), shiny::img(src = "www/arrowShow.png", style = "text-align:right;float:right;display:inline-block;height:150px; padding-left:70px;margin-right:-70px;vertical-align:middle;margin-top:-70px")),
-                           # h4(),
-                           # h4((i18n()$t("Die Hilfe und die Informationen, die Sie erhalten, beziehen sich auf Ihren aktuellen Schritt!") ) , style = "text-align:right;")
+    # #Welcome window with info
+    # shinyjs::delay(500, {
+    #   shiny::showModal(
+    #     shiny::modalDialog(footer = actionButton(inputId = NS(id, "begin1"), label = i18n()$t("Los geht's!"), class = "btn-lg", style = "background-color:#006268; color:#ffffff"), size = "l" ,
+    #                        shiny::selectInput(inputId = shiny::NS(id, "languageSelect_2"), label = NULL, choices = c("Deutsch" = "de", "Français" = "fr" , "English" = "en"),
+    #                                           selected = "de", width = 100 ),
+    #                        # h2(i18n()$t("Willkommen beim Visitor Flow Tool!"), align = "center"),
+    #                        # h4(shiny::HTML(as.character(i18n()$t("(Entwickelt für Computerbildschirme und <b>nicht</b> für Handys)") ) ), align = "center" ),
+    #                        # h4(),
+    #                        # h3(i18n()$t("Entdecken Sie die Möglichkeiten zur Planung Biodiversitätsschutz und Naherholungsnutzung in der ganzen Schweiz!"), style = "text-align:center" ),
+    #                        # h4(),
+    #                        # h3(i18n()$t("Bei jedem Schritt können Sie oben rechts auf Hilfe und zusätzliche Informationen zugreifen:"), shiny::img(src = "www/arrowShow.png", style = "text-align:right;float:right;display:inline-block;height:150px; padding-left:70px;margin-right:-70px;vertical-align:middle;margin-top:-70px")),
+    #                        # h4(),
+    #                        # h4((i18n()$t("Die Hilfe und die Informationen, die Sie erhalten, beziehen sich auf Ihren aktuellen Schritt!") ) , style = "text-align:right;")
 
-        )
-      )
-    })
+    #     )
+    #   )
+    # })
 
     #DEPRECATED
     # simplified welcome message, but commented out for later reference
@@ -967,7 +967,8 @@ step1_server <- function(id, i18n,
 
         vftDbgCat("CONFIRM BUTTON1")
 
-        openSaveHelpModal("gotSavedHelp1")
+        shinyjs::runjs("window.scrollTo(0, 0)")
+        finaliseShapefile()
 
       }, ignoreInit = TRUE    )
 
@@ -1015,31 +1016,6 @@ step1_server <- function(id, i18n,
       shinyjs::click("downloadAttr", asis = FALSE)
       shiny::removeModal()
     })
-
-    openSaveHelpModal <- function(buttonVersion){
-      shinyjs::runjs("window.scrollTo(0, 0)")
-      shiny::showModal(
-        shiny::modalDialog(footer = actionButton(inputId = NS(id, buttonVersion), label = i18n()$t("Weiter zu Schritt 2."), class = "btn-lg", style = "background-color:#006268; color:#ffffff" ),
-                           shiny::h2(i18n()$t("Sie haben Schritt 1 geschafft!") ),
-                           #Rewritten 2026-09-01. This used to promise that a
-                           #file would be downloaded to the user's 'Download'
-                           #folder at the start of the next step, which was
-                           #true of the old autosave and is not true of
-                           #anything now: progress is kept in the browser and
-                           #nothing is downloaded unless the user asks. See
-                           #R/state_browser.R.
-                           shiny::h3(shiny::HTML(as.character(i18n()$t("Ihr Fortschritt wird auf diesem Gerät automatisch in Ihrem Browser gespeichert.") ))),
-                           h3(),
-                           shiny::h4(shiny::HTML(as.character(i18n()$t("Wird die Sitzung unterbrochen, bietet Ihnen die App beim nächsten Besuch an, dort weiterzumachen.") ))),
-                           shiny::h4(shiny::HTML(as.character(i18n()$t("Mit dem <b>Disketten-Symbol</b> neben dem Titel speichern Sie jederzeit eine vollständige Datei.") ))),
-                           shiny::h3(),
-                           shiny::div(style = "white-space:nowrap",
-                                      shiny::h4(shiny::HTML(as.character(i18n()$t("Bei Ihrer <b>nächsten Sitzung</b>, können Sie mit <b>dieser Taste</b><br>gespeicherte Inhalte wieder laden!"))), img(src = "www/arrow_show.png", style = "float:right;display:inline-block;height:150px; margin-right:-200px;vertical-align:middle;margin-top:-90px"), style = "text-align:right"),
-                           ),
-                           shiny::h4(shiny::HTML(as.character(i18n()$t("Dadurch werden Sie zu dem entsprechenden Schritt <b>weitergeleitet</b>, wobei alle getätigten Eingaben <b>wiederhergestellt</b> werden!"))) )
-        )
-      )
-    }
 
     #PREPARE ATTRACTIVITY DOWNLOAD ####
     output$downloadAttr <- shiny::downloadHandler(
@@ -1216,8 +1192,8 @@ step1_server <- function(id, i18n,
       r1$obsConfirmBtn2 <- shiny::observeEvent(input$confirmButton2, {
         vftDbg("CONFIRM BUTTON")
 
-
-        openSaveHelpModal("gotSavedHelp2")
+        shinyjs::runjs("window.scrollTo(0, 0)")
+        finaliseDrawing()
 
       }, ignoreInit = TRUE)
 
@@ -1278,9 +1254,22 @@ step1_server <- function(id, i18n,
       TRUE
     }
 
-    #model confirm of first help window
-    obsSavedHelp1 <- observeEvent(input$gotSavedHelp1, {
-      shiny::removeModal()
+    #### finalising the outline ####
+    #
+    #These two were the handlers of the "Sie haben Schritt 1 geschafft!" modal
+    #that every confirm used to open first: press Confirm, read the message,
+    #press "Weiter zu Schritt 2", and only then was the outline finalised. That
+    #modal is gone (2026-09-03) and the confirm buttons call these directly, so
+    #the next-steps modal raised by app_server() is now the only thing a step 1
+    #confirm puts on screen - and it no longer opens on top of another modal,
+    #which is what the Bootstrap 3 note in R/navigation.R was about.
+    #
+    #Neither is an observer any more: both are plain functions called from the
+    #two confirm observers, so the reads here are still inside an observeEvent
+    #and still isolated, exactly as they were.
+
+    #shapefile / coordinates branch (confirm button 1)
+    finaliseShapefile <- function(){
 
       if(reconfirmUnchanged()) return(invisible(NULL))
 
@@ -1319,12 +1308,11 @@ step1_server <- function(id, i18n,
                                 type = "error", duration = 10)
       }
 
+      invisible(NULL)
+    }
 
-    })
-
-    #observe confirm of second help window
-    obsSavedHelp2 <- observeEvent(input$gotSavedHelp2, {
-      shiny::removeModal()
+    #drawing branch (confirm button 2)
+    finaliseDrawing <- function(){
 
       if(reconfirmUnchanged()) return(invisible(NULL))
 
@@ -1372,7 +1360,8 @@ step1_server <- function(id, i18n,
                                 type = "error", duration = 10)
       }
 
-    })
+      invisible(NULL)
+    }
 
     #### PER-VISIT: enter() ####
     #
@@ -1418,7 +1407,8 @@ step1_server <- function(id, i18n,
       #tidy. reactiveValues dedupe: `r1$confirm` left at 1 from the last
       #confirmation (or at -1 from a restore) means the NEXT confirmation writes
       #the same value, invalidates nothing, and app_server's observer never runs.
-      #The user would press "Weiter zu Schritt 2." and stay where they were.
+      #The user would press Confirm and stay where they were, with no next-steps
+      #modal and no sign that anything had happened.
       r1$confirm <- NULL
 
       #### the perimeter in force, back on screen ####

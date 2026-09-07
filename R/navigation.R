@@ -388,8 +388,8 @@ VFT_NEXT_CSS <- "
 #'
 #' #### it opens on top of another modal ####
 #'
-#' Step 1's confirm goes through openSaveHelpModal() first, so the user reaches
-#' this by pressing a button that calls removeModal(). Both messages land in the
+#' It can be raised by a button that calls removeModal() first - the "this will
+#' be discarded" modal from vftCommit() is one. Both messages then land in the
 #' same batch: shiny's modal.js `remove()` starts a Bootstrap hide, and `show()`
 #' then replaces the wrapper's contents out from under it. That works - the
 #' wrapper survives, because its `hidden.bs.modal` handler tests the event
@@ -398,8 +398,9 @@ VFT_NEXT_CSS <- "
 #' modal's hide 300ms later regardless and strips `modal-open` off the body.
 #' If this modal is ever seen with the page scrolling behind it, or shifting a
 #' few pixels a moment after it appears, that is what it is - not this markup.
-#' The same batch happens after vftCommit()'s "this will be discarded" modal.
-#' Step 2's confirm has no modal in front of it and does not pay any of this.
+#' Step 1's confirm used to be the other case - it opened a "Sie haben Schritt 1
+#' geschafft!" modal first - but that one is gone (2026-09-03) and both steps'
+#' confirms now raise this modal on an empty screen and pay none of the above.
 #'
 #' @param session the app-level session.
 #' @param omit ids from VFT_NEXT_CHOICES to leave out. Step 2 passes its own

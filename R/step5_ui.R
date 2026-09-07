@@ -202,11 +202,11 @@ vftDbg("UI6")
                 #
                 #
                 #   ),
-                shiny::column(2, style = "align:center",
+                shiny::column(2, class = "vft-scencol",
                        shiny::fluidRow(
                          #create new versions button
-                         shiny::column(12, style = "align: center",
-                           shiny::actionButton( style = "background-color: #53bbb4; height: 30px; align: center; vertical-align: middle",
+                         shiny::column(12,
+                           shiny::actionButton( style = "background-color: #53bbb4; height: 30px; vertical-align: middle",
                              inputId = shiny::NS(id, "newVersionsButton"), label = shiny::strong(i18n$t("Neue Szenarien erstellen"))
                              )
                            )
@@ -222,8 +222,8 @@ vftDbg("UI6")
                     #R/layout_helpers.R - so the launch button below the list
                     #stays on screen with it on a short monitor. Still 400px
                     #on a tall one, and the box already scrolls.
-                    shiny::column(12, class = "vft-fit-vlist",
-                                  style='border: 1px solid black; vertical-align:middle; align: center; width: 200px; overflow-y: scroll;',
+                    shiny::column(12, class = "vft-fit-vlist vft-vlist",
+                                  style='border: 1px solid black; vertical-align:middle; width: 200px; overflow-y: scroll;',
 
                            shinyjs::useShinyjs(),
                            shinyjs::inlineCSS(list(.selected = "border-width: thick; border-color: green")),
@@ -256,10 +256,10 @@ vftDbg("UI6")
                   #   ),
 
                   shiny::fluidRow(
-                    shiny::column(width = 12, align = "center",
+                    shiny::column(width = 12,
                       shiny::tagList(
                       #launch new simulation
-                      shiny::actionButton(shiny::NS(id, "launchSim"), label = shiny::HTML(paste0(i18n$t(":Simulation:"))), class = "btn-success btn-lg", style = " align: center; vertical-align: middle; height: 75px; width: 200px; text-wrap:wrap; padding-top:5px", width = "100px"),
+                      shiny::actionButton(shiny::NS(id, "launchSim"), label = shiny::HTML(paste0(i18n$t(":Simulation:"))), class = "btn-success btn-lg", style = " vertical-align: middle; height: 75px; width: 200px; text-wrap:wrap; padding-top:5px"),
                       shiny::tags$script(
                         "
                           $('#step5-dayCheckbox .radio label span').map(function(choice){
