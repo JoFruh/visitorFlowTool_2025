@@ -1166,8 +1166,8 @@ step4_server <- function(id, minThresh, i18n, currentLang,
           # LAUNCH PROMISE - generate AOIs ####
           #vftProgress, not ipc::AsyncProgress: 117 MB of session state was
           #crossing into the worker from this site. See R/async_helpers.R.
-          progress1 <- vftProgress(message = "Generating areas of interest...",
-                                   detail = paste0("Dies sollte weniger als ", 30, "Sekunden dauern"),
+          progress1 <- vftProgress(message = "Zielgebiete werden erzeugt...",
+                                   detail = vftMsg("Dies sollte weniger als %d Sekunden dauern", 30),
                                    queue = ipc::shinyQueue(),
                                    millis = 1000)
 

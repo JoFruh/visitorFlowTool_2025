@@ -572,8 +572,12 @@ step2_server <- function(id, fshape, i18n,
         #is 0.1-0.2s for a typical perimeter and ~4s for one larger than the tool
         #is meant for. 30 now overstates the wait by two orders of magnitude for
         #most users, which reads as the app being slow rather than reassuring.
-        progress <- vftProgress(message = i18n()$t(":aufbereitung:"),
-                                detail = paste0(i18n()$t("Dies sollte weniger als "), 10, i18n()$t(" Sekunden dauern")),
+        #the German key, NOT i18n()$t() of it: vftProgress() translates both
+        #captions itself, and it is also what keeps the worker's later messages
+        #and the cross-session queue display in one language. See the
+        #translation section in R/async_helpers.R.
+        progress <- vftProgress(message = ":aufbereitung:",
+                                detail = vftMsg("Dies sollte weniger als %d Sekunden dauern", 10),
                                 queue = ipc::shinyQueue(),
                                 millis = 1000)
 

@@ -252,7 +252,12 @@ cannotRecreate <- dayPop$goalV == -1
         #calculate time left: ex: at 25% of time (100/25)-1 = 3. The time already spent has to pass 3 more times.
         #If it took 1min, then there's 3 more mins to go.
         timeLeft = round( ((total/timestep) - 1) * timeDiff )
-        progress$set(timestep/(total/1.75), message = "ABM l\u00E4uft (oder f\u00E4hrt Rad...)", detail = paste0("Ungef\u00E4hr ", round(timeLeft/3), " Minuten \u00E4brig.") )
+        #vftMsg, not paste0: the worker has no Translator, so it sends the
+        #TEMPLATE and the number and the main thread translates and fills in.
+        #See the translation section in R/async_helpers.R.
+        progress$set(timestep/(total/1.75), message = "ABM l\u00E4uft (oder f\u00E4hrt Rad...)",
+                     detail = vftMsg("Ungef\u00E4hr %d Minuten \u00FCbrig.",
+                                     round(timeLeft/3)) )
       }
     }
 

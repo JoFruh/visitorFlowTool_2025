@@ -167,6 +167,13 @@ vftDbg("UI6")
                                    .knobLabelCanopy { display: none; }
                                    .paintLevelCheckbox:checked ~ .paintLevelTrack .knobLabelCanopy { display: inline; }
                                    .paintLevelCheckbox:checked ~ .paintLevelTrack .knobLabelGround { display: none; }
+                                   /* The switch is greyed out with the material buttons whenever the brush is
+                                      shut - on the original scenario, and while the heat read-out is on. The
+                                      disabling itself is shinyjs::toggleState on the checkbox, but the checkbox
+                                      is a transparent overlay, so dimming it would show nothing: what has to
+                                      dim is the track and knob it sits on top of. */
+                                   .paintLevelCheckbox:disabled ~ .paintLevelTrack { opacity: 0.35; }
+                                   .paintLevelCheckbox:disabled { cursor: default; }
                                    /* Eraser and Reset. Circles, so they read as tools rather than as
                                       two more materials in the row of rectangular colour buttons.
                                       47px each + the 10px gap = 104px, matching the level switch
@@ -176,6 +183,11 @@ vftDbg("UI6")
                                             border-radius: 50%; font-size: 10px; font-weight: bold;
                                             display: flex; align-items: center; justify-content: center;
                                             white-space: normal; line-height: 1.05;
+                                            /* these labels are translated, and the French ones are single
+                                               words longer than a 47px circle (Reinitialiser). white-space
+                                               only breaks at spaces, so without this such a word spills out
+                                               of the button instead of wrapping inside it. */
+                                            overflow-wrap: anywhere;
                                             }
                                    /* the eraser is a toggle, so it needs a visibly held-down state */
                                    .paintToolActive {
@@ -214,7 +226,7 @@ vftDbg("UI6")
                                                        shiny::div(
                                                          style = "display:flex; gap:10px;",
                                                          shiny::actionButton(
-                                                           inputId = shiny::NS(id, "paintColor_canopyArtificial"), label = i18n$t("Künstlich"),
+                                                           inputId = shiny::NS(id, "paintColor_canopyArtificial"), label = i18n$t("Kuenstlich"),
                                                            class = "colorBtnNotSelected",
                                                            style = "background-color: #3f3f3f; color: white; width: 90px; height: 45px;"
                                                          ),
@@ -238,12 +250,12 @@ vftDbg("UI6")
                                                            style = "background-color: #6aa84f; color: white; width: 90px; height: 45px;"
                                                          ),
                                                          shiny::actionButton(
-                                                           inputId = shiny::NS(id, "paintColor_artificial"), label = i18n$t("Künstlich"),
+                                                           inputId = shiny::NS(id, "paintColor_artificial"), label = i18n$t("Kuenstlich"),
                                                            class = "colorBtnNotSelected",
                                                            style = "background-color: grey; width: 90px; height: 45px;"
                                                          ),
                                                          shiny::actionButton(
-                                                           inputId = shiny::NS(id, "paintColor_natural"), label = i18n$t("Natürlich"),
+                                                           inputId = shiny::NS(id, "paintColor_natural"), label = i18n$t("Natuerlich"),
                                                            class = "colorBtnNotSelected",
                                                            style = "background-color: #a05a3c; color: white; width: 90px; height: 45px;"
                                                          ),
@@ -259,7 +271,7 @@ vftDbg("UI6")
                                                      #switch. Its height is the two rows plus the 10px gap between them, so it
                                                      #lines up with them exactly.
                                                      shiny::actionButton(
-                                                       inputId = shiny::NS(id, "paintColor_block"), label = i18n$t("Artificial block"),
+                                                       inputId = shiny::NS(id, "paintColor_block"), label = i18n$t("Kuenstlicher Block"),
                                                        class = "colorBtnNotSelected",
                                                        #white-space/flex override Bootstrap's nowrap and top-aligned label, which
                                                        #a two-word caption in a 90px-wide, 100px-tall button would otherwise show up
@@ -288,7 +300,7 @@ vftDbg("UI6")
                                                      shiny::div(
                                                        style = "display:flex; flex-direction:column; gap:10px;",
                                                        shiny::actionButton(
-                                                         inputId = shiny::NS(id, "paintEraser"), label = i18n$t("Eraser"),
+                                                         inputId = shiny::NS(id, "paintEraser"), label = i18n$t("Radierer"),
                                                          class = "paintToolBtn colorBtnNotSelected",
                                                          style = "background-color: #ffffff;"
                                                        ),
@@ -299,20 +311,20 @@ vftDbg("UI6")
                                                        )
                                                      ),
                                                      #HEAT. Reads the design rather than editing it, so it sits in its
-                                                     #own column apart from the brush tools. Two buttons keep this
-                                                     #column the same 104px as the eraser column and the level switch.
-                                                     #Refresh is separate because the heat model costs seconds over a
-                                                     #large area: recomputing on every stroke would stall the shared
-                                                     #R process for everyone, so the user decides when to pay it.
+                                                     #own column apart from the brush tools, and centres against them
+                                                     #rather than filling their 104px - there is only one of it.
+                                                     #Switching it on recomputes when the paint has changed since the
+                                                     #last read-out and reuses the cached surface when it has not, so
+                                                     #there is nothing left for a separate Refresh button to do. The
+                                                     #heat model costs seconds over a large area and the R process is
+                                                     #shared, which is why that recompute is tied to this deliberate
+                                                     #click and not to every stroke - and why the brush is refused
+                                                     #while heat is on (see the heat observers in newVersions_server.R),
+                                                     #so what is on screen always describes the design underneath it.
                                                      shiny::div(
                                                        style = "display:flex; flex-direction:column; gap:10px;",
                                                        shiny::actionButton(
-                                                         inputId = shiny::NS(id, "heatSwitch"), label = i18n$t("Heat"),
-                                                         class = "paintToolBtn colorBtnNotSelected",
-                                                         style = "background-color: #ffffff;"
-                                                       ),
-                                                       shiny::actionButton(
-                                                         inputId = shiny::NS(id, "heatRefresh"), label = i18n$t("Refresh"),
+                                                         inputId = shiny::NS(id, "heatSwitch"), label = i18n$t("Hitze"),
                                                          class = "paintToolBtn colorBtnNotSelected",
                                                          style = "background-color: #ffffff;"
                                                        )

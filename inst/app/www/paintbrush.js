@@ -58,6 +58,13 @@
     //applyLevelStyles), which would take the land cover off the screen with the
     //brush and leave the original looking like an empty map.
     readonly:     false,
+    //armed and writable, but the heat read-out is on. Painting under it would
+    //show a surface computed from a design that is still moving, so strokes are
+    //refused - and, unlike `readonly`, refused out loud: the overlay stays in
+    //place precisely so a left-click can be caught and answered with R's modal.
+    //Right/middle-drag pans exactly as it does while painting, so nothing the
+    //user had is taken away by the refusal.
+    blocked:      false,
     //rolling record of the events that decide whether paint is armed and drawn.
     //Reasoning backwards from a single end-state flag repeatedly gave the wrong
     //answer here, because the flag says what is true now and not who last set
@@ -678,6 +685,9 @@
     //readonly as well as disarmed: a brush cursor over a scenario that takes no
     //strokes is an invitation to try
     if (!state.active || state.readonly) { state.overlay.style.cursor = "default"; return; }
+    //blocked is armed-but-refusing, so it gets its own cursor rather than the
+    //plain arrow: the brush is still the mode, it just will not lay anything down
+    if (state.blocked) { state.overlay.style.cursor = "not-allowed"; return; }
     var r    = state.brushRadius;
     var size = r * 2 + 4;
     //the eraser shows an empty dashed ring: nothing is being added, and the
@@ -730,6 +740,13 @@
       }
       if (e.button !== 0) return;
       e.preventDefault(); e.stopPropagation();
+      if (state.blocked) {
+        //swallow the stroke and hand the click to R, which owns the explanation
+        //because it owns the translations. One report per press, so holding the
+        //button down cannot stack modals.
+        Shiny.setInputValue("newVersions-paintBlocked", Date.now(), { priority: "event" });
+        return;
+      }
       el.setPointerCapture(e.pointerId);
       painting = true;
       last = pt(e);
@@ -922,6 +939,7 @@
       overlay:      !!state.overlay && !!state.overlay.isConnected,
       active:       state.active,
       readonly:     state.readonly,
+      blocked:      state.blocked,
       canopyActive: state.canopyActive,
       erasing:      state.erasing,
       res:          state.res,
@@ -1124,6 +1142,19 @@
     state.readonly = ro;
     applyActive();
     reportDebug(ro ? "paint-readonly" : "paint-writable");
+  });
+
+  /* Heat is on: refuse strokes, but stay armed so the refusal can be explained.
+   *
+   * Flush first - what was painted before the switch belongs to R, and R is
+   * about to compute the heat surface from exactly that. */
+  on("set-paint-blocked", function (msg) {
+    var b = !!(msg && msg.blocked);
+    trace("set-paint-blocked(" + b + ")");
+    if (b) flush();
+    state.blocked = b;
+    applyActive();
+    reportDebug(b ? "paint-blocked" : "paint-unblocked");
   });
 
   on("set-paint-color", function (msg) {

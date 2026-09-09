@@ -95,7 +95,7 @@ step2_ui <- function(id, i18n){
                 shiny::column(4, align = "center", class = "vft-step2-col",
                               style = " vertical-align: middle;",
                               shiny::uiOutput(outputId = NS(id, "minCutoff_UI")),
-                       shiny::sliderInput(shiny::NS(id, "minValThreshold"), label = i18n$t("Mindestschwellenwert für die Sensitivitätsmatrix [ % ]"), min = 0, max = 100, value = 0,
+                       shiny::sliderInput(shiny::NS(id, "minValThreshold"), label = i18n$t("Sensibilität unterhalb des folgenden Schwellenwerts ausblenden. [ % ]"), min = 0, max = 100, value = 0,
                                           ticks = FALSE),
                        shiny::plotOutput(shiny::NS(id, "SDMmap"))
                        ),

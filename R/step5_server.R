@@ -1494,7 +1494,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
         #against 3.6 MB for the `network` the job actually needs.
         progress <- vftProgressPair(value    = 0,
                                     message  = "Daten werden vorbereitet",
-                                    detail   = "Dies sollte weniger als 30 Sekunden dauern",
+                                    detail   = vftMsg("Dies sollte weniger als %d Sekunden dauern", 30),
                                     message2 = "Simulation läuft")
         progPrep <- progress$prep
         progSim  <- progress$sim

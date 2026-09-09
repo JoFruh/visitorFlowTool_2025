@@ -503,6 +503,10 @@ if(is.null(r$updateNetworkPlot)){
       #the one button currently highlighted, which may be a "both" material belonging
       #to neither level. Matches the class the UI ships paintColor_grass with.
       r$selectedPaintButton      <- "paintColor_grass"
+      #the scenario gate, remembered so that the heat gate can be applied without
+      #the caller having to know it - see applyPaintGates(). Starts closed to match
+      #r$position: position 1 is the original, which never takes strokes.
+      r$paintCanEdit             <- FALSE
 
       shinyjs::disable("newVersionsConfirmButton")
       shinyjs::disable("addVersionButton")
@@ -973,6 +977,18 @@ if(is.null(r$updateNetworkPlot)){
             setPaintLevelButtons(canopyActive)
             shiny::isolate(applyPaintLevelColor(session, r, if(canopyActive) "canopy" else "ground"))
 
+            #THE HEAT MODE DOES NOT SURVIVE A RE-RENDER, so do not let the switch
+            #claim that it does. The surface is drawn through leafletProxy onto the
+            #map instance that existed at the time; this render builds a new one, and
+            #the layer does not come with it. Leaving r$heatOn set would leave a
+            #switch held down over nothing - and, since the mode is what shuts the
+            #brush, would leave every paint button disabled with no visible reason
+            #why. The cached raster goes with it: a version switch also arrives here,
+            #and a heat surface belongs to the design it was computed from.
+            r$heatOn     <- FALSE
+            r$heatRaster <- NULL
+            shinyjs::removeClass("heatSwitch", "paintToolActive")
+
             #...and then take the brush away again on the original, which is the
             #baseline every version is compared against rather than a canvas -
             #see setPaintEditable(). Called AFTER setPaintLevelButtons() above,
@@ -1257,19 +1273,41 @@ setPaintLevelButtons <- function(canopyActive){
 #
 #The colour buttons and the two brush tools are greyed with it, because a live
 #button that does nothing is worse than one that says it is unavailable. The
-#heat buttons are left alone: they read, they never write.
+#heat switch is left alone: it reads, it never writes.
 setPaintEditable <- function(canEdit){
+  r$paintCanEdit <- canEdit
+  applyPaintGates()
+}
+
+#TWO GATES ON THE BRUSH, AND ONE PLACE THAT APPLIES BOTH.
+#
+#`paintCanEdit` is the scenario gate above: the original is the surveyed
+#baseline and takes no strokes, ever.
+#`heatOn` is the mode gate: the heat surface is a read-out of the design, and
+#it costs seconds to compute over a large area. Letting the two run at once
+#puts a surface on screen that describes a design the user has since painted
+#over - the stale read-out the old Refresh button existed to fix. Refusing the
+#strokes instead means what is displayed always matches what is underneath it,
+#which is what makes recompute-on-switch-on enough on its own.
+#
+#They are deliberately different refusals in the browser. `readonly` takes the
+#input overlay away entirely - there is nothing to explain, the original is
+#never a canvas. `blocked` leaves it in place and swallows the click, so the
+#attempt can be answered with the modal in obs_paintBlocked() below: the mode
+#is temporary, and the user has to be told which switch undoes it.
+applyPaintGates <- function(){
+  canEdit <- isTRUE(shiny::isolate(r$paintCanEdit))
+  heatOn  <- isTRUE(shiny::isolate(r$heatOn))
+  live    <- canEdit && !heatOn
   session$sendCustomMessage("set-paint-readonly", list(readonly = !canEdit))
-  for(btn in PAINT_BUTTONS$inputId){
-    shinyjs::toggleState(id = btn, condition = canEdit)
-    shinyjs::toggleClass(id = btn, class = "paintBtnDisabled", condition = !canEdit)
-  }
-  for(btn in c("paintLevel", "paintEraser", "paintReset")){
-    shinyjs::toggleState(id = btn, condition = canEdit)
+  session$sendCustomMessage("set-paint-blocked",  list(blocked  = heatOn))
+  for(btn in c(PAINT_BUTTONS$inputId, "paintLevel", "paintEraser", "paintReset")){
+    shinyjs::toggleState(id = btn, condition = live)
+    shinyjs::toggleClass(id = btn, class = "paintBtnDisabled", condition = !live)
   }
   #the level switch decides which colour buttons are live, so it has the last
   #word whenever they are live at all
-  if(canEdit) setPaintLevelButtons(isTRUE(shiny::isolate(input$paintLevel)))
+  if(live) setPaintLevelButtons(isTRUE(shiny::isolate(input$paintLevel)))
   invisible(NULL)
 }
 
@@ -1456,8 +1494,20 @@ computeHeat <- function(){
   ok
 }
 
-# The switch. Computes on first activation, then reuses the cached raster, so
-# toggling it off and back on is instant; only Refresh pays again.
+# The switch, and the only thing that computes heat.
+#
+# There is no Refresh button any more, because there is nothing left for one to
+# do: every edit drops the cached raster (see the paintCells and reset observers),
+# so a NULL cache here means "the design has changed since the last read-out" and
+# this IS the refresh. A cache that survived means nothing has been painted since,
+# and the surface is redrawn from it instantly - which is what keeps toggling heat
+# off and back on free.
+#
+# The recompute still happens on a deliberate click and never on a stroke: it
+# costs seconds over a large area, on an R process every session shares. What
+# keeps that from going stale is the gate rather than a button - painting is
+# refused while heat is on, so the design cannot move underneath a displayed
+# surface. See applyPaintGates().
 shiny::observeEvent(input$heatSwitch, {
   on <- !isTRUE(shiny::isolate(r$heatOn))
   if(on){
@@ -1472,13 +1522,18 @@ shiny::observeEvent(input$heatSwitch, {
     shinyjs::removeClass("heatSwitch", "paintToolActive")
     clearHeat()
   }
+  applyPaintGates()
 }, ignoreInit = TRUE)
 
-# Refresh: pick up whatever has been painted since. Recomputes even when the
-# layer is off, so turning it on afterwards shows the current design rather than
-# a stale one.
-shiny::observeEvent(input$heatRefresh, {
-  if(computeHeat() && isTRUE(shiny::isolate(r$heatOn))) drawHeat()
+# An attempt to paint while heat is on. The browser swallowed the stroke and
+# asked for the explanation, which is given here because the translations are.
+obs_paintBlocked <- shiny::observeEvent(input$paintBlocked, {
+  shiny::showModal(shiny::modalDialog(
+    footer = shiny::actionButton(inputId = shiny::NS(id, "dismissModal"),
+                                 label = i18n()$t("OK!"),
+                                 style = "background-color:#006268; color:#ffffff"),
+    shiny::h4(i18n()$t("Um Materialien zu malen, deaktivieren Sie zuerst den Hitze-Modus.")),
+    size = "s"))
 }, ignoreInit = TRUE)
 
 # ERASER: a toggle, not a material.
@@ -1534,6 +1589,15 @@ shiny::observeEvent(input$paintLevel, {
 # paint survive a version switch or a reload, which is why it does no projection,
 # no image encoding and sends nothing back but an acknowledgement. If it throws,
 # the ack is skipped and the browser puts the same cells back in its queue.
+#
+# PRIORITY: the browser flushes on the pointerdown that precedes a click on any
+# control (the capture-phase listener in paintbrush.js), so the strokes and that
+# control's own input value arrive in the same Shiny flush - and observers within
+# a flush run in the order they were created, which would put this one last. A
+# control that reads the raster - the Heat switch, a version or context switch -
+# would then read it without the strokes that were flushed for exactly that
+# reason. The priority makes "persisted before anything acts on it" a property of
+# the observer rather than of where in this file it happens to be written.
 observeEvent(input$paintCells, {
   tryCatch({
     delta <- input$paintCells
@@ -1556,6 +1620,10 @@ observeEvent(input$paintCells, {
       r$networkList[[pos]][[fld]] <- applyPaintRuns(
         shiny::isolate(r$networkList[[pos]][[fld]]), runs
       )
+      #the cached heat now describes a design that no longer exists - the same
+      #invalidation the reset does, and what the Heat switch reads to decide
+      #whether it has to recompute
+      r$heatRaster <- NULL
     }
 
     session$sendCustomMessage("paint-cells-ack", list(seq = delta$seq))
@@ -1563,7 +1631,7 @@ observeEvent(input$paintCells, {
     warning("paintCells observer failed: ", conditionMessage(e))
     message("paintCells observer failed: ", conditionMessage(e))
   })
-})
+}, priority = 100)
 
 
 

@@ -264,6 +264,81 @@ VFT_QUEUE_MAX_S <- 2 * 3600
   function(x) tryCatch(tr$t(x), error = function(e) x)
 }
 
+#### Translating what a progress bar says ####
+#
+# The captions come from two places and neither can translate itself. The ones
+# the worker sends - "Parkplätze werden geladen...", "ABM läuft" - are produced
+# in a mirai daemon, which has no session and therefore no Translator; and the
+# ones the call sites pass are fixed at bar creation, long before the user may
+# switch language.
+#
+# Both funnel through this file: the call-site caption goes through vftProgress()
+# / vftProgressPair(), and every worker caption arrives at the consumer handler
+# below, ON THE MAIN THREAD, where the session and its Translator are in reach.
+# So translation happens here, at the single point both paths cross, and no call
+# site or worker function needs an i18n argument.
+#
+# German source strings are the keys, per the convention in .vftT() above: a
+# deployment whose CSVs are behind shows readable German rather than a bare key.
+
+#' A caption that carries its own sprintf arguments, so it can be translated
+#' AFTER the number is known.
+#'
+#' "Ungefähr 7 Minuten übrig." cannot be looked up - the 7 changes every tick, so
+#' every value would need its own CSV row. The worker sends the TEMPLATE plus the
+#' number instead, and the main thread translates the template and fills it in.
+#'
+#' Small, plain and classed: it crosses the ipc queue by saveRDS like any other
+#' object, and .vftTrTxt() below is the only thing that ever unpacks it.
+#' @param key the German format string, exactly as it appears in the CSVs
+#' @param ... the sprintf arguments
+vftMsg <- function(key, ...) structure(list(key = key, args = list(...)),
+                                       class = "vftMsg")
+
+#' sprintf that cannot fail. A caption with the wrong number of arguments - a
+#' CSV row translated with the %d dropped, say - must degrade to the format
+#' string, not take the progress bar's handler down with it.
+.vftFmt <- function(key, args){
+  if(!length(args)) return(key)
+  #suppressWarnings: sprintf WARNS rather than errors on a surplus argument, and
+  #a bar repainting once a second would fill the log with it.
+  tryCatch(suppressWarnings(do.call(sprintf, c(list(key), args))),
+           error = function(e) key)
+}
+
+#' The lookup key behind a caption, for the queue ticket's label.
+#'
+#' The ticket stores the UNTRANSLATED key on purpose. It is read by OTHER
+#' sessions, which paint it in their own language, and the duration history is
+#' keyed by it - translating it at creation would fragment that history into one
+#' bucket per language.
+.vftMsgKey <- function(x){
+  if(inherits(x, "vftMsg")) return(x$key)
+  x
+}
+
+#' Translate one caption into this session's language.
+#'
+#' Total by construction: NULL stays NULL, anything that is not a caption is
+#' passed through untouched. A display feature must never be why a bar fails.
+.vftTrTxt <- function(x, tr){
+  if(is.null(x)) return(NULL)
+  if(inherits(x, "vftMsg")) return(.vftFmt(tr(x$key), x$args))
+  if(is.character(x) && length(x) == 1L && !is.na(x)) return(tr(x))
+  x
+}
+
+#' Translate the message and detail of one $set()/$inc() argument list.
+#'
+#' `value` and `amount` are left alone - only the two captions are text. Called
+#' fresh on every message rather than once at wiring time, so a language switch
+#' mid-job is picked up by the next update the worker sends.
+.vftTrArgs <- function(args, tr){
+  if(!is.null(args$message)) args$message <- .vftTrTxt(args$message, tr)
+  if(!is.null(args$detail))  args$detail  <- .vftTrTxt(args$detail,  tr)
+  args
+}
+
 #' Paint one queued progress bar with the running job's numbers.
 #'
 #' @param sp the real shiny::Progress - we are on the main thread, so drive it
@@ -290,7 +365,10 @@ VFT_QUEUE_MAX_S <- 2 * 3600
   #line is to stop a user blaming a colleague for their own queued job.
   mine <- !is.na(me$token) && identical(run$token, me$token)
   who  <- if(mine) tr("Ihr eigener Auftrag") else tr("Auftrag eines anderen Nutzers")
-  det <- paste0(who, ": ", run$label)
+  #the ticket holds the German key, not what the running job's own bar says: this
+  #line is painted in THIS session's language, which is not necessarily the
+  #language of the user whose job is in front.
+  det <- paste0(who, ": ", tr(run$label))
 
   if(length(run$value) == 1L && is.finite(run$value))
     det <- paste0(det, " – ", round(run$value * 100), " %")
@@ -435,11 +513,23 @@ VFT_QUEUE_MAX_S <- 2 * 3600
 #' that is small. Sending `progress$.__enclos_env__$private$queue` would undo
 #' most of the gain.
 #'
-#' @param ... passed to ipc::AsyncProgress$new() (value, message, detail, ...)
+#' @param ... passed to ipc::AsyncProgress$new() (value, ...)
+#' @param message,detail the bar's caption, as a GERMAN key or a vftMsg(). Named
+#'   here rather than left in `...` so it can be translated before the
+#'   shiny::Progress is built with it - see the translation section above.
 #' @param millis how often the main thread drains the queue
 #' @return a list with $set, $inc and $close, safe to capture in a future
-vftProgress <- function(..., millis = 1000){
-  progress <- ipc::AsyncProgress$new(..., millis = millis)
+vftProgress <- function(..., message = NULL, detail = NULL, millis = 1000){
+  #the domain is already required here: ipc::AsyncProgress$new() builds a
+  #shiny::Progress from it two lines down. Translate against it BEFORE that, so
+  #the bar is never briefly German on screen for a French user.
+  sess0 <- shiny::getDefaultReactiveDomain()
+  tr0   <- .vftT(sess0)
+  msg0  <- .vftTrTxt(message, tr0)
+  det0  <- .vftTrTxt(detail,  tr0)
+
+  progress <- ipc::AsyncProgress$new(..., message = msg0, detail = det0,
+                                     millis = millis)
 
   #The underlying shiny::Progress. We are on the main thread in the handler, so
   #drive it directly rather than going back through AsyncProgress' own methods -
@@ -456,21 +546,28 @@ vftProgress <- function(..., millis = 1000){
   #Every bar takes a ticket here, one call before vftFuture() joins it to the
   #FIFO. It has to happen at THIS end and not at the dispatch, because the bar is
   #what has the session, the shiny::Progress id, and the label to show.
-  dots  <- list(...)
-  tid   <- .vftQueueTicket(label = dots$message,
-                           session = tryCatch(sp$.__enclos_env__$private$session,
-                                              error = function(e) NULL))
-  watch <- .vftQueueWatch(sp, tid, message0 = dots$message, detail0 = dots$detail)
+  sess  <- tryCatch(sp$.__enclos_env__$private$session, error = function(e) NULL)
+  if(is.null(sess)) sess <- sess0
+  #the UNTRANSLATED key goes on the ticket, the translated caption on the bar:
+  #see .vftMsgKey().
+  tid   <- .vftQueueTicket(label = .vftMsgKey(message), session = sess)
+  watch <- .vftQueueWatch(sp, tid, message0 = msg0, detail0 = det0)
 
   #This closure captures `target` and therefore the session - which is fine and
   #intended: it lives in the consumer, on this side, and is never serialised.
   q$consumer$addHandler(function(sig, obj, e){
     #a progress bar must never be able to kill the consumer that drains the queue
-    tryCatch(switch(obj$op,
-                    set   = do.call(target$set, obj$args),
-                    inc   = do.call(target$inc, obj$args),
-                    close = target$close()),
-             error = function(err) NULL)
+    #the worker had no Translator, so its caption arrives as a German key (or a
+    #vftMsg template). This is the main thread and the session is in reach, so
+    #this is where it becomes French or English. Re-read per message, so a
+    #language switch mid-job takes effect on the next update.
+    tryCatch({
+      tr <- .vftT(sess)
+      switch(obj$op,
+             set   = do.call(target$set, .vftTrArgs(obj$args, tr)),
+             inc   = do.call(target$inc, .vftTrArgs(obj$args, tr)),
+             close = target$close())
+    }, error = function(err) NULL)
     #a message from the worker is proof the job is executing: stop the queue
     #ticker before it can overwrite what the worker just wrote, and republish the
     #new value so sessions waiting behind this job can display it.
@@ -542,33 +639,46 @@ vftProgress <- function(..., millis = 1000){
 #' entire ABM.
 #'
 #' @param ... passed to ipc::AsyncProgress$new() for the FIRST bar
-#' @param message2,detail2 the second bar's caption, applied when it is created
+#' @param message,detail the FIRST bar's caption, as a German key or a vftMsg()
+#' @param message2,detail2 the second bar's caption, applied when it is created -
+#'   and translated at THAT moment, not here, so it follows a language switch
+#'   made while the first half was still running
 #' @param millis how often the main thread drains the queue
 #' @return list(prep = , sim = ), each a handle as vftProgress() returns, with the
 #'   queue ticket as an attribute on the LIST so vftFuture() finds it there
-vftProgressPair <- function(..., message2 = NULL, detail2 = NULL, millis = 1000){
-  progress <- ipc::AsyncProgress$new(..., millis = millis)
+vftProgressPair <- function(..., message = NULL, detail = NULL,
+                            message2 = NULL, detail2 = NULL, millis = 1000){
+  sess0 <- shiny::getDefaultReactiveDomain()
+  tr0   <- .vftT(sess0)
+  msg0  <- .vftTrTxt(message, tr0)
+  det0  <- .vftTrTxt(detail,  tr0)
+
+  progress <- ipc::AsyncProgress$new(..., message = msg0, detail = det0,
+                                     millis = millis)
 
   sp     <- tryCatch(progress$.__enclos_env__$private$progress,
                      error = function(e) NULL)
   target <- if(is.null(sp)) progress else sp
   sess   <- tryCatch(sp$.__enclos_env__$private$session, error = function(e) NULL)
+  if(is.null(sess)) sess <- sess0
 
   q    <- progress$.__enclos_env__$private$queue
   sig1 <- basename(tempfile("vftProgress_"))
   sig2 <- basename(tempfile("vftProgress2_"))
 
-  dots  <- list(...)
-  tid   <- .vftQueueTicket(label = dots$message, session = sess)
-  watch <- .vftQueueWatch(sp, tid, message0 = dots$message, detail0 = dots$detail)
+  #the German key, not the painted caption: see .vftMsgKey()
+  tid   <- .vftQueueTicket(label = .vftMsgKey(message), session = sess)
+  watch <- .vftQueueWatch(sp, tid, message0 = msg0, detail0 = det0)
 
   #### bar 1: exactly what vftProgress() does ####
   q$consumer$addHandler(function(sig, obj, e){
-    tryCatch(switch(obj$op,
-                    set   = do.call(target$set, obj$args),
-                    inc   = do.call(target$inc, obj$args),
-                    close = target$close()),
-             error = function(err) NULL)
+    tryCatch({
+      tr <- .vftT(sess)
+      switch(obj$op,
+             set   = do.call(target$set, .vftTrArgs(obj$args, tr)),
+             inc   = do.call(target$inc, .vftTrArgs(obj$args, tr)),
+             close = target$close())
+    }, error = function(err) NULL)
     tryCatch(watch$handOver(closed = identical(obj$op, "close")),
              error = function(err) NULL)
     NULL
@@ -601,17 +711,20 @@ vftProgressPair <- function(..., message2 = NULL, detail2 = NULL, millis = 1000)
         return(NULL)
       }
 
+      tr <- .vftT(sess)
+
       if(is.null(st$bar)){
         #the first message IS the hand-over: the first half is done with the
         #queue ticker, so let it go before painting anything of our own.
         tryCatch(watch$stop(), error = function(err) NULL)
         st$bar <- shiny::Progress$new(session = sess)
-        st$bar$set(value = 0, message = message2, detail = detail2)
+        st$bar$set(value = 0, message = .vftTrTxt(message2, tr),
+                   detail = .vftTrTxt(detail2, tr))
       }
 
       switch(obj$op,
-             set   = do.call(st$bar$set, obj$args),
-             inc   = do.call(st$bar$inc, obj$args),
+             set   = do.call(st$bar$set, .vftTrArgs(obj$args, tr)),
+             inc   = do.call(st$bar$inc, .vftTrArgs(obj$args, tr)),
              close = { st$bar$close(); st$bar <- NULL; st$done <- TRUE })
     }, error = function(err) NULL)
 

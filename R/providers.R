@@ -1144,7 +1144,7 @@ vftClearPendingStep <- function(session){
   #vftProgress, not ipc::AsyncProgress: the latter drags the whole session into
   #the worker. See R/async_helpers.R.
   progress <- vftProgress(message = prov$label,
-                          detail  = "Daten werden vorbereitet...",
+                          detail  = "Daten werden vorbereitet...",  #translated in vftProgress()
                           queue   = ipc::shinyQueue(),
                           millis  = 1000)
 

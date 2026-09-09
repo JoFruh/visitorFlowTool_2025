@@ -473,7 +473,7 @@ vftPrepareThen <- function(r, pos, finalPolygons, minThresh, then,
     #the worker. This dispatch was measured at 120 MB of session state when it
     #lived in step 4's confirm handler. See R/async_helpers.R.
     progress <- vftProgress(message = label,
-                            detail  = "Dies sollte weniger als 30 Sekunden dauern",
+                            detail  = vftMsg("Dies sollte weniger als %d Sekunden dauern", 30),
                             queue   = ipc::shinyQueue(),
                             millis  = 1000)
 
