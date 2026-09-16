@@ -44,7 +44,8 @@ HEAT_GROUND <- c("1" = 0.3,   # gras
 #' a deck and transpires as well.
 HEAT_CANOPY <- c("0" =  0.0,  # open sky - no shade
                  "6" = -0.5,  # kuenstlich
-                 "7" = -0.8)  # baum
+                 "7" = -0.8,  # baum
+                 "9" =  0.0)  # geraeumt - a plan import removed the canopy
 
 #' Moving window radii in metres, and the weight each window's mean carries.
 HEAT_RADII   <- c(near = 10,  far = 100)

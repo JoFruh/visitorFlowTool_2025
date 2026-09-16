@@ -327,10 +327,28 @@ vftDbg("UI6")
                                                          inputId = shiny::NS(id, "heatSwitch"), label = i18n$t("Hitze"),
                                                          class = "paintToolBtn colorBtnNotSelected",
                                                          style = "background-color: #ffffff;"
-                                                       )
+                                                       ),
+                                                       #PLAN IMPORT. Opens the browser's file picker; the file
+                                                       #never reaches R - planimport.js places, classifies and
+                                                       #previews it, and only the result is sent on Apply. A plain
+                                                       #button rather than an actionButton: R has nothing to do
+                                                       #on the click. Gated with the brush in applyPaintGates().
+                                                       tags$button(
+                                                         id = shiny::NS(id, "paintImport"), type = "button",
+                                                         class = "btn btn-default paintToolBtn colorBtnNotSelected",
+                                                         style = "background-color: #ffffff;",
+                                                         onclick = "document.getElementById('newVersions-planFile').click();",
+                                                         i18n$t("Plan laden")
+                                                       ),
+                                                       tags$input(id = shiny::NS(id, "planFile"), type = "file",
+                                                                  accept = ".pdf,.png,.jpg,.jpeg,.tif,.tiff",
+                                                                  style = "display:none;")
                                                      )
                                                    )
-                                                 )
+                                                 ),
+                                                 #filled by planimport.js while a plan is being placed;
+                                                 #the paint buttons above are hidden meanwhile
+                                                 shiny::div(id = NS(id, "planImportPanel"), style = "display:none;")
                                    )
                                  )
 
@@ -400,7 +418,9 @@ vftDbg("UI6")
                 ),
         tagList(
           # ... your normal UI ...,
-          tags$script(src = "www/paintbrush.js")  # at the end of the UI, outside tags$head
+          tags$script(src = "www/paintbrush.js"),  # at the end of the UI, outside tags$head
+          #after paintbrush.js, whose internal hooks (window.__vftPaintHooks) it uses
+          tags$script(src = "www/planimport.js")
         )
 
               )

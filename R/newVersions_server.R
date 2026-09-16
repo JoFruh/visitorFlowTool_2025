@@ -1042,6 +1042,11 @@ if(is.null(r$updateNetworkPlot)){
                       paste(class(shape), collapse = "/"))
               FALSE
             })
+            #the plan import panel is built in the browser, so its words are sent
+            #from here, where the translations are
+            if(paintOK) session$sendCustomMessage("plan-import-labels",
+                                                  planImportLabels(shiny::isolate(i18n())))
+
             #the surveyed land cover for this area, as a read-only layer under the
             #paint. It is deliberately NOT merged into paintedRaster: keeping the
             #two apart is what leaves "what was already there" and "what the user
@@ -1193,8 +1198,8 @@ PAINT_BUTTONS <- data.frame(
               "paintColor_natural", "paintColor_water",
               "paintColor_canopyArtificial", "paintColor_canopyTree",
               "paintColor_block"),
-  id      = PAINT_CATEGORIES$id,
-  level   = PAINT_CATEGORIES$level,
+  id      = PAINT_CATEGORIES$id[PAINT_CATEGORIES$button],
+  level   = PAINT_CATEGORIES$level[PAINT_CATEGORIES$button],
   stringsAsFactors = FALSE
 )
 
@@ -1301,7 +1306,7 @@ applyPaintGates <- function(){
   live    <- canEdit && !heatOn
   session$sendCustomMessage("set-paint-readonly", list(readonly = !canEdit))
   session$sendCustomMessage("set-paint-blocked",  list(blocked  = heatOn))
-  for(btn in c(PAINT_BUTTONS$inputId, "paintLevel", "paintEraser", "paintReset")){
+  for(btn in c(PAINT_BUTTONS$inputId, "paintLevel", "paintEraser", "paintReset", "paintImport")){
     shinyjs::toggleState(id = btn, condition = live)
     shinyjs::toggleClass(id = btn, class = "paintBtnDisabled", condition = !live)
   }
@@ -1630,6 +1635,53 @@ observeEvent(input$paintCells, {
   }, error = function(e){
     warning("paintCells observer failed: ", conditionMessage(e))
     message("paintCells observer failed: ", conditionMessage(e))
+  })
+}, priority = 100)
+
+# Persist a plan import (planimport.js).
+#
+# The browser has already classified, previewed and drawn the plan; what arrives
+# is its result as two class-id PNGs, one per level, covering the plan's
+# footprint on the paint grid. An image rather than runs for the reason the land
+# cover baseline is one: a plan at 1 m breaks a run at every edge, so runs would
+# be megabytes where the PNG is kilobytes, and decoding it here is one readPNG.
+#
+# Created after the paintCells observer and at the same priority, so strokes
+# flushed just before Apply are written first and the plan lands on top of them,
+# which is the order the user did them in. Same guards and same ack contract as
+# paintCells: a throw skips the ack and the browser resends.
+observeEvent(input$paintImport, {
+  tryCatch(vftTime("paint:import", {
+    msg <- input$paintImport
+    pos <- suppressWarnings(as.integer(msg$version))
+    if(length(pos) != 1 || is.na(pos) || pos < 1 ||
+       pos > length(shiny::isolate(r$networkList))) return(NULL)
+    if(pos == 1) return(NULL)
+
+    w <- as.numeric(msg$w); h <- as.numeric(msg$h)
+    col0 <- as.numeric(msg$col0); rowTop <- as.numeric(msg$rowTop)
+    ok <- length(w) == 1 && length(h) == 1 && length(col0) == 1 && length(rowTop) == 1 &&
+          all(is.finite(c(w, h, col0, rowTop))) && w >= 1 && h >= 1 &&
+          w * h <= PLAN_IMPORT_MAX_CELLS
+    if(!ok){
+      message("paint: plan import refused - bad or oversized window")
+      return(NULL)
+    }
+
+    for(fld in c("paintedRaster", "canopyRaster")){
+      uri   <- if(fld == "canopyRaster") msg$canopy else msg$ground
+      patch <- paintDecodeClassPNG(uri, col0, rowTop, w, h)
+      if(is.null(patch)) next
+      r$networkList[[pos]][[fld]] <- paintApplyPatch(
+        shiny::isolate(r$networkList[[pos]][[fld]]), patch
+      )
+      r$heatRaster <- NULL
+    }
+    message(sprintf("paint: plan import on version %d, %g x %g cells", pos, w, h))
+    session$sendCustomMessage("paint-import-ack", list(seq = msg$seq))
+  }), error = function(e){
+    warning("paintImport observer failed: ", conditionMessage(e))
+    message("paintImport observer failed: ", conditionMessage(e))
   })
 }, priority = 100)
 

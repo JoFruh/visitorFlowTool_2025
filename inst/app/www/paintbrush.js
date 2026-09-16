@@ -42,9 +42,18 @@
     transform:    null,
     colors:       {},
     levels:       {},   //category id -> "ground" | "canopy" | "both"
+    //ids drawn as a hole punched through the baseline rather than as a colour -
+    //canopy_cleared, which a plan import writes to remove existing canopy
+    holes:        {},
     opacity:      { ground: 0.5, groundDimmed: 0.2, canopy: 0.7 },
     grids:        { ground: new PaintGrid(), canopy: new PaintGrid() },
     bases:        { ground: new BaseGrid(),  canopy: new BaseGrid()  },
+    //a plan import's result before it is applied (planimport.js), drawn above
+    //the paint so what is previewed is exactly what Apply will write
+    previews:     { ground: new ClassGrid(), canopy: new ClassGrid() },
+    //a plan import is in progress: the brush takes no input, so the map pans
+    //and zooms under the floating plan
+    importing:    false,
     layers:       { ground: null, canopy: null },
     lastBase:     null,
     erasing:      false,
@@ -103,11 +112,16 @@
   function PaintGrid() {
     this.cells  = new Map();   //key -> categoryId
     this.chunks = new Map();   //chunkKey -> {cx, cy, canvas, ctx}
+    //Opaque wherever a cell holds a hole id. Drawn with destination-out before
+    //the colour chunks (see redraw), which is how a cleared canopy removes the
+    //baseline tree under it. Allocated only where a hole is ever written.
+    this.holes  = new Map();
   }
 
   PaintGrid.prototype.reset = function () {
     this.cells.clear();
     this.chunks.clear();
+    this.holes.clear();
   };
 
   PaintGrid.prototype.chunkAt = function (cx, cy) {
@@ -134,6 +148,10 @@
    * edited, diffed or sent back, so nothing has to remember what it held. */
   function BaseGrid() {
     this.chunks = new Map();
+  }
+
+  function isHole(id) {
+    return !!state.holes[id];
   }
 
   BaseGrid.prototype.reset = function () {
@@ -223,6 +241,64 @@
     bufs.forEach(function (b) { b.ch.ctx.putImageData(b.data, 0, 0); });
   };
 
+  /* A class-id grid decoded from a typed array rather than an image: the plan
+   * import preview. Same chunk lattice and same draw path as the baseline, plus
+   * the hole chunks a PaintGrid has, so a previewed canopy removal shows as one.
+   *
+   * `arr` is w*h class ids, row 0 north, with its top-left cell at the global
+   * indices (col0, rowTop) - the baseline's convention. */
+  function ClassGrid() {
+    this.chunks = new Map();
+    this.holes  = new Map();
+  }
+
+  ClassGrid.prototype.reset = function () {
+    this.chunks.clear();
+    this.holes.clear();
+  };
+
+  ClassGrid.prototype.loadArray = function (arr, w, h, col0, rowTop) {
+    this.reset();
+    if (!arr || !w || !h) return;
+    var self = this;
+    var bufs = new Map();   //"c"/"h" + chunkKey -> {ch, data}
+
+    function buf(store, tag, cx, cy) {
+      var key = tag + (cx * 65536 + cy);
+      var b = bufs.get(key);
+      if (!b) {
+        var ch = chunkAt(store, cx, cy);
+        b = { ch: ch, data: ch.ctx.createImageData(CHUNK, CHUNK) };
+        bufs.set(key, b);
+      }
+      return b.data.data;
+    }
+
+    for (var j = 0; j < h; j++) {
+      var grow = rowTop - j;
+      var cy   = Math.floor(grow / CHUNK);
+      var py   = CHUNK - 1 - (grow - cy * CHUNK);
+      for (var i = 0; i < w; i++) {
+        var id = arr[j * w + i];
+        if (!id) continue;
+        var gcol = col0 + i;
+        var cx   = Math.floor(gcol / CHUNK);
+        var o    = (py * CHUNK + (gcol - cx * CHUNK)) * 4;
+        var d, rgb;
+        if (isHole(id)) {
+          d = buf(self.holes, "h", cx, cy);
+          rgb = [0, 0, 0];
+        } else {
+          rgb = rgbFor(id);
+          if (!rgb) continue;
+          d = buf(self.chunks, "c", cx, cy);
+        }
+        d[o] = rgb[0]; d[o + 1] = rgb[1]; d[o + 2] = rgb[2]; d[o + 3] = 255;
+      }
+    }
+    bufs.forEach(function (b) { b.ch.ctx.putImageData(b.data, 0, 0); });
+  };
+
   /* Paint one horizontal run of cells. The chunk canvas is filled span-wise
    * (cheap, and repainting a cell that already had this color is harmless),
    * while the value map is updated per cell so only genuine *changes* reach the
@@ -236,9 +312,20 @@
       var cx     = Math.floor(col / CHUNK);
       var segEnd = Math.min(colEnd, (cx + 1) * CHUNK - 1);
       var ch     = this.chunkAt(cx, cy);
+      var x0     = col - cx * CHUNK, n = segEnd - col + 1;
 
-      ch.ctx.fillStyle = color;
-      ch.ctx.fillRect(col - cx * CHUNK, py, segEnd - col + 1, 1);
+      if (isHole(catId)) {
+        //no colour: clear whatever was painted and punch through the baseline
+        ch.ctx.clearRect(x0, py, n, 1);
+        var hc = chunkAt(this.holes, cx, cy);
+        hc.ctx.fillStyle = "#000";
+        hc.ctx.fillRect(x0, py, n, 1);
+      } else {
+        ch.ctx.fillStyle = color;
+        ch.ctx.fillRect(x0, py, n, 1);
+        var ho = this.holes.get(cx * 65536 + cy);
+        if (ho) ho.ctx.clearRect(x0, py, n, 1);
+      }
 
       for (var c = col; c <= segEnd; c++) {
         var key = row * COL_BITS + c;
@@ -267,6 +354,8 @@
       var segEnd = Math.min(colEnd, (cx + 1) * CHUNK - 1);
       var ch     = this.chunks.get(cx * 65536 + cy);
       if (ch) ch.ctx.clearRect(col - cx * CHUNK, py, segEnd - col + 1, 1);
+      var ho     = this.holes.get(cx * 65536 + cy);
+      if (ho) ho.ctx.clearRect(col - cx * CHUNK, py, segEnd - col + 1, 1);
 
       for (var c = col; c <= segEnd; c++) {
         var key = row * COL_BITS + c;
@@ -287,7 +376,7 @@
       var id    = entries[i].id;
       var runs  = entries[i].runs || [];
       var color = state.colors[id];
-      if (!color) continue;
+      if (!color && !isHole(id)) continue;
       for (var j = 0; j + 2 < runs.length; j += 3) {
         this.fillRun(runs[j], runs[j + 1], runs[j + 1] + runs[j + 2] - 1, id, color, null);
       }
@@ -483,6 +572,16 @@
 
         //baseline first, paint second: later grids occlude earlier ones
         this._grids.forEach(function (grid) {
+          //holes first, erasing what the grids below this one drew
+          if (grid.holes && grid.holes.size) {
+            ctx.globalCompositeOperation = "destination-out";
+            grid.holes.forEach(function (ch) {
+              var o = t.originFor(ch.cx, ch.cy);
+              ctx.setTransform(t.a, t.b, t.c, t.d, o.e, o.f);
+              ctx.drawImage(ch.canvas, 0, 0);
+            });
+            ctx.globalCompositeOperation = "source-over";
+          }
           grid.chunks.forEach(function (ch) {
             var o = t.originFor(ch.cx, ch.cy);
             ctx.setTransform(t.a, t.b, t.c, t.d, o.e, o.f);
@@ -837,6 +936,8 @@
    * already gone, so every step is best-effort - the point is not to leak a
    * second input overlay into a container Leaflet reused. */
   function detach() {
+    //a floating plan belongs to the map instance that is going away
+    if (state.importing) hooks.emit("cancel", "detach");
     if (state.overlay && state.overlay.parentNode) {
       state.overlay.parentNode.removeChild(state.overlay);
     }
@@ -859,10 +960,10 @@
     ensurePane(map, PANES.ground, 415);
     ensurePane(map, PANES.canopy, 425);
 
-    //one layer per level, drawing [baseline, paint] into a single canvas
+    //one layer per level, drawing [baseline, paint, import preview] into a single canvas
     var Layer = paintLayerClass();
-    state.layers.ground = new Layer([state.bases.ground, state.grids.ground], PANES.ground);
-    state.layers.canopy = new Layer([state.bases.canopy, state.grids.canopy], PANES.canopy);
+    state.layers.ground = new Layer([state.bases.ground, state.grids.ground, state.previews.ground], PANES.ground);
+    state.layers.canopy = new Layer([state.bases.canopy, state.grids.canopy, state.previews.canopy], PANES.canopy);
     state.layers.ground.addTo(map);
     state.layers.canopy.addTo(map);
 
@@ -884,7 +985,9 @@
     //`readonly` takes the input overlay out of the way, so clicks and drags go
     //to the map (pan and zoom keep working) and no stroke is ever registered.
     //Pane visibility is left to `active` alone, so the layers stay on screen.
-    state.overlay.style.pointerEvents = (state.active && !state.readonly) ? "auto" : "none";
+    //`importing` does the same while a plan is placed, so the map moves under it
+    state.overlay.style.pointerEvents =
+      (state.active && !state.readonly && !state.importing) ? "auto" : "none";
     updateCursor();
   }
 
@@ -1008,6 +1111,67 @@
 
   window.addEventListener("beforeunload", flush);
 
+  // ── Hooks for planimport.js ─────────────────────────────────────────────────
+
+  /* The narrow surface the plan import needs from this file. The import lives
+   * in its own file because this one is about the brush; the surface is kept
+   * narrow so the import reaches the paint grids only through commit(). */
+  var listeners = {};
+  var hooks = {
+    on: function (name, fn) { (listeners[name] = listeners[name] || []).push(fn); },
+    emit: function (name, arg) {
+      (listeners[name] || []).forEach(function (fn) {
+        try { fn(arg); } catch (e) { if (window.console) console.error(e); }
+      });
+    },
+    map:      function () { return state.map; },
+    ready:    function () { return !!(state.map && state.transform); },
+    editable: function () { return state.active && !state.readonly && !state.blocked; },
+    version:  function () { return state.version; },
+    colors:   function () { return state.colors; },
+    levels:   function () { return state.levels; },
+    holeIds:  function () { return Object.keys(state.holes).map(Number); },
+    //the study area's paint window, from the baseline message, or null
+    window:   function () {
+      var b = state.lastBase;
+      return (b && b.w && b.h) ? { col0: b.col0, rowTop: b.rowTop, w: b.w, h: b.h } : null;
+    },
+    res:      function () { return state.res; },
+    mercatorToLV95: function (mx, my) { return mercatorToLV95(mx, my); },
+    flush:    function () { flush(); },
+    setImporting: function (on) {
+      if (on) flush();
+      state.importing = !!on;
+      trace("importing(" + state.importing + ")");
+      applyActive();
+    },
+    /* Show a class array as the preview of `level`; a null array clears it. */
+    preview: function (level, arr, w, h, col0, rowTop) {
+      state.previews[level].loadArray(arr, w, h, col0, rowTop);
+      if (state.layers[level]) state.layers[level].requestRedraw();
+    },
+    /* Write a class array into the real paint grid of `level`, for display
+     * only: R receives the same array as a PNG, so nothing is queued here.
+     * Cells still land in the grid's cell map, which is what lets the eraser
+     * treat them as painted afterwards. */
+    commit: function (level, arr, w, h, col0, rowTop) {
+      var grid = state.grids[level];
+      for (var j = 0; j < h; j++) {
+        var row = rowTop - j, i = 0;
+        while (i < w) {
+          var id = arr[j * w + i];
+          if (!id) { i++; continue; }
+          var k = i + 1;
+          while (k < w && arr[j * w + k] === id) k++;
+          grid.fillRun(row, col0 + i, col0 + k - 1, id, state.colors[id], null);
+          i = k;
+        }
+      }
+      if (state.layers[level]) state.layers[level].requestRedraw();
+    }
+  };
+  window.__vftPaintHooks = hooks;
+
   // ── Message handlers ────────────────────────────────────────────────────────
 
   /* Register a handler and record that the message arrived.
@@ -1031,6 +1195,8 @@
     state.transform = msg.transform;
     state.colors    = msg.colors || {};
     state.levels    = msg.levels || {};
+    state.holes     = {};
+    (msg.holes || []).forEach(function (id) { state.holes[id] = true; });
     state.opacity   = msg.opacity || state.opacity;
     applyLevelStyles();
     updateCursor();
@@ -1043,6 +1209,7 @@
     if (msg.version !== state.version) {
       state.pending = { ground: new Map(), canopy: new Map() };
       dropInflight();
+      if (state.importing) hooks.emit("cancel", "version");
     }
     state.lastLoad = msg;
     state.version  = msg.version;
@@ -1103,6 +1270,7 @@
    * rasters in the observer that sent this, so the two ends agree without the
    * browser having to enumerate what it is discarding. */
   on("paint-reset", function () {
+    if (state.importing) hooks.emit("cancel", "reset");
     state.pending = { ground: new Map(), canopy: new Map() };
     dropInflight();
     ["ground", "canopy"].forEach(function (level) {
@@ -1130,6 +1298,7 @@
     //or "false" would coerce differently than it reads
     trace("set-paint-active(" + JSON.stringify(active) + ")");
     if (!active) flush();   //leaving context 4 - get the last strokes to R first
+    if (!active && state.importing) hooks.emit("cancel", "inactive");
     state.active = !!active;
     applyActive();
     reportDebug(state.active ? "paint-armed" : "paint-disarmed");
@@ -1139,6 +1308,7 @@
     var ro = !!(msg && msg.readonly);
     trace("set-paint-readonly(" + ro + ")");
     if (ro) flush();   //whatever was painted before the switch still belongs to R
+    if (ro && state.importing) hooks.emit("cancel", "readonly");
     state.readonly = ro;
     applyActive();
     reportDebug(ro ? "paint-readonly" : "paint-writable");
@@ -1152,6 +1322,7 @@
     var b = !!(msg && msg.blocked);
     trace("set-paint-blocked(" + b + ")");
     if (b) flush();
+    if (b && state.importing) hooks.emit("cancel", "blocked");
     state.blocked = b;
     applyActive();
     reportDebug(b ? "paint-blocked" : "paint-unblocked");

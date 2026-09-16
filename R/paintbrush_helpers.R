@@ -21,15 +21,28 @@
 #' UI buttons are styled with (newVersions_ui.R), what the brush cursor is drawn
 #' in, and what the browser fills painted cells with. There is no server-side
 #' palette any more - R never renders the painted layers.
+#'
+#' "canopy_cleared" (9) is the one material with no button. It is what a plan
+#' import (planimport.js) writes on the canopy level under a ground material,
+#' so that a plan showing lawn where a tree stands today removes the tree: the
+#' plan describes its whole footprint. It cannot be 0, because 0 on the wire is
+#' "erase", which reveals the baseline - i.e. the very tree being removed. The
+#' browser draws it as a hole punched through the baseline (`holes` in
+#' paintInitPayload) and the heat model counts it as open sky (HEAT_CANOPY).
 PAINT_CATEGORIES <- data.frame(
-  id    = 1:8,
-  name  = c("grass", "bush", "artificial", "natural", "water",
-            "canopy_artificial", "canopy_tree", "artificial_block"),
-  level = c(rep("ground", 5), rep("canopy", 2), "both"),
-  hex   = c("lightgreen", "#6aa84f", "grey", "#a05a3c", "dodgerblue",
-            "#3f3f3f", "#14532d", "#1f1f1f"),
+  id     = 1:9,
+  name   = c("grass", "bush", "artificial", "natural", "water",
+             "canopy_artificial", "canopy_tree", "artificial_block",
+             "canopy_cleared"),
+  level  = c(rep("ground", 5), rep("canopy", 2), "both", "canopy"),
+  hex    = c("lightgreen", "#6aa84f", "grey", "#a05a3c", "dodgerblue",
+             "#3f3f3f", "#14532d", "#1f1f1f", "transparent"),
+  button = c(rep(TRUE, 8), FALSE),
   stringsAsFactors = FALSE
 )
+
+#' Materials drawn as a hole in the layer rather than as a colour.
+PAINT_HOLE_IDS <- PAINT_CATEGORIES$id[PAINT_CATEGORIES$name == "canopy_cleared"]
 
 #' Resolution of the painted grid, in metres of EPSG:2056. Cells are indexed
 #' globally by (col, row) = (floor(E/res), floor(N/res)), so every painted cell
@@ -77,6 +90,8 @@ paintInitPayload <- function(refLng, refLat){
     #which raster(s) a material's strokes land in. Sent as the plain level string
     #rather than an array so it survives Shiny's auto_unbox unambiguously
     levels    = stats::setNames(as.list(PAINT_CATEGORIES$level), as.character(PAINT_CATEGORIES$id)),
+    #ids drawn as holes through the baseline; see canopy_cleared above
+    holes     = as.list(PAINT_HOLE_IDS),
     opacity   = list(ground       = PAINT_OPACITY_GROUND,
                      groundDimmed = PAINT_OPACITY_GROUND_DIMMED,
                      canopy       = PAINT_OPACITY_CANOPY)
@@ -535,6 +550,49 @@ paintCompositeRaster <- function(edits, aoi, level = c("ground", "canopy"), ...)
   paintOverlayEdits(seed[[level]], edits)
 }
 
+#' Decode a class-id PNG sent by a plan import into a patch on the paint grid.
+#'
+#' The reverse of paintLandcoverBaselinePNG()'s transport: an 8-bit image whose
+#' pixel value *is* the class id, `w` x `h` cells with its top-left cell at the
+#' global indices (`col0`, `rowTop`). The browser writes R = G = B = id with
+#' alpha 255, so the red channel is read and the rest ignored.
+#'
+#' 0 becomes NA, not 0: in an import it means "the plan says nothing here", and
+#' writing it would erase whatever was painted before. Anything outside the
+#' known ids becomes NA too, for the same reason paintLandcoverBaselinePNG()
+#' squashes them - a stray value would count as painted and draw nothing.
+#'
+#' Returns NULL for an image that does not match the declared size, since a
+#' mismatched patch would land shifted rather than fail visibly.
+paintDecodeClassPNG <- function(uri, col0, rowTop, w, h, res = PAINT_RES){
+  if(is.null(uri) || !nzchar(uri)) return(NULL)
+  b64 <- sub("^data:image/png;base64,", "", uri)
+  img <- png::readPNG(jsonlite::base64_dec(b64))
+  ch  <- if(length(dim(img)) == 3) img[, , 1] else img
+  if(!identical(dim(ch), c(as.integer(h), as.integer(w)))) return(NULL)
+  v <- round(ch * 255)
+  v[!v %in% PAINT_CATEGORIES$id] <- NA
+  if(all(is.na(v))) return(NULL)
+  xmin <- col0 * res
+  ymax <- (rowTop + 1) * res
+  terra::rast(terra::ext(xmin, xmin + w * res, ymax - h * res, ymax),
+              resolution = res, crs = "EPSG:2056",
+              vals = as.vector(t(v)))
+}
+
+#' Lay a patch over a version's edits: patch cells win, NA leaves them alone.
+#'
+#' The same union-extend-cover as paintOverlayEdits(), for the same reason -
+#' both sit on the global paint grid, so this aligns without resampling.
+paintApplyPatch <- function(existing, patch){
+  if(is.null(patch))    return(existing)
+  if(is.null(existing)) return(patch)
+  e        <- terra::union(terra::ext(existing), terra::ext(patch))
+  existing <- terra::extend(existing, e)
+  patch    <- terra::extend(patch, e)
+  terra::cover(patch, existing)
+}
+
 #' Merge row-run encoded cells from the browser into a version's SpatRaster.
 #'
 #' Category 0 means *erase*: the browser sends it for cells the eraser cleared,
@@ -591,4 +649,52 @@ applyPaintRuns <- function(existing, runsByCat, res = PAINT_RES){
   terra::values(out) <- v
   out
   })
+}
+
+#' Ceiling on a plan import's footprint, in cells per level.
+#'
+#' Tighter than the baseline's 40 M because an import does not stay an image in
+#' the browser: every cell becomes an entry in the paint grid's cell map, which
+#' is what lets the eraser and later strokes treat imported cells like painted
+#' ones. 4 M cells is a 2 km square at 1 m. planimport.js clips to the study
+#' area first and refuses past this; the observer checks it again.
+PLAN_IMPORT_MAX_CELLS <- 4e6
+
+#' The words the plan import panel shows, translated.
+#'
+#' The panel is built by planimport.js rather than by Shiny (its rows depend on
+#' the colours found in the uploaded image), so the strings travel in a message.
+#' `materials` is keyed by class id, for the per-colour dropdown; 0 is "ignore".
+planImportLabels <- function(tr){
+  t <- function(x) tr$t(x)
+  list(
+    maxCells   = PLAN_IMPORT_MAX_CELLS,
+    place      = t("Plan platzieren"),
+    placeHint  = t("Verschieben und zoomen Sie die Karte, bis der Plan passt. Der Plan muss nach Norden ausgerichtet sein."),
+    size       = t("Groesse"),
+    page       = t("Seite"),
+    nextStep   = t("Weiter"),
+    back       = t("Zurueck"),
+    apply      = t("Anwenden"),
+    cancel     = t("Abbrechen"),
+    mapColors  = t("Farben zuordnen"),
+    original   = t("Original"),
+    assigned   = t("Zuordnung"),
+    smooth     = t("Glaetten"),
+    readError  = t("Die Datei konnte nicht gelesen werden."),
+    outside    = t("Der Plan liegt ausserhalb des Untersuchungsgebiets."),
+    tooLarge   = t("Der Plan ist zu gross."),
+    saveError  = t("Der Plan konnte nicht gespeichert werden."),
+    materials  = list(
+      "0" = t("Ignorieren"),
+      "7" = t("Baum"),
+      "6" = t("Kuenstliche Krone"),
+      "1" = t("Gras"),
+      "2" = t("Busch"),
+      "3" = t("Kuenstlich"),
+      "4" = t("Natuerlich"),
+      "5" = t("Wasser"),
+      "8" = t("Kuenstlicher Block")
+    )
+  )
 }
