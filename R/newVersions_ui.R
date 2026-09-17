@@ -392,6 +392,21 @@ vftDbg("UI6")
                                 shinyjs::inlineCSS(".selected:focus {border-width: thick; border-color: green; background color: white} "),
                                 shinyjs::inlineCSS(list(.notSelected = "border-width: thin; border-color: grey")),
                                 shinyjs::inlineCSS(list(.original = "border-width: thick; border-color: grey")),
+                                #The scenario cards' names: Bootstrap's .btn never wraps, so a
+                                #long name ran out of the 100px square. Wrap it (breaking a
+                                #long word if it must), centre it both ways, and cut it off
+                                #with an ellipsis after four lines rather than overflow the
+                                #card. Scoped to the select buttons - the "X" beside each card
+                                #is a button too.
+                                shinyjs::inlineCSS(paste(
+                                  "#topPlaceHolder_newVersion button[id*='versionBtn'] {",
+                                  "  display: inline-flex; align-items: center; justify-content: center;",
+                                  "  white-space: normal; overflow: hidden; padding: 4px; line-height: 1.2;",
+                                  "}",
+                                  "#topPlaceHolder_newVersion button[id*='versionBtn'] .action-label {",
+                                  "  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4;",
+                                  "  overflow: hidden; max-width: 100%; overflow-wrap: anywhere; text-align: center;",
+                                  "}")),
 
 
 

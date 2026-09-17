@@ -490,6 +490,9 @@ if(is.null(r$updateNetworkPlot)){
       #the next version an inputId one of those cards is already using.
       r$versionBtn_nb <- max(1L, length(r$versionsUI))
 
+      #a new version set: seedNewVersion() may offer its default copy again
+      r$newSeeded <- FALSE
+
       #select original network at start
       r$position <- 1
 
@@ -1941,8 +1944,12 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
       #The removal button below stays keyed on the NAME. That is not the same
       #question - the original scenario is the one that cannot be deleted, whether
       #or not it happens to be the one selected.
+      #`provisional`: the default name seedNewVersion() gave the card, which the
+      #user may still replace - see versionLabel() and the rename observer.
       appendVersion <- function(name, inputId_removal, inputId_select, id_ui_name, isStart = TRUE,
-                                selected = FALSE){
+                                selected = FALSE, provisional = FALSE){
+
+        label <- versionLabel(name, inputId_select, provisional)
 
         shiny::insertUI(
           selector = '#placeholder',
@@ -1953,19 +1960,19 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
                         if(isTRUE(selected)){
                           if(isStart == TRUE){
                             shinyjs::disabled(
-                              shiny::actionButton(inputId = shiny::NS(id, inputId_select), label = name, width = "100px", style = "height: 100px", class = "selected")
+                              shiny::actionButton(inputId = shiny::NS(id, inputId_select), label = label, width = "100px", style = "height: 100px", class = "selected")
                             )
                           }else{
-                            shiny::actionButton(inputId = shiny::NS(id, inputId_select), label = name, width = "100px", style = "height: 100px", class = "selected")
+                            shiny::actionButton(inputId = shiny::NS(id, inputId_select), label = label, width = "100px", style = "height: 100px", class = "selected")
                           }
 
                         }else{
                           if(isStart == TRUE){
                             shinyjs::disabled(
-                              shiny::actionButton(inputId = shiny::NS(id, inputId_select), label = name, width = "100px", style = "height: 100px", class = "notSelected")
+                              shiny::actionButton(inputId = shiny::NS(id, inputId_select), label = label, width = "100px", style = "height: 100px", class = "notSelected")
                             )
                           }else{
-                            shiny::actionButton(inputId = shiny::NS(id, inputId_select), label = name, width = "100px", style = "height: 100px", class = "notSelected")
+                            shiny::actionButton(inputId = shiny::NS(id, inputId_select), label = label, width = "100px", style = "height: 100px", class = "notSelected")
                           }
 
                         },
@@ -2009,7 +2016,11 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
             shiny::removeUI(selector = paste0("div#", id_ui_name ) )
 
             #remove relevant duplicate network from list
-            x <- which(names(r$versionsUI) == name)
+            #Looked up by the button, not by `name`: the card may have been
+            #renamed since this observer was created (see obsRenameVersion).
+            x <- which(vapply(r$versionsUI, function(v) identical(v$inputId_removal, inputId_removal), logical(1)))
+            if(length(x) != 1) return(invisible(NULL))
+            name <- names(r$versionsUI)[x]
             # networkLst <- ntwrkLst_r()
 
             # networkLst[[x]] <- NULL
@@ -2242,7 +2253,8 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
                          inputId_select = r$versionsUI[[i]]$inputId_select,
                          inputId_removal = r$versionsUI[[i]]$inputId_removal,
                          id_ui_name = r$versionsUI[[i]]$id_ui_name,
-                         selected = (i == pos))
+                         selected = (i == pos),
+                         provisional = isTRUE(r$versionsUI[[i]]$provisional))
         }
 
         #the button the select observer un-greens when another card is clicked.
@@ -2325,6 +2337,178 @@ vftDbg("add versions")
 
       #ADDING VERSIONS ####
 
+      #Shared by the "add version" handler below and by seedNewVersion(), which
+      #enter() calls to open the page on a ready-made copy - so the two ways a
+      #version comes into being cannot drift apart.
+
+      #`prefix`, or `prefix_2`, `prefix_3`... if a card already carries it.
+      uniqueVersionName <- function(prefix){
+        name <- prefix
+        x <- 1
+        while(name %in% names(r$versionsUI)){
+          x <- x + 1
+          name <- paste0(prefix, "_", x)
+        }
+        name
+      }
+
+      #The ids for the next card. r$versionBtn_nb only ever climbs (see
+      #applyFirstRun()), or a new card would claim an inputId a live one owns.
+      nextVersionIds <- function(){
+        if(length(r$versionBtn_nb) == 0){
+          r$versionBtn_nb <- length(r$versionsUI) + 1
+        }else{
+          r$versionBtn_nb <- r$versionBtn_nb + 1
+        }
+        list(id_ui_name      = paste0("version_",    r$versionBtn_nb),
+             inputId_select  = paste0("versionBtn",  r$versionBtn_nb),
+             inputId_removal = paste0("removeBtn",   r$versionBtn_nb))
+      }
+
+      #A new scenario copied from `src`. Free: R shares the graph between the
+      #two until one of them is edited.
+      #`heatOnly` is carried over from the scenario being copied, not
+      #dropped: it is the tag VFT_KEY_READY$networkList reads, and a list
+      #where only SOME entries carry it would read as a real scenario list
+      #and light step 5 up over a canvas. A copy of a canvas is a canvas.
+      copyScenario <- function(src){
+        list(network = src$network, pathUsage = NULL, parking = src$parking,
+             paintedRaster = NULL, canopyRaster = NULL, heatOnly = src$heatOnly)
+      }
+
+      #THE DEFAULT "NEW" VERSION.
+      #
+      #The original cannot be edited, so a first visit used to open on a page
+      #whose only card was read-only. enter() calls this before the cards are
+      #built: it appends a copy of the original, named "Neu" in the visit's
+      #language, and selects it.
+      #
+      #Once per version set, not once per visit: `r$newSeeded` is cleared only by
+      #applyFirstRun(), i.e. when the saved versions were discarded. A user who
+      #deletes the copy does not get it back on the next visit. Not keyed on
+      #isFirstRun alone because the Hitzeminderung door arrives with it unset.
+      #
+      #Returns TRUE when it seeded, which enter() uses to hand the preparation of
+      #the copy to the original as well - see shareSeedPreparation().
+      seedNewVersion <- function(){
+        if(isTRUE(r$newSeeded)) return(FALSE)
+        if(length(r$versionsUI) != 1 || length(r$networkList) != 1) return(FALSE)
+
+        name <- uniqueVersionName(i18n()$t("Neu"))
+        ids  <- nextVersionIds()
+
+        r$networkList[[2]] <- copyScenario(r$networkList[[1]])
+        r$versionsUI[[name]] <- list(name            = name,
+                                     inputId_removal = ids$inputId_removal,
+                                     inputId_select  = ids$inputId_select,
+                                     id_ui_name      = ids$id_ui_name,
+                                     #the name is a placeholder the user may
+                                     #replace, once - see obsRenameVersion
+                                     provisional     = TRUE)
+        #what generateVersionButtons() resolves the selected card from
+        r$selectedVersion <- name
+        r$newSeeded <- TRUE
+
+        vftDbg(paste0("NEWVERSIONS: seeded default version '", name, "'"))
+        TRUE
+      }
+
+      #The preparation is per scenario, and enter() asks for the SELECTED one -
+      #the copy. The original is the same graph, so give it the result rather
+      #than preparing it a second time when the user clicks it. Only the pair
+      #seedNewVersion() made, only in the visit that made it (enter() calls
+      #this from the seeding visit's callback alone), and only where still
+      #unprepared: nothing can have been edited in between, the cards are
+      #disabled until the render finishes. The original's simulation, if step 5
+      #ran one, is untouched - it was computed on this same graph.
+      shareSeedPreparation <- function(){
+        nl  <- r$networkList
+        pos <- r$position
+        if(length(nl) < 2 || is.null(pos) || !(pos %in% 1:2)) return(invisible(NULL))
+        src <- nl[[pos]]
+        if(!vftNetworkPrepared(src$network)) return(invisible(NULL))
+        for(i in setdiff(1:2, pos)){
+          if(!vftNetworkPrepared(nl[[i]]$network)){
+            r$networkList[[i]]$network <- src$network
+            r$networkList[[i]]$parking <- src$parking
+          }
+        }
+        invisible(NULL)
+      }
+
+      #RENAMING THE DEFAULT VERSION ####
+      #
+      #The seeded card's name is a placeholder: shown bold, grey and italic, and
+      #clicking it asks for a real one. A name the user typed - here or through
+      #"Neue Version hinzufügen" - is final, so only a `provisional` card gets
+      #the clickable label, and the rename clears the flag.
+      #
+      #The click is not stopped from reaching the card, so clicking the name of
+      #an unselected card also selects it, as clicking anywhere else on it does.
+      versionLabel <- function(name, inputId_select, provisional = FALSE){
+        if(!isTRUE(provisional)) return(name)
+        shiny::tags$span(
+          class   = "vftProvisionalName",
+          style   = "font-weight: bold; font-style: italic; color: grey; cursor: text;",
+          title   = i18n()$t("Klicken Sie, um den Namen zu ändern"),
+          onclick = sprintf("Shiny.setInputValue('%s', {id: '%s', n: Date.now()}, {priority: 'event'});",
+                            shiny::NS(id, "renameVersion"), inputId_select),
+          name)
+      }
+
+      obsRenameVersion <- shiny::observeEvent(input$renameVersion, {
+        btnId <- input$renameVersion$id
+        entry <- Filter(function(v) identical(v$inputId_select, btnId), r$versionsUI)
+        if(length(entry) != 1 || !isTRUE(entry[[1]]$provisional)) return(invisible(NULL))
+
+        r$renamingVersion <- btnId
+        shiny::showModal(shiny::modalDialog(
+          shiny::tags$h2(i18n()$t('Geben Sie der neuen Version einen Namen:')),
+          shiny::textInput(shiny::NS(id, 'renameName'), i18n()$t('Name der neuen Version'),
+                           value = entry[[1]]$name),
+          footer = shiny::tagList(
+            shiny::actionButton(inputId = shiny::NS(id, 'submitRename'), label = i18n()$t('Einreichen'),
+                                style = "background-color:#006268; color:#ffffff"),
+            shiny::modalButton(i18n()$t('Abbrechen')))
+        ))
+      }, ignoreInit = TRUE)
+
+      obsSubmitRename <- shiny::observeEvent(input$submitRename, {
+        shiny::removeModal()
+        btnId <- r$renamingVersion
+        r$renamingVersion <- NULL
+
+        vu  <- r$versionsUI
+        x   <- which(vapply(vu, function(v) identical(v$inputId_select, btnId), logical(1)))
+        if(length(x) != 1 || !isTRUE(vu[[x]]$provisional)) return(invisible(NULL))
+
+        typed <- trimws(input$renameName)
+        #nothing typed: leave the placeholder as it is, still renamable
+        if(!nzchar(typed)) return(invisible(NULL))
+
+        oldName <- names(vu)[x]
+        #unique among the OTHER cards - keeping its own name is allowed
+        newName <- typed
+        k <- 1
+        while(newName %in% names(vu)[-x]){
+          k <- k + 1
+          newName <- paste0(typed, "_", k)
+        }
+
+        #rename in place: the card's position is the scenario's position
+        vu[[x]]$name        <- newName
+        vu[[x]]$provisional <- NULL
+        names(vu)[x]        <- newName
+        r$versionsUI        <- vu
+
+        #the shared selection is held by NAME (see vftVersionPosition())
+        if(identical(r$selectedVersion, oldName)) r$selectedVersion <- newName
+
+        #a plain label: the name is final now and no longer clickable
+        shiny::updateActionButton(session, btnId, label = newName)
+        vftDbg(paste0("NEWVERSIONS: renamed '", oldName, "' to '", newName, "'"))
+      }, ignoreInit = TRUE)
+
       #CREATE GENERAL OBSERVERS
 
         #Prompt for Name ####
@@ -2349,42 +2533,12 @@ vftDbg("add versions")
 
 
           shiny::removeModal()
-          name <- input$name
-          prefix <- name
-          x <- 1
-          nameIsUnique <- FALSE
-          #get name
-          while(nameIsUnique == FALSE){
-            #if name same as another existing name, append _x to it
-            if(name %in% names(r$versionsUI) ){
-              #add +1 to _x if name_x exists
-              x <- x + 1
-              name <- paste0(prefix,"_", x)
-            }else{
-              nameIsUnique <- TRUE
-            }
-          }
+          name <- uniqueVersionName(input$name)
 
-
-
-
-          btn <- input$addVersionButton
-
-          #add 1 to number of buttons (except if length is 0, when its empty)
-          if(length(r$versionBtn_nb) == 0){
-            #then give it the length of the button list
-            r$versionBtn_nb <- length(r$versionsUI) + 1
-          }else{
-            r$versionBtn_nb <- r$versionBtn_nb + 1
-          }
-
-          #use number of buttons to determine button and ui names
-          id_ui_name <- paste0('version_', r$versionBtn_nb)
-
-
-
-          inputId_select <- paste0("versionBtn", r$versionBtn_nb)
-          inputId_removal <- paste0("removeBtn", r$versionBtn_nb)
+          ids <- nextVersionIds()
+          id_ui_name      <- ids$id_ui_name
+          inputId_select  <- ids$inputId_select
+          inputId_removal <- ids$inputId_removal
           #use internal function to append UI
           appendVersion(name = name, inputId_removal = inputId_removal, inputId_select = inputId_select, id_ui_name = id_ui_name, isStart = FALSE)
 
@@ -2404,11 +2558,7 @@ vftDbg("add versions")
             # networkLst[[length(networkLst)+1]] <- list(network = networkLst[[1]]$network, pathUsage = NULL)
 
             #TODO: copy a group of elements (network, attractivity rasters, residential raster, parking polygons)
-            #`heatOnly` is carried over from the scenario being copied, not
-            #dropped: it is the tag VFT_KEY_READY$networkList reads, and a list
-            #where only SOME entries carry it would read as a real scenario list
-            #and light step 5 up over a canvas. A copy of a canvas is a canvas.
-            r$networkList[[length(r$networkList)+1]] <- list(network = r$networkList[[1]]$network, pathUsage = NULL, parking = r$networkList[[1]]$parking, paintedRaster = NULL, canopyRaster = NULL, heatOnly = r$networkList[[1]]$heatOnly)
+            r$networkList[[length(r$networkList)+1]] <- copyScenario(r$networkList[[1]])
             #update reactive
             # ntwrkLst_r(networkLst)
 
@@ -4567,8 +4717,9 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
       #
       #It is the BASELINE, not a canvas: as in the other two contexts, scenario 1
       #cannot be edited (setPaintEditable(), called from the context 4 render), so
-      #a heat design goes in a version the user adds with "Neue Version
-      #hinzufügen" - which copies this one, tag included.
+      #a heat design goes in a copy of it - the one seedNewVersion() makes on
+      #the first visit, or one the user adds with "Neue Version hinzufügen" -
+      #which carries the tag along.
       #
       #Deliberately NOT conditional on the preset: an empty list is unusable in
       #every context, so this is "give the page something to work with", not
@@ -4589,15 +4740,18 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
                                   #network into these entries and drops the tag,
                                   #and that is what clears it.
                                   heatOnly = TRUE))
-        #and a card to hang it on, in createOriginalVersion()'s shape (see
-        #step5_server.R) so that the two pages agree on what "Original" is if
-        #step 5 is ever reached later.
-        if(length(versionsUI) == 0){
-          versionsUI <<- list(Original = list(name            = "Original",
-                                              inputId_removal = NULL,
-                                              inputId_select  = "versionBtn0",
-                                              id_ui_name      = "version_0"))
-        }
+      }
+
+      #and a card to hang it on, in createOriginalVersion()'s shape (see
+      #step5_server.R) so that the two pages agree on what "Original" is if
+      #step 5 is ever reached later. Outside the heat-only branch as well: a
+      #scenario list with no cards (step 5 not visited yet) left this page with
+      #nothing to click.
+      if(length(versionsUI) == 0 && length(networkList) > 0){
+        versionsUI <<- list(Original = list(name            = "Original",
+                                            inputId_removal = NULL,
+                                            inputId_select  = "versionBtn0",
+                                            id_ui_name      = "version_0"))
       }
 
       #--- 2. tear down the previous visit's version cards and their observers.
@@ -4694,7 +4848,10 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
       #construction-time code this replaces: applyFirstRun() blanks
       #r$lastSelectedButton and generateVersionButtons() points it back at
       #"Original", which the select observer dereferences on every click.
+      #seedNewVersion() between the two: it needs applyFirstRun()'s reset of the
+      #button numbering, and it names the card generateVersionButtons() selects.
       applyFirstRun()
+      seeded <- seedNewVersion()
       generateVersionButtons()
 
       #--- 6. redraw. output$versionMap reads r$updateRender and
@@ -4724,6 +4881,8 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
         vftPrepareThen(r, r$position, finalPolygons, minThresh,
                        label = "Wegnetz wird vorbereitet...",
                        then  = function(){
+                         #one preparation for the original and its fresh copy
+                         if(seeded) shareSeedPreparation()
                          r$updateRender <- r$updateRender + 1
                        })
       }else{
