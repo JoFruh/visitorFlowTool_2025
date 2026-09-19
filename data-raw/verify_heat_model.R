@@ -194,5 +194,60 @@ na_share <- 100 * mean(is.na(values(h$midday)))
 ok(sprintf("almost nothing drops out as unclassified now (%.2f%%)", na_share),
    na_share < 1)
 
+cat("\n=== 8. the cache never changes an answer ===\n")
+## A cache is only worth having if it is invisible in the output. This walks a
+## realistic session - paint, switch bin, paint something that moves the
+## geometry, switch back, erase - and demands the cached frame be IDENTICAL to a
+## cold one, not close to it. Every term here is either reused whole or rebuilt
+## whole, so exact equality is the right bar.
+##
+## Step 5 is the one that matters. Geometry layers are held per bin, and
+## `touched` is measured against the previous call, so planting a tree while the
+## afternoon is on screen leaves a stale midday shade behind that no later call
+## would ever see as dirty. Before heat_cache_state() learned to purge every
+## bin's geometry rather than the current one's, that step was wrong by 5 K.
+poly <- st_sfc(st_polygon(list(rbind(c(CX-700, CY-500), c(CX+700, CY-500),
+                                     c(CX+700, CY+500), c(CX-700, CY+500),
+                                     c(CX-700, CY-500)))), crs = 2056)
+aoi <- st_sf(geometry = st_transform(poly, 4326))
+ed <- function(cls, side) {
+  r <- rast(ext(CX - side/2, CX + side/2, CY - side/2, CY + side/2),
+            resolution = 1, crs = "EPSG:2056")
+  values(r) <- as.integer(cls); r
+}
+G <- ed(1, 120); T7 <- ed(7, 80)
+walk <- list(list("cold midday",           "midday",    NULL, NULL),
+             list("ground repaint",        "midday",    G,    NULL),
+             list("switch bin",            "afternoon", G,    NULL),
+             list("plant trees",           "afternoon", G,    T7),
+             list("switch back",           "midday",    G,    T7),
+             list("erase the trees",       "midday",    G,    NULL),
+             list("repaint another class", "midday",    ed(5, 120), NULL))
+ca <- heatCacheNew()
+for (s in walk) {
+  cold <- heatRaster(aoi, s[[3]], s[[4]], bin = s[[2]])
+  warm <- heatRaster(aoi, s[[3]], s[[4]], bin = s[[2]], cache = ca)
+  d <- abs(values(cold) - values(warm)); d <- d[is.finite(d)]
+  ok(sprintf("cached frame is identical after: %s", s[[1]]),
+     length(d) > 0 && max(d) == 0, sprintf("[max |diff| %.3g]", max(d)))
+}
+## and it must still be a cache - a no-op call should reuse, not rebuild
+t0 <- Sys.time(); invisible(heatRaster(aoi, ed(5,120), NULL, bin="midday", cache=ca))
+twarm <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+t0 <- Sys.time(); invisible(heatRaster(aoi, ed(5,120), NULL, bin="midday"))
+tcold <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+ok(sprintf("an unchanged repeat is faster than a cold one (%.2f vs %.2f s)",
+           twarm, tcold), twarm < tcold)
+## a different area must not be answered out of the old one's cache
+poly2 <- st_sfc(st_polygon(list(rbind(c(CX+1200, CY-400), c(CX+2000, CY-400),
+                                      c(CX+2000, CY+400), c(CX+1200, CY+400),
+                                      c(CX+1200, CY-400)))), crs = 2056)
+aoi2 <- st_sf(geometry = st_transform(poly2, 4326))
+h2c <- heatRaster(aoi2, bin = "midday", cache = ca)
+h2  <- heatRaster(aoi2, bin = "midday")
+ok("a change of area rebuilds instead of reusing the old grid",
+   !is.null(h2c) && ext(h2c) == ext(h2) &&
+     max(abs(values(h2c) - values(h2)), na.rm = TRUE) == 0)
+
 cat(sprintf("\n%d check(s) failed\n", fails))
 quit(status = if (fails == 0) 0 else 1)

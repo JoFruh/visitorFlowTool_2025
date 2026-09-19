@@ -1471,6 +1471,20 @@ clearHeat <- function(){
 #' Wrapped, and deliberately not fatal: the heat model is a read-out of the
 #' design, so a failure here must cost the read-out and nothing else - never the
 #' map or the paint the user has already done.
+#ONE CACHE PER SESSION, not per version.
+#
+#Terms are keyed on what they actually depend on, so a cache shared across
+#versions is not a leak between them: switching scenario changes the class
+#rasters, heat_cache_state() sees which classes moved, and only those layers are
+#rebuilt. Two versions that differ by one painted square therefore share the six
+#or seven layers they have in common, which is the case this is for.
+#
+#It lives here rather than in `r` on purpose. It holds no answer, only work
+#already done, so it must never take part in reactive invalidation - the
+#existing `r$heatRaster <- NULL` points stay exactly as they were and remain the
+#thing that decides when a surface is stale.
+heatCache <- heatCacheNew()
+
 computeHeat <- function(){
   pos <- shiny::isolate(r$position)
   aoi <- shape
@@ -1495,7 +1509,8 @@ computeHeat <- function(){
     h  <- heatRaster(aoi,
                      groundEdits = edits$paintedRaster,
                      canopyEdits = edits$canopyRaster,
-                     bin = bin)
+                     bin = bin,
+                     cache = heatCache)
     if(is.null(h)){
       message("heat: no land cover for this area - nothing to compute from")
       FALSE

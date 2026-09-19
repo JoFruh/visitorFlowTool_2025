@@ -339,6 +339,134 @@ heatGeometryTerm <- function(shade, svf, wall, geom = heatGeometry(),
   out
 }
 
+# ------------------------------------------------------- reuse between runs --
+
+#' Class ids that change the obstruction height field.
+#'
+#' Only these three make a shadow, occlude sky or present a wall, so a repaint
+#' that touches none of them cannot move the shade, SVF or wall terms - and
+#' those are 0.61 s of a 2.4 s read-out over central Sion. Every other id is a
+#' ground material that reaches the output through the local and advective terms
+#' alone. Kept beside heatHeights(), which is the list this must agree with.
+HEAT_OBSTRUCTION_IDS <- c(6L, 7L, 8L)
+
+#' A cache for repeated heatRaster() calls over one area.
+#'
+#' Hand the same environment back on every call and each term is recomputed only
+#' when something it actually depends on has changed. Three facts make this
+#' worth doing, all of them measured over a 1.8 x 1.3 km window at Sion:
+#'
+#'   - the advective term is 1.47 s of a 2.38 s read-out and is built class by
+#'     class; repainting one material can change at most two of the seven layers
+#'   - the advective term and the SVF do not depend on the time of day at all,
+#'     so switching bins recomputes 1.93 s of work that cannot have changed
+#'   - reading and cropping the national rasters is another 0.33 s, and depends
+#'     on neither the edits nor the bin
+#'
+#' This is exact, not an approximation: a layer is either reused untouched or
+#' rebuilt over the whole area. In particular it does *not* try to recompute a
+#' window around the edit - that would have to reckon with `min_patch_ha` being
+#' a property of a whole connected patch, where erasing one cell in a 300 m tree
+#' avenue drops the entire line below the floor and changes cells 256 m away.
+#'
+#' One cache belongs to one area and one set of paintLandcoverSeed() options. A
+#' different grid is detected and rebuilds everything; different `...` options on
+#' the same grid are not, so use a fresh cache if those ever vary.
+heatCacheNew <- function() new.env(parent = emptyenv())
+
+#' What a repaint changed, and whether the geometry has to be redone.
+#'
+#' Returns `touched = NULL` to mean "assume everything", which is what a first
+#' call or a change of grid gets. Otherwise `touched` is the set of class ids
+#' involved on either side of every differing cell - both the id painted over
+#' and the id painted - because a class layer changes when it loses cells just
+#' as much as when it gains them.
+heat_cache_state <- function(cache, ground, canopy){
+  fresh <- list(touched = NULL, geom_dirty = TRUE)
+  if(is.null(cache)) return(fresh)
+
+  gv <- terra::values(ground, mat = FALSE)
+  cv <- terra::values(canopy, mat = FALSE)
+  sig <- c(dim(ground)[1:2], as.vector(terra::ext(ground)))
+
+  if(is.null(cache$sig) || !isTRUE(all.equal(cache$sig, sig)) ||
+     length(cache$gv) != length(gv)){
+    cache$v   <- list()
+    cache$sig <- sig
+    cache$tpl <- terra::rast(ground)
+    cache$gv  <- gv
+    cache$cv  <- cv
+    return(fresh)
+  }
+
+  #NA is a value here - it is the mask outside the perimeter - so a plain !=
+  #would report every one of those cells as unchanged and also as changed
+  diff <- function(a, b) which(xor(is.na(a), is.na(b)) |
+                               (!is.na(a) & !is.na(b) & a != b))
+  ig <- diff(cache$gv, gv)
+  ic <- diff(cache$cv, cv)
+  touched <- unique(c(cache$gv[ig], gv[ig], cache$cv[ic], cv[ic]))
+  touched <- sort(touched[!is.na(touched)])
+
+  cache$gv <- gv
+  cache$cv <- cv
+  geom_dirty <- any(touched %in% HEAT_OBSTRUCTION_IDS)
+
+  #Every geometry layer for every bin goes, not just the one about to be
+  #rebuilt. `touched` is measured against the previous call, so a stale entry
+  #for a bin nobody is looking at right now is never seen as dirty again: plant
+  #a tree while the afternoon is displayed and the midday shade in the cache
+  #still has no tree in it, but the next switch back to midday reports no class
+  #change and happily reuses it. That was a 5 K error on a real sequence, and it
+  #is the reason these are purged by pattern rather than by key.
+  #
+  #The advective layers need no such sweep - they carry no second dimension. A
+  #class layer is a function of that class's mask and nothing else, and it is
+  #rebuilt in the same call that sees the mask change.
+  if(geom_dirty && length(cache$v)){
+    cache$v <- cache$v[!grepl("^(shade_|wall_|svf$)", names(cache$v))]
+  }
+  list(touched = touched, geom_dirty = geom_dirty)
+}
+
+#' Reuse a cached layer, or build and store it.
+#'
+#' Layers are held as bare value vectors against one template rather than as
+#' SpatRasters. A SpatRaster terra decided to spill to a scratch file is a
+#' dangling reference once that file is swept up, and the failure would surface
+#' as a wrong map rather than an error.
+heat_cached <- function(cache, key, dirty, build){
+  if(is.null(cache) || is.null(cache$tpl)) return(build())
+  if(!dirty && !is.null(cache$v[[key]])){
+    return(terra::setValues(terra::rast(cache$tpl), cache$v[[key]]))
+  }
+  out <- build()
+  cache$v[[key]] <- if(is.null(out)) NULL else terra::values(out, mat = FALSE)
+  out
+}
+
+#' The advective term, one cached layer per class.
+#'
+#' Same sum as heatAdvectiveTerm() over the whole table - it is called here once
+#' per row instead of once for all of them, so that a row whose class was not
+#' repainted can be skipped entirely.
+heat_advective_cached <- function(ground, canopy, dec, res, cache, touched){
+  if(is.null(dec)) return(NULL)
+  acc <- NULL
+  for(i in seq_len(nrow(dec))){
+    cid <- dec$class_id[i]
+    if(is.na(dec$half_dist_m[i]) || is.na(dec$amp_edge_K[i]) ||
+       dec$amp_edge_K[i] == 0) next
+    row   <- dec[i, , drop = FALSE]
+    dirty <- is.null(touched) || cid %in% touched
+    lay   <- heat_cached(cache, paste0("adv", cid), dirty,
+                         function() heatAdvectiveTerm(ground, canopy, row, res = res))
+    if(is.null(lay)) next
+    acc <- if(is.null(acc)) lay else acc + lay
+  }
+  acc
+}
+
 #' The heat raster for an area.
 #'
 #' `aoi` is the step-1 perimeter; `groundEdits`/`canopyEdits` are a version's
@@ -346,13 +474,23 @@ heatGeometryTerm <- function(shade, svf, wall, geom = heatGeometry(),
 #' when there is no land cover to work from, on the same terms as
 #' paintLandcoverSeed().
 #'
+#' `cache` is an optional heatCacheNew() environment; pass the same one back on
+#' every call over the same area and unchanged terms are reused. Leaving it NULL
+#' computes everything every time, which is what the verification scripts do.
+#'
 #' One seed call covers both levels. Going through paintCompositeRaster() per
 #' level would crop the two national rasters twice over - four file reads where
 #' two will do - and the crop is the expensive part of this function.
 heatRaster <- function(aoi, groundEdits = NULL, canopyEdits = NULL,
-                       bin = HEAT_BIN_DEFAULT, res = HEAT_RES, ...){
+                       bin = HEAT_BIN_DEFAULT, res = HEAT_RES,
+                       cache = NULL, ...){
   vftTime("heat:heatRaster", {
   bin  <- match.arg(bin, HEAT_BINS)
+  #The seed is deliberately NOT cached, although it depends on neither the edits
+  #nor the bin. It is the only raster here still at 1 m: holding it would cost
+  #150 MB on a 3.6 km area - 25x every cached layer below put together - to save
+  #0.33 s of the 2.38 s this function takes. The edits are painted at 1 m, so
+  #there is no coarser version of it to keep instead.
   seed <- paintLandcoverSeed(aoi, ...)
   if(is.null(seed)) return(NULL)
 
@@ -370,17 +508,31 @@ heatRaster <- function(aoi, groundEdits = NULL, canopyEdits = NULL,
   }
 
   geom  <- heatGeometry()
-  shade <- heatShadeRaster(ground, canopy, bin, geom)
+  #what this repaint touched, and therefore what has to be rebuilt. With no
+  #cache both come back "everything", which is the behaviour without one.
+  st    <- heat_cache_state(cache, ground, canopy)
+  gd    <- st$geom_dirty
+
+  #shade and the wall term are per bin; the SVF is not - a horizon angle does
+  #not care where the sun is - so it survives a change of time of day
+  shade <- heat_cached(cache, paste0("shade_", bin), gd,
+                       function() heatShadeRaster(ground, canopy, bin, geom))
   if(is.null(shade)) return(NULL)
 
+  #the local term reads every cell's own class, so any repaint at all moves it.
+  #It is also the cheapest term in the model, so it is never cached.
   local <- heatLocalTerm(ground, canopy, shade, bin)
   if(is.null(local)) return(NULL)
 
-  svf  <- if(HEAT_APPLY_SVF)  heatSvfRaster(ground, canopy, geom = geom) else NULL
-  wall <- if(HEAT_APPLY_WALL) heatWallRaster(ground, canopy, bin, geom, shade) else NULL
+  svf  <- if(HEAT_APPLY_SVF)
+    heat_cached(cache, "svf", gd,
+                function() heatSvfRaster(ground, canopy, geom = geom)) else NULL
+  wall <- if(HEAT_APPLY_WALL)
+    heat_cached(cache, paste0("wall_", bin), gd,
+                function() heatWallRaster(ground, canopy, bin, geom, shade)) else NULL
   geo  <- heatGeometryTerm(shade, svf, wall, geom)
 
-  adv <- heatAdvectiveTerm(ground, canopy, res = res)
+  adv <- heat_advective_cached(ground, canopy, heatDecay(), res, cache, st$touched)
 
   out <- local
   if(!is.null(geo)) out <- out + geo
