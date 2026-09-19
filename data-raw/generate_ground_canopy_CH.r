@@ -30,6 +30,14 @@
 #' attested data always wins, and the backfill runs last so it can never
 #' overwrite a surveyed surface.
 #'
+#' OSM closes most of that but not all: measured over 140 random 1 km windows,
+#' 21-25 % of the country was still 0 after step 8. OSM covers settlements well
+#' (Sion centre came out at 5.7 % unclassified) and open farmland badly, which
+#' is precisely the land TLM3D omits by design. Step 9 fills what is left from
+#' ESA WorldCover, a validated 10 m satellite land cover product - see
+#' lc_prepare_worldcover() for why satellite rather than the SWISSIMAGE
+#' orthophoto the QA pass below uses.
+#'
 #' NOTE: this file lives in R/ and is therefore sourced on every package load.
 #' It must stay function definitions only - the driver at the bottom is inside
 #' `if (FALSE)` for exactly that reason. Never put a top-level terra::rast() or
@@ -49,6 +57,19 @@ LC_OUT_DIR <- "C:/Users/frueh/Documents/Local Data/landcover"
 #reprojects.
 LC_OSM_SRC <- "C:/Users/frueh/Documents/Local Data/OSM/ch"
 LC_OSM     <- "C:/Users/frueh/Documents/Local Data/OSM/osm_landcover_2056.gpkg"
+
+#ESA WorldCover v200 (2021), 10 m, global, free and unauthenticated on S3. The
+#tiles are 3 x 3 degrees in EPSG:4326 named after their south-west corner, so
+#Switzerland needs the three that cover longitudes 3-12 E at 45-48 N.
+#LC_WORLDCOVER is the single reprojected LV95 mosaic lc_prepare_worldcover()
+#renders them down to, on the same read-once-reproject-once principle as LC_OSM.
+LC_WC_SRC   <- paste0("/vsicurl/https://esa-worldcover.s3.eu-central-1.amazonaws.com/",
+                      "v200/2021/map/ESA_WorldCover_10m_2021_v200_")
+LC_WC_TILES <- c("N45E003", "N45E006", "N45E009")
+LC_WORLDCOVER <- "C:/Users/frueh/Documents/Local Data/worldcover_ch_2056_10m.tif"
+LC_WC_RES  <- 10
+#Switzerland in WGS84, a little wide on every side
+LC_WC_BB   <- c(xmin = 5.9, xmax = 10.55, ymin = 45.75, ymax = 47.85)
 
 #the grid is not ours to choose: PAINT_RES is 1 m in EPSG:2056 indexed from the
 #LV95 origin. The vegetation height model is a 5 m product on this same origin,
@@ -82,9 +103,10 @@ LC_GDAL <- c("COMPRESS=DEFLATE", "PREDICTOR=2", "TILED=YES")
 #SWISSIMAGE for the aerial QA pass, read through GDAL's WMTS driver so only the
 #requested window is fetched. The service is published in LV95, so nothing is
 #reprojected. zoom_level is not optional: the capabilities default to level 28
-#(0.1 m), and cropping from there would pull 100x more pixels than a 1 m cell
-#needs. Level 24 is 0.625 m, the finest level that still averages several
-#source pixels into each output cell rather than sampling one.
+#(0.1 m), and cropping from there would pull 225x more pixels than a 1 m cell
+#needs. Level 24 is 1.5 m - read off the capabilities, where the resolution is
+#ScaleDenominator x 0.00028 m; the levels near here are 22 = 2.5 m, 23 = 2 m,
+#25 = 1 m, 26 = 0.5 m.
 LC_SWISSIMAGE <- paste0("WMTS:https://wmts.geo.admin.ch/EPSG/2056/1.0.0/",
                         "WMTSCapabilities.xml,",
                         "layer=ch.swisstopo.swissimage-product,zoom_level=24")
@@ -229,6 +251,42 @@ LC_OSM_CLASS <- list(
 #Hafensteg it is a deck over water, so it belongs to the canopy, not the ground.
 LC_OSM_LAYERS <- c("gis_osm_landuse_a_free_1", "gis_osm_natural_a_free_1",
                    "gis_osm_water_a_free_1", "gis_osm_traffic_a_free_1")
+
+#ESA WorldCover class -> our class. Lowest priority of all: this table only ever
+#sees cells that TLM3D, the vegetation height model and OSM all left at 0.
+#
+#Each entry was checked against the classes TLM3D *does* attest, over 140 random
+#1 km windows (1.4 M cells at 10 m, canopy-free cells only). Row percentages of
+#that confusion matrix are quoted below, because they are the only evidence that
+#the same rule is right on the cells nobody surveyed.
+#
+#  10 tree -> 4, not 7. This raster is the *ground*, and the ground under a
+#  crown is soil - the identical argument LC_OSM_CLASS makes for "forest". The
+#  crown itself comes from the vegetation height model, a 5 m LiDAR product that
+#  is far better than a 10 m satellite classification, so the canopy raster is
+#  never touched by this step. Confirmed: 84.0 % of attested class 4 reads as
+#  WorldCover tree.
+#
+#  40 cropland -> 1, with the season caveat stated openly. A ploughed or
+#  harvested field is bare soil for part of the year and would be class 4 on that
+#  day; cropland is a land *use* that is vegetated through the growing season,
+#  which is the season this heat tool models. Attested class 1 reads as grass
+#  (53.6 %) plus crop (27.2 %) = 80.8 % vegetated.
+#
+#  60 bare -> 3, not 4. In Switzerland "bare/sparse" is overwhelmingly alpine
+#  rock, scree and moraine, and the header's thermal rule puts those with
+#  concrete rather than with soil. Confirmed from the other direction: 44.1 % of
+#  attested class 3 reads as WorldCover bare. It is also nearly irrelevant to the
+#  fill - only 0.3 % of the remaining 0 cells are bare.
+#
+#  20 shrubland is mapped for completeness but does essentially nothing here:
+#  WorldCover assigned it to 46 cells out of 1.4 M in Switzerland, putting Swiss
+#  Gebuesch into tree or grassland instead.
+#
+#  70 snow/ice and 80 water both -> 5, following the header: glacier and snow are
+#  the coldest, highest-albedo surfaces in the country.
+LC_WC_CLASS <- c("10" = 4, "20" = 2, "30" = 1, "40" = 1, "50" = 3,
+                 "60" = 3, "70" = 5, "80" = 5, "90" = 1, "100" = 4)
 
 
 # ---------------------------------------------------------------- helpers ---
@@ -434,11 +492,133 @@ lc_prepare_osm <- function(src = LC_OSM_SRC, out = LC_OSM,
 }
 
 
+# ------------------------------------------------------ WorldCover backfill --
+
+#' Render ESA WorldCover down to one LV95 10 m raster covering Switzerland.
+#'
+#' Run once, like lc_prepare_osm(), and for the same reason: the tile loop reads
+#' this 4500 times and must never reproject. Reprojection is `method = "near"`
+#' because the values are class ids - bilinear would average class 30 and class
+#' 50 into a class 40 that means nothing.
+#'
+#' WHY SATELLITE AND NOT THE ORTHOPHOTO. qa_ground_vs_swissimage() below already
+#' reads SWISSIMAGE, so the obvious move is to classify green-vs-grey from it and
+#' skip a new dependency. It does not work. SWISSIMAGE is a rolling mosaic flown
+#' over a three-year cycle, and different regions are flown in different seasons:
+#' the Valais tiles are leaf-off spring imagery - bare vineyards, brown
+#' hillsides, deep low-sun shadow - while the Mittelland tiles are high summer.
+#' Measured on that imagery, the greenness separating grass from asphalt was 0.026
+#' vs 0.014 at Sion and 0.073 vs 0.028 at Payerne, so any single threshold
+#' classifies most of Valais as unvegetated. Sentinel-2 from one August fixes
+#' that - grass NDVI came out at 0.52 / 0.44 / 0.51 across the same three places -
+#' and WorldCover is that same instrument already classified and validated, which
+#' beats a threshold tuned here by hand.
+#'
+#' The cost is resolution: a 10 m product on a 1 m grid, carrying 10 m blocks.
+#' That is the same compromise the vegetation height model already makes at 5 m
+#' (see the header), and it is acceptable for the same reason - the cells this
+#' fills are large homogeneous parcels, not the 1 m detail the grid exists for.
+lc_prepare_worldcover <- function(src = LC_WC_SRC, tiles = LC_WC_TILES,
+                                  out = LC_WORLDCOVER, bb = LC_WC_BB,
+                                  res = LC_WC_RES){
+  parts <- list()
+  for(tl in tiles){
+    r <- try(terra::rast(paste0(src, tl, "_Map.tif")), silent = TRUE)
+    if(inherits(r, "try-error")){ message("skip (unreachable): ", tl); next }
+    ie <- terra::intersect(terra::ext(r), terra::ext(bb[["xmin"]], bb[["xmax"]],
+                                                     bb[["ymin"]], bb[["ymax"]]))
+    if(is.null(ie)) next
+    parts[[tl]] <- terra::crop(r, ie)
+    message(sprintf("  %-9s %s", tl, paste(dim(parts[[tl]])[1:2], collapse = " x ")))
+  }
+  stopifnot(length(parts) > 0)
+  wc <- if(length(parts) == 1) parts[[1]] else do.call(terra::merge, unname(parts))
+
+  #Write the merge out before reprojecting, and reopen it. This looks like a
+  #pointless round trip and is not: `parts` are crops of /vsicurl sources, so the
+  #merge is lazy and every block terra::project() asks for is re-fetched over the
+  #network. Left lazy, the projection stops making progress entirely - it spent
+  #12 minutes without advancing a byte. Materialised first, it is local I/O.
+  dir.create(dirname(out), recursive = TRUE, showWarnings = FALSE)
+  f84 <- file.path(dirname(out), "worldcover_ch_4326.tif")
+  wc  <- terra::writeRaster(wc, f84, datatype = "INT1U", gdal = LC_GDAL,
+                            overwrite = TRUE)
+  wc  <- terra::rast(f84)
+
+  #project onto the LV95 paint grid, snapped so that every WorldCover cell edge
+  #is also a 1 m tile edge and the tile loop's crop never needs to resample
+  tmpl <- terra::rast(terra::ext(LC_EXT[["xmin"]], LC_EXT[["xmax"]],
+                                 LC_EXT[["ymin"]], LC_EXT[["ymax"]]),
+                      resolution = res, crs = "EPSG:2056")
+  wc <- terra::project(wc, tmpl, method = "near")
+
+  terra::writeRaster(wc, out, datatype = "INT1U", gdal = LC_GDAL, overwrite = TRUE)
+  message("wrote ", out)
+  invisible(out)
+}
+
+#' Open the prepared WorldCover mosaic, or NULL if it has not been built.
+#'
+#' NULL rather than an error so a build still runs without it - the result is
+#' then the pre-WorldCover raster, which is a worse map but not a broken one.
+#' Opened per call rather than cached in a global: a SpatRaster is an external
+#' pointer and does not survive being exported to a parallel worker, so each
+#' worker has to open the file itself. That happens for free here, because this
+#' is lc_build_tile()'s default argument and is evaluated inside the worker.
+lc_worldcover <- function(path = LC_WORLDCOVER){
+  if(!file.exists(path)){
+    message("WorldCover mosaic not found at ", path,
+            " - run lc_prepare_worldcover(); building without step 9")
+    return(NULL)
+  }
+  terra::rast(path)
+}
+
+#' Fill a ground tile's remaining 0 cells. Returns the tile, unchanged where it
+#' already said something.
+#'
+#' Two rules, in order:
+#'
+#'  1. Under a tree crown the ground is soil, full stop - no imagery is consulted,
+#'     because a satellite looking at a forest reports the canopy and cannot see
+#'     what it stands on. This is the same rule LC_OSM_CLASS applies to "forest".
+#'  2. Everything else takes LC_WC_CLASS.
+#'
+#' A cell WorldCover cannot classify either stays 0. The class is meant to be
+#' honest about ignorance, and inventing a value for it would defeat the point.
+lc_fill_ground <- function(ground, canopy, wc, crosswalk = LC_WC_CLASS){
+  gap <- ground == 0
+  if(!any(terra::values(gap), na.rm = TRUE)) return(ground)
+
+  w <- terra::crop(wc, terra::ext(ground))
+  #disagg rather than resample: LC_WC_RES / LC_RES is a whole number on a shared
+  #origin, so this is a block copy that cannot shift a cell edge - the same
+  #argument lc_vhm_tile() makes for the vegetation height model
+  w <- terra::disagg(w, fact = LC_WC_RES / LC_RES, method = "near")
+  #Assert before forcing the extent. lc_prepare_worldcover() projects onto the
+  #whole of LC_EXT, so the crop above always returns the full tile - but if that
+  #ever stops being true, a partial crop stretched onto the tile extent would
+  #silently displace every class it writes. Fail loudly instead.
+  if(!all(dim(w)[1:2] == dim(ground)[1:2])){
+    stop(sprintf("WorldCover crop is %s, tile is %s - the mosaic does not cover this tile",
+                 paste(dim(w)[1:2], collapse = "x"), paste(dim(ground)[1:2], collapse = "x")))
+  }
+  terra::ext(w) <- terra::ext(ground)
+  w <- terra::subst(w, from = as.integer(names(crosswalk)),
+                    to = unname(crosswalk), others = NA)
+
+  #rule 1 wins over rule 2
+  w <- terra::ifel(canopy == 7, 4, w)
+  terra::ifel(gap & !is.na(w), w, ground)
+}
+
+
 # ------------------------------------------------------------- tile build ---
 
 #' Build one tile of both rasters and write them.
 lc_build_tile <- function(tile, out_dir = LC_OUT_DIR, overwrite = FALSE,
-                          min_road_width = LC_MIN_ROAD_WIDTH){
+                          min_road_width = LC_MIN_ROAD_WIDTH,
+                          wc = lc_worldcover()){
   #the resolution is in the directory name, not decoration: tile ids restart at
   #01_01 for every grid, so a 1 m run whose tiles sat next to the 5 m run's
   #would find ground_01_01.tif already present and skip it - silently welding a
@@ -546,6 +726,13 @@ lc_build_tile <- function(tile, out_dir = LC_OUT_DIR, overwrite = FALSE,
     }
     ground <- terra::ifel(ground == 0, fill, ground)
   }
+
+  # 9. WorldCover backfill, lower still: only what step 8 also left at 0. Kept
+  #    separate from step 8 rather than folded into it because the two guess from
+  #    different evidence - OSM is somebody's drawing of a parcel boundary, this
+  #    is a classified satellite pixel - and because the order matters: a drawn
+  #    parcel is the better answer where one exists.
+  if(!is.null(wc)) ground <- lc_fill_ground(ground, canopy, wc)
 
   terra::writeRaster(ground, f_ground, datatype = "INT1U", gdal = LC_GDAL, overwrite = TRUE)
   terra::writeRaster(canopy, f_canopy, datatype = "INT1U", gdal = LC_GDAL, overwrite = TRUE)
@@ -668,6 +855,130 @@ build_ground_canopy_CH <- function(out_dir = LC_OUT_DIR, tiles = NULL,
 }
 
 
+# ----------------------------------------------------- retrofit the backfill -
+
+#' Apply step 9 to an already-built set of tiles, without rebuilding them.
+#'
+#' The national build is ~23 h and reads a 10.8 GB GeoPackage 4500 times. Step 9
+#' reads neither, and touches only cells every other step declined to classify,
+#' so re-deriving the other eight steps to get it would be wasted work. This
+#' walks the finished ground tiles instead, applies lc_fill_ground(), and writes
+#' to a *parallel* directory rather than over the originals.
+#'
+#' Writing beside rather than over is the whole point of the design: it keeps
+#' "what was surveyed or drawn" and "what was inferred from a satellite"
+#' separable after the fact. Diff the two rasters and you have the provenance
+#' mask, at the cost of disk rather than of a second value per cell. The national
+#' merge at the end writes ground_CH_1m.tif and moves the previous file aside to
+#' ground_CH_1m_prefill.tif for exactly the same reason.
+#'
+#' Restartable on the same terms as the build: a tile whose output already reads
+#' back at the right cell count is skipped unless `overwrite`.
+fill_ground_canopy_CH <- function(out_dir = LC_OUT_DIR, tiles = NULL,
+                                  overwrite = FALSE, merge = TRUE,
+                                  wc_path = LC_WORLDCOVER, workers = 1,
+                                  src = "data-raw/generate_ground_canopy_CH.r"){
+  if(is.null(tiles)) tiles <- lc_tile_grid()
+  if(!file.exists(wc_path)){
+    stop("WorldCover mosaic not found at ", wc_path, " - run lc_prepare_worldcover() first")
+  }
+  cells <- (LC_TILE_M[1] / LC_RES) * (LC_TILE_M[2] / LC_RES)
+  dir.create(file.path(out_dir, lc_tile_dir(), "ground_filled"),
+             recursive = TRUE, showWarnings = FALSE)
+
+  one <- function(i){
+    tid <- tiles$tile_id[i]
+    f_in  <- file.path(out_dir, lc_tile_dir(), "ground",        paste0("ground_", tid, ".tif"))
+    f_can <- file.path(out_dir, lc_tile_dir(), "canopy",        paste0("canopy_", tid, ".tif"))
+    f_out <- file.path(out_dir, lc_tile_dir(), "ground_filled", paste0("ground_", tid, ".tif"))
+    if(!overwrite && lc_tile_ok(f_out, cells)) return(NULL)
+    if(!lc_tile_ok(f_in, cells) || !lc_tile_ok(f_can, cells)){
+      message("skip (source tile unreadable): ", tid); return(NULL)
+    }
+    g <- lc_fill_ground(terra::rast(f_in), terra::rast(f_can), terra::rast(wc_path))
+    terra::writeRaster(g, f_out, datatype = "INT1U", gdal = LC_GDAL, overwrite = TRUE)
+    NULL
+  }
+
+  t_all <- Sys.time()
+  if(workers > 1){
+    stopifnot(file.exists(src))
+    cl <- parallel::makeCluster(workers)
+    on.exit(parallel::stopCluster(cl), add = TRUE)
+    parallel::clusterCall(cl, function(p) suppressMessages(source(p)), normalizePath(src))
+    parallel::clusterCall(cl, function(frac){
+      d <- file.path(tempdir(), "terra_worker")
+      dir.create(d, recursive = TRUE, showWarnings = FALSE)
+      terra::terraOptions(memfrac = frac, tempdir = d, progress = 0)
+      NULL
+    }, max(0.5 / workers, 0.03))
+    wenv <- new.env(parent = globalenv())
+    wenv$tiles <- tiles; wenv$out_dir <- out_dir; wenv$overwrite <- overwrite
+    wenv$wc_path <- wc_path; wenv$cells <- cells
+    environment(one) <- wenv
+    idx <- split(seq_len(nrow(tiles)), ceiling(seq_len(nrow(tiles)) / (workers * 15)))
+    for(k in seq_along(idx)){
+      parallel::parLapplyLB(cl, idx[[k]], one)
+      done <- max(idx[[k]])
+      el <- as.numeric(difftime(Sys.time(), t_all, units = "mins"))
+      message(sprintf("chunk %d/%d - %d/%d tiles - %.1f min elapsed, ~%.1f min left",
+                      k, length(idx), done, nrow(tiles), el,
+                      el / done * (nrow(tiles) - done)))
+    }
+  }else{
+    for(i in seq_len(nrow(tiles))){
+      one(i)
+      if(i %% 100 == 0){
+        el <- as.numeric(difftime(Sys.time(), t_all, units = "mins"))
+        message(sprintf("%d/%d tiles - %.1f min elapsed, ~%.1f min left",
+                        i, nrow(tiles), el, el / i * (nrow(tiles) - i)))
+      }
+    }
+  }
+  if(!merge) return(invisible(NULL))
+
+  files <- file.path(out_dir, lc_tile_dir(), "ground_filled",
+                     paste0("ground_", tiles$tile_id, ".tif"))
+  ok <- vapply(files, lc_tile_ok, logical(1), cells = cells, USE.NAMES = FALSE)
+  if(!all(ok)){
+    stop(sprintf("%d unreadable filled tile(s), refusing to merge: %s",
+                 sum(!ok), paste(tiles$tile_id[!ok], collapse = ", ")))
+  }
+  v <- terra::vrt(files, file.path(out_dir, "ground_filled_CH_1m.vrt"), overwrite = TRUE)
+  f <- file.path(out_dir, "ground_CH_1m.tif")
+  if(file.exists(f)){
+    keep <- file.path(out_dir, "ground_CH_1m_prefill.tif")
+    if(!file.exists(keep)) file.rename(f, keep) else file.remove(f)
+  }
+  terra::writeRaster(v, f, datatype = "INT1U",
+                     gdal = c(LC_GDAL, "BIGTIFF=YES"), overwrite = TRUE)
+  message("wrote ", f)
+  invisible(f)
+}
+
+#' Rebuild the 5 m rasters from the 1 m ones.
+#'
+#' They exist because PAINT_RES was 5 m before the grid was refined, and the
+#' copies on disk predate both the OSM backfill and step 9 - which is how a heat
+#' run over Sion came back reporting 41 % of the town unclassified when the
+#' raster the app actually reads says 5.7 %. Anything still reading a 5 m file is
+#' reading a different country. `modal` rather than `mean`: these are class ids.
+downsample_ground_canopy_CH <- function(out_dir = LC_OUT_DIR, fact = 5){
+  out <- character(0)
+  for(what in c("ground", "canopy")){
+    f_in <- file.path(out_dir, paste0(what, "_CH_1m.tif"))
+    if(!file.exists(f_in)){ message("missing: ", f_in); next }
+    f_out <- file.path(out_dir, sprintf("%s_CH_%gm.tif", what, LC_RES * fact))
+    r <- terra::aggregate(terra::rast(f_in), fact = fact, fun = "modal", na.rm = TRUE)
+    terra::writeRaster(r, f_out, datatype = "INT1U",
+                       gdal = c(LC_GDAL, "BIGTIFF=YES"), overwrite = TRUE)
+    out[what] <- f_out
+    message("wrote ", f_out)
+  }
+  invisible(out)
+}
+
+
 # --------------------------------------------------------------- aerial QA --
 
 #' Flag cells where SWISSIMAGE disagrees with the assigned ground class.
@@ -723,6 +1034,9 @@ if(FALSE){
   #once, before anything else: ~500k OSM polygons -> one indexed LV95 file
   lc_prepare_osm()
 
+  #and once for the satellite backfill: three 3-degree tiles -> one LV95 10 m file
+  lc_prepare_worldcover()
+
   #test tiles are one grid tile (4 x 4.6 km), not the 20 x 23 km the 5 m build
   #used - at 1 m that would be 460 M cells and would not fit in memory.
   #
@@ -746,6 +1060,14 @@ if(FALSE){
 
   #the full run: 4500 tiles
   build_ground_canopy_CH()
+
+  #or, on tiles that are already built, just add step 9 and re-merge. This is
+  #minutes rather than the ~23 h a rebuild costs, and keeps the pre-fill raster
+  #as ground_CH_1m_prefill.tif so the inferred cells stay identifiable.
+  fill_ground_canopy_CH(workers = 6)
+
+  #the 5 m copies are stale the moment the 1 m ones change
+  downsample_ground_canopy_CH()
 
   #coverage: the 0 share should land near the ~36 % of Switzerland that BFS
   #Arealstatistik calls agricultural, plus settlement open ground
