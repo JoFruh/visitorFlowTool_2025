@@ -328,6 +328,31 @@ vftDbg("UI6")
                                                          class = "paintToolBtn colorBtnNotSelected",
                                                          style = "background-color: #ffffff;"
                                                        ),
+                                                       #TIME OF DAY. The heat model is computed for one of three
+                                                       #bins, and the ranking of materials genuinely changes between
+                                                       #them: asphalt peaks 1-2 h after solar noon while grass and
+                                                       #water barely move, so afternoon is not just "midday but
+                                                       #more". Morning and afternoon share a sun elevation (45.8 deg)
+                                                       #and differ only in azimuth - the heat difference between them
+                                                       #is thermal inertia, not sun angle.
+                                                       #
+                                                       #Changing this drops the cached surface exactly as painting
+                                                       #does, because a heat raster belongs to one time of day as
+                                                       #much as it belongs to one design.
+                                                       #
+                                                       #The wrapper kills selectInput's bottom margin, which would
+                                                       #otherwise push this column out of line with the brush tools
+                                                       #beside it.
+                                                       shiny::div(
+                                                         style = "margin-bottom:-15px; width:104px;",
+                                                         shiny::selectInput(
+                                                           inputId = shiny::NS(id, "heatBin"), label = NULL,
+                                                           choices = stats::setNames(
+                                                             c("morning", "midday", "afternoon"),
+                                                             c(i18n$t("Morgen"), i18n$t("Mittag"), i18n$t("Nachmittag"))),
+                                                           selected = "midday", width = "104px"
+                                                         )
+                                                       ),
                                                        #PLAN IMPORT. Opens the browser's file picker; the file
                                                        #never reaches R - planimport.js places, classifies and
                                                        #previews it, and only the result is sent on Apply. A plain

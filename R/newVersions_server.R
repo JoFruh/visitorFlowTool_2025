@@ -1448,9 +1448,14 @@ drawHeat <- function(){
     leaflet::addRasterImage(raster::raster(heat), colors = pal, group = "heat",
                             opacity = HEAT_OPACITY, project = TRUE,
                             options = list(pane = "heatPane")) %>%
+    #the unit is in the title on purpose. Before Phase 4 this surface was
+    #unitless and landed in roughly +-0.09; it is now kelvin of PET against
+    #unshaded grass at solar midday, so 0 means "as comfortable as an open lawn
+    #at noon". A legend that does not say so invites the old reading of the
+    #numbers, which were an order of magnitude smaller and meant nothing.
     leaflet::addLegend(layerId = "heatLegend", position = "bottomright",
                        pal = pal, values = terra::values(heat),
-                       title = i18n()$t("Hitze"), opacity = 1)
+                       title = paste0(i18n()$t("Hitze"), " (K PET)"), opacity = 1)
   invisible(NULL)
 }
 
@@ -1480,18 +1485,24 @@ computeHeat <- function(){
     if(is.null(nl) || is.null(pos) || !length(pos) || pos > length(nl))
       list(paintedRaster = NULL, canopyRaster = NULL) else nl[[pos]]
   })
+  #the chosen time of day, falling back to the model's own default rather than
+  #erroring: the control is in the same panel as the switch, but a restored
+  #session can reach this before the input has reported for the first time
+  bin <- shiny::isolate(r$heatBin)
+  if(is.null(bin) || !nzchar(bin)) bin <- HEAT_BIN_DEFAULT
   ok <- tryCatch({
     t0 <- Sys.time()
     h  <- heatRaster(aoi,
                      groundEdits = edits$paintedRaster,
-                     canopyEdits = edits$canopyRaster)
+                     canopyEdits = edits$canopyRaster,
+                     bin = bin)
     if(is.null(h)){
       message("heat: no land cover for this area - nothing to compute from")
       FALSE
     }else{
       r$heatRaster <- h
-      message(sprintf("heat: computed %d x %d at %g m in %.1f s",
-                      terra::nrow(h), terra::ncol(h), HEAT_RES,
+      message(sprintf("heat: computed %d x %d at %g m for %s in %.1f s",
+                      terra::nrow(h), terra::ncol(h), HEAT_RES, bin,
                       as.numeric(difftime(Sys.time(), t0, units = "secs"))))
       TRUE
     }
@@ -1531,6 +1542,34 @@ shiny::observeEvent(input$heatSwitch, {
     clearHeat()
   }
   applyPaintGates()
+}, ignoreInit = TRUE)
+
+# TIME OF DAY.
+#
+# A heat surface belongs to one time of day as surely as it belongs to one
+# design, so changing this invalidates the cache on exactly the same terms as a
+# brush stroke does. The difference is that painting is refused while heat is on,
+# whereas this control is meant to be used with it on - so when the surface is
+# currently displayed it is recomputed and redrawn immediately rather than
+# waiting for the next toggle, which would otherwise leave the map showing
+# midday under a label that says afternoon.
+shiny::observeEvent(input$heatBin, {
+  bin <- input$heatBin
+  if(is.null(bin) || !nzchar(bin)) return(NULL)
+  if(identical(bin, shiny::isolate(r$heatBin))) return(NULL)
+  r$heatBin    <- bin
+  r$heatRaster <- NULL
+  if(!isTRUE(shiny::isolate(r$heatOn))) return(NULL)
+  if(computeHeat()){
+    drawHeat()
+  }else{
+    #nothing to show for this bin - drop the read-out rather than leave the
+    #previous time of day on screen under the new label
+    r$heatOn <- FALSE
+    shinyjs::removeClass("heatSwitch", "paintToolActive")
+    clearHeat()
+    applyPaintGates()
+  }
 }, ignoreInit = TRUE)
 
 # An attempt to paint while heat is on. The browser swallowed the stroke and
