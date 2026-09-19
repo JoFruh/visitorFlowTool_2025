@@ -35,6 +35,14 @@
   var FLUSH_IDLE  = 800;        //ms of no painting before the delta is sent to R
   var ACK_TIMEOUT = 8000;       //ms before an unacked flush is put back in the queue
   var PANES       = { ground: "paintPaneGround", canopy: "paintPaneCanopy" };
+  //one wheel notch past max zoom scales the brush by this factor; ~12 notches
+  //take it from the maximum down to a single cell
+  var BRUSH_STEP  = 1.25;
+  //wheel travel (as L.DomEvent.getWheelDelta reports it) per brush step. Below
+  //the smallest mouse notch - Chrome on Windows reports 50 there, Firefox 60 -
+  //so every notch is one step, while a trackpad's trickle of small deltas is
+  //gathered up instead of resizing on each event
+  var WHEEL_PX    = 40;
 
   var state = {
     map:          null,
@@ -79,7 +87,13 @@
     //answer here, because the flag says what is true now and not who last set
     //it; this says who set it.
     trace:        [],
-    brushRadius:  18,
+    brushRadius:  18,         //screen px
+    //the wheel shrinks the brush below this once the map is at max zoom, and
+    //grows it back to this before it zooms out again
+    brushMax:     18,
+    //shrunk to one cell: strokes stamp exactly the cell under the pointer (see
+    //stampDisc) and the cursor is drawn as that cell
+    brushAtMin:   false,
     categoryId:   1,
     version:      null,
     pending:      { ground: new Map(), canopy: new Map() },
@@ -614,6 +628,13 @@
                         map.containerPointToLatLng(L.point(x + 1, y)));
   }
 
+  /* The smallest brush, in screen px: half a cell, i.e. the radius of a single
+   * paint cell at the current zoom. */
+  function brushMinPx(map, x, y) {
+    var mpp = metresPerPixel(map, x, y);
+    return mpp > 0 ? 0.5 * state.res / mpp : state.brushMax;
+  }
+
   function activeLevel() {
     return state.canopyActive ? "canopy" : "ground";
   }
@@ -635,6 +656,14 @@
    * the same binary rule R's raster would have applied. */
   function stampDisc(level, fc, fr, rCells, catId, color, pending) {
     var grid = state.grids[level];
+    //a disc of half a cell holds no cell centre at all when the pointer is near
+    //a cell corner, so the smallest brush is the cell under the pointer instead
+    if (state.brushAtMin || rCells <= 0.5) {
+      var r = Math.floor(fr), c = Math.floor(fc);
+      if (state.erasing) grid.clearRun(r, c, c, pending);
+      else               grid.fillRun(r, c, c, catId, color, pending);
+      return;
+    }
     var r2 = rCells * rCells;
     var r0 = Math.floor(fr - rCells), r1 = Math.floor(fr + rCells);
     for (var row = r0; row <= r1; row++) {
@@ -787,19 +816,25 @@
     //blocked is armed-but-refusing, so it gets its own cursor rather than the
     //plain arrow: the brush is still the mode, it just will not lay anything down
     if (state.blocked) { state.overlay.style.cursor = "not-allowed"; return; }
-    var r    = state.brushRadius;
-    var size = r * 2 + 4;
+    //the radius is fractional once the wheel has shrunk it; below ~1.5 px the
+    //outline would swallow the shape, so that is the drawn floor
+    var r    = Math.max(1.5, Math.round(state.brushRadius * 10) / 10);
+    var size = Math.ceil(r * 2) + 4;
+    var hot  = Math.round(size / 2);
     //the eraser shows an empty dashed ring: nothing is being added, and the
     //brush must not look like it is about to lay down whatever material happens
     //to still be selected underneath
+    var style = "stroke='black' stroke-width='" + (state.brushAtMin ? 1 : 1.5) + "' "
+              + (state.erasing ? (state.brushAtMin ? "" : "stroke-dasharray='4 3' ") + "fill='none'"
+                               : "fill='" + (state.colors[state.categoryId] || "#888") + "' fill-opacity='0.35'");
+    //at the minimum the brush is one cell, so it is drawn as one
+    var shape = state.brushAtMin
+      ? "<rect x='" + (hot - r) + "' y='" + (hot - r) + "' width='" + 2 * r + "' height='" + 2 * r + "' " + style + "/>"
+      : "<circle cx='" + hot + "' cy='" + hot + "' r='" + r + "' " + style + "/>";
     var svg  = "<svg xmlns='http://www.w3.org/2000/svg' width='" + size + "' height='" + size + "'>"
-             + "<circle cx='" + size / 2 + "' cy='" + size / 2 + "' r='" + r + "' "
-             + "stroke='black' stroke-width='1.5' "
-             + (state.erasing ? "stroke-dasharray='4 3' fill='none'"
-                              : "fill='" + (state.colors[state.categoryId] || "#888") + "' fill-opacity='0.35'")
-             + "/></svg>";
+             + shape + "</svg>";
     state.overlay.style.cursor =
-      "url(\"data:image/svg+xml," + encodeURIComponent(svg) + "\") " + size / 2 + " " + size / 2 + ", crosshair";
+      "url(\"data:image/svg+xml," + encodeURIComponent(svg) + "\") " + hot + " " + hot + ", crosshair";
   }
 
   /* A transparent hit target over the map. Its z-index keeps it above the map
@@ -875,6 +910,47 @@
         el.releasePointerCapture(e.pointerId);
       }
     }
+    /* The wheel zooms the map until it can zoom no further, then resizes the
+     * brush: wheel-in past max zoom shrinks it down to one cell, and wheel-out
+     * grows it back to brushMax before the map zooms out. Leaflet listens for
+     * the wheel on the map container, so stopping the event here, on a child of
+     * it, is what keeps a resize notch from also zooming. The overlay only takes
+     * pointer events while the brush is writable, so readonly and plan import
+     * never get here. */
+    var wheelAcc = 0;
+    el.addEventListener("wheel", function (e) {
+      //refused strokes, or a zoom still animating (getZoom() is the old level
+      //until it ends): leave the notch to Leaflet, which clamps at max zoom
+      if (!state.active || state.blocked || map._animatingZoom) { wheelAcc = 0; return; }
+      var d = (L.DomEvent.getWheelDelta ? L.DomEvent.getWheelDelta(e) : -e.deltaY);   //>0 = in
+      if (!d) return;
+      var zoomIn = d > 0;
+      var consume = zoomIn ? map.getZoom() >= map.getMaxZoom()
+                           : state.brushRadius < state.brushMax;
+      if (!consume) { wheelAcc = 0; return; }
+      e.preventDefault(); e.stopPropagation();
+
+      //a reversal starts a fresh notch rather than cancelling travel
+      if ((wheelAcc > 0) !== zoomIn) wheelAcc = 0;
+      wheelAcc += d;
+      if (Math.abs(wheelAcc) < WHEEL_PX) return;
+      wheelAcc = 0;   //one step per event: a fast spin must not skip sizes
+
+      var p    = pt(e);
+      var minR = brushMinPx(map, p.x, p.y);
+      var r    = state.brushRadius;
+      if (zoomIn) {
+        r = r / BRUSH_STEP;
+        state.brushAtMin = r <= minR;
+        if (state.brushAtMin) r = minR;
+      } else {
+        r = Math.min(state.brushMax, Math.max(r, minR) * BRUSH_STEP);
+        state.brushAtMin = false;
+      }
+      state.brushRadius = r;
+      updateCursor();
+    }, { passive: false });
+
     el.addEventListener("pointerup", endPointer);
     el.addEventListener("pointercancel", endPointer);
     //leaving the map is a good moment to send, but it must not cut a stroke short:
@@ -1336,6 +1412,8 @@
 
   on("set-brush-radius", function (radius) {
     state.brushRadius = radius;
+    state.brushMax    = radius;
+    state.brushAtMin  = false;
     updateCursor();
   });
 })();
