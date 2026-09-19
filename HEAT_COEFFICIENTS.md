@@ -269,11 +269,29 @@ the running maximum. Obstruction heights are the fixed per-class values in
 needs **no height raster and no new data dependency**.
 
 **What it changes.** Shade stops falling straight down. Over central Sion at
-5 m, the shaded fraction goes from **10.8 %** — the canopy's own footprint, all
-the previous model could express — to **43.5 % at midday and 53 % morning and
-afternoon**. That is the single largest correction in the whole rework, and it
-lands on the term Phase 1 showed matters most: shading collapses the spread
-between materials from 12.3 K sunlit to 4.6 K shaded.
+5 m, the shaded fraction goes from **10.3 %** — the canopy's own footprint, all
+the previous model could express — to **18.4 % at midday, 27.1 % morning and
+25.8 % afternoon**. That is the single largest correction in the whole rework,
+and it lands on the term Phase 1 showed matters most: shading collapses the
+spread between materials from 12.3 K sunlit to 4.6 K shaded.
+
+Those figures are lower than the first two drafts reported (43.5 %, then 40.7 %)
+because both were inflated by a bug, not because the caster got weaker. The
+march compared the running ray height against 0 rather than against the height
+of the cell it was testing, so any cell that was *itself* an obstruction counted
+as shaded the moment an equal-height neighbour stood upwind. A plain of
+identical blocks shaded 98 % of its own roofs; over Sion, 79 % of built-block
+cells were flagged shaded against 9 % of open artificial. Each of those roofs
+then selected the shaded material row — 0.0 K rather than 7.0 K at midday — and
+a fifth of the town centre read as a cool surface.
+
+Ground cells have `H = 0`, where the two forms are identical, which is why the
+whole verification suite passed: every check in it measured shade on ground.
+The comparison is now against the cell's own height, which is also what
+`heat_svf_matrix()` had been doing all along — the two modules had been
+disagreeing about whether a roof is in the sun. Group 7 of
+[verify_shadows.R](data-raw/verify_shadows.R) pins it down. Measured on
+ground-level cells only, midday shade is **12.3 %**.
 
 Verified against the geometry the tables already state — every shadow reaches
 `height / tan(elevation)` to within one cell, points within 0.3° of directly
@@ -306,10 +324,17 @@ within 0.03 across four geometries. Over central Sion, ground-level SVF runs
 
 One property surprises every reader of a summary table: **a cell that is itself
 an obstruction comes out at SVF ≈ 1.** Horizon angles are measured relative to
-the cell's own height, so a roof correctly sees the whole sky. It is harmless —
-the model reads ground-level cells — but an unmasked average over a town centre
-reports the rooftops rather than the streets, and the first draft of the
-verification failed for exactly that reason.
+the cell's own height, so a roof correctly sees the whole sky. An unmasked
+average over a town centre therefore reports the rooftops rather than the
+streets, and the first draft of the verification failed for exactly that reason.
+
+This is the right convention, and Phase 2 now shares it — but it did not at
+first, and the disagreement was worth more than either module's own tests. SVF
+said a roof sees open sky while the shadow march said the same roof was shaded.
+Whenever two modules answer the same physical question differently, one of them
+is wrong; here it was the march. Any summary of this model should still mask
+obstruction cells, because 35 % of a town-centre window is roof, and a mean over
+all cells is a mean over places nobody can stand.
 
 **The wall term** is a proximity flag, not SOLWEIG's wall-temperature scheme: a
 cell qualifies when it is sunlit, carries no obstruction of its own, and stands
@@ -375,21 +400,29 @@ radiative term dominates, geometry corrects it, advection is a whisper:
 
 | term | median | mean | min | max |
 | --- | --- | --- | --- | --- |
-| local | +0.00 | +3.00 | −4.00 | +9.00 |
-| svf | −0.09 | −0.26 | −1.62 | 0.00 |
-| wall | 0.00 | +0.15 | 0.00 | +2.00 |
-| advective | −0.30 | −0.35 | −1.44 | +1.23 |
-| **total** | **+0.85** | **+3.31** | **−5.20** | **+12.00** |
+| local | +7.00 | +3.74 | −4.50 | +9.00 |
+| svf | −0.10 | −0.26 | −1.66 | 0.00 |
+| wall | 0.00 | +0.14 | 0.00 | +2.00 |
+| advective | +0.21 | +0.23 | −1.49 | +1.29 |
+| **total** | **+6.64** | **+3.84** | **−5.22** | **+12.01** |
+
+The advective mean is *positive* over this window and that is not an error:
+central Sion is 35.7 % artificial and 19.7 % built block against 17.7 % grass and
+13.1 % tree, so the warm sources outweigh the cool ones. It is the one term that
+would flip sign on a site with more greenery than pavement, which is the whole
+point of having it.
 
 ### Two things that look like bugs and are not
 
-**The median is not monotonic across the day** (+0.6 morning, +0.3 midday, +1.1
-afternoon) while the mean is (+1.28, +2.81, +3.15). The shaded share of the map
-changes with sun elevation — 50 % morning, 40 % midday, 50 % afternoon — so the
-median lands on a different material-and-state combination in each bin. At midday
-the median cell is sunlit grass, which is the reference surface and therefore
-exactly 0.00 by construction. Every individual material really is hotter later in
-the day; the verification checks that cell by cell.
+**The median is not monotonic across the day** (+2.01 morning, +6.64 midday,
++3.71 afternoon) while the mean is (+1.92, +3.84, +4.40). The shaded share of the
+map changes with sun elevation — at ground level 25 % morning, 12 % midday, 23 %
+afternoon — so the median lands on a different material-and-state combination in
+each bin. At midday, with the sun at 66° and little of the ground in shadow, the
+median cell is sunlit artificial and the median jumps to that row; by 15:00 a
+quarter of the ground is shaded again and the median falls back even though every
+individual material is hotter. The verification checks the materials cell by
+cell, which is the claim that actually matters.
 
 **The ring artefact is gone.** Limitation 9 warned that cutting
 `amp · 2^(−d/half)` at `max_extent_m` leaves 8–12 % of the amplitude standing and
@@ -454,8 +487,11 @@ than convolving at 5 m for a maximum error of 0.076 K. A full three-bin read-out
 stays at about 1.7 s for a 1.4 × 1.0 km area.
 
 **What it changed in practice.** Central Sion at midday went from a mean of
-+2.77 K to **+3.31 K**: the old formulation was systematically over-optimistic,
-crediting every scattered clump with a full park's cooling.
++3.35 K to **+3.84 K**: the old formulation was systematically over-optimistic,
+crediting every scattered clump with a full park's cooling. The advective term
+itself moves from −0.26 K to +0.23 K over this window — it stops reading a paved
+town centre as net-cooled, because summing counts the warm sources too, and in
+central Sion they are the majority.
 
 ### And it exposed something the old form was hiding
 
