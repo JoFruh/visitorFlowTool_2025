@@ -115,8 +115,19 @@ heatObstructionHeight <- function(ground, canopy, geom = heatGeometry()){
 #' Ratti & Richens shadow march over a height matrix.
 #'
 #' Returns a logical matrix: TRUE where an obstruction blocks the direct beam at
-#' ground level. `res` is the cell size in metres, `elev`/`azim` degrees, with
-#' azimuth clockwise from north and pointing *toward* the sun.
+#' the cell's own surface. `res` is the cell size in metres, `elev`/`azim`
+#' degrees, with azimuth clockwise from north and pointing *toward* the sun.
+#'
+#' "Its own surface", not "ground level", is the whole of the last comparison
+#' below and it is not a detail. A cell that is itself an obstruction presents
+#' its roof to the sun, so the ray only has to clear `H` there, not 0. Compared
+#' against 0 instead, a flat plain of equal-height buildings shades 98 % of its
+#' own roofs at midday and an isolated building shades 80 % of itself - every
+#' roof reads as a cool surface because it picks the shaded row of the material
+#' table. On ground cells H is 0 and the two forms are identical, which is why
+#' this stayed invisible: the terms the tables were reviewed on never exercised
+#' it. It also puts this module back in agreement with heat_svf_matrix(), which
+#' measures horizon angles from the cell's own height for the same reason.
 #'
 #' The step is normalised so the longer of the two components is exactly one
 #' cell. That keeps every step a whole number of cells - the shift is then plain
@@ -166,7 +177,7 @@ heat_shadow_march <- function(H, res, elev, azim){
     cand[kr, kc] <- H[sr[kr], sc[kc]] - k * rise
     run <- pmax(run, cand)
   }
-  run > 0
+  run > H
 }
 
 #' Shade over an area for one time bin.

@@ -869,8 +869,10 @@ build_ground_canopy_CH <- function(out_dir = LC_OUT_DIR, tiles = NULL,
 #' "what was surveyed or drawn" and "what was inferred from a satellite"
 #' separable after the fact. Diff the two rasters and you have the provenance
 #' mask, at the cost of disk rather than of a second value per cell. The national
-#' merge at the end writes ground_CH_1m.tif and moves the previous file aside to
-#' ground_CH_1m_prefill.tif for exactly the same reason.
+#' merge at the end writes ground_CH_1m.{vrt,tif} and moves the previous pair
+#' aside to ground_CH_1m_prefill.{vrt,tif} for exactly the same reason - both
+#' extensions together, so a VRT never describes different cells from the .tif
+#' sharing its name.
 #'
 #' Restartable on the same terms as the build: a tile whose output already reads
 #' back at the right cell count is skipped unless `overwrite`.
@@ -944,12 +946,24 @@ fill_ground_canopy_CH <- function(out_dir = LC_OUT_DIR, tiles = NULL,
     stop(sprintf("%d unreadable filled tile(s), refusing to merge: %s",
                  sum(!ok), paste(tiles$tile_id[!ok], collapse = ", ")))
   }
-  v <- terra::vrt(files, file.path(out_dir, "ground_filled_CH_1m.vrt"), overwrite = TRUE)
-  f <- file.path(out_dir, "ground_CH_1m.tif")
-  if(file.exists(f)){
-    keep <- file.path(out_dir, "ground_CH_1m_prefill.tif")
-    if(!file.exists(keep)) file.rename(f, keep) else file.remove(f)
+  #The VRT moves aside with the .tif it describes, and the filled one takes the
+  #plain name. Anything else leaves ground_CH_1m.vrt pointing at the *unfilled*
+  #tiles while ground_CH_1m.tif beside it is filled - a trap, because rebuilding
+  #the .tif from the VRT whose name matches it is the obvious thing to do and it
+  #would silently undo step 9. The two names now always describe the same cells:
+  #
+  #  ground_CH_1m.{vrt,tif}          filled - what the app reads
+  #  ground_CH_1m_prefill.{vrt,tif}  surveyed and drawn only - the provenance half
+  #
+  #Diffing the pair still gives the inferred-cell mask, which was the point.
+  for(ext in c("vrt", "tif")){
+    old  <- file.path(out_dir, paste0("ground_CH_1m.", ext))
+    keep <- file.path(out_dir, paste0("ground_CH_1m_prefill.", ext))
+    if(!file.exists(old)) next
+    if(!file.exists(keep)) file.rename(old, keep) else file.remove(old)
   }
+  v <- terra::vrt(files, file.path(out_dir, "ground_CH_1m.vrt"), overwrite = TRUE)
+  f <- file.path(out_dir, "ground_CH_1m.tif")
   terra::writeRaster(v, f, datatype = "INT1U",
                      gdal = c(LC_GDAL, "BIGTIFF=YES"), overwrite = TRUE)
   message("wrote ", f)

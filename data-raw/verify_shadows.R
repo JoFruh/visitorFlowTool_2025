@@ -159,5 +159,62 @@ if (!is.null(s2)) {
              m_sh, m_su), m_sh < m_su)
 }
 
+## --- 7. an obstruction's own roof is in the sun -----------------------------
+## The march must clear the cell's OWN height, not 0. Compared against 0, a cell
+## that is itself a building is shaded by any neighbour of equal height, so a
+## district of uniform blocks reads as almost entirely shaded and every roof
+## picks the shaded row of the material table - a 5 K error over a fifth of a
+## Swiss town centre, with no symptom anywhere in groups 1-6 because every one
+## of those measures shade on GROUND cells, where H is 0 and the two forms agree.
+##
+## Note this is the same convention heat_svf_matrix() already uses (horizon
+## angles are measured from the cell's own height, so a roof sees open sky). The
+## two modules disagreeing is what made the Sion map show cool buildings.
+cat("\n")
+flat <- rast(ext(0, 300, 0, 300), resolution = 5, crs = "EPSG:2056")
+values(flat) <- 8L                                   # nothing but built block
+noc <- rast(flat); values(noc) <- 0L
+for (b in HEAT_BINS) {
+  sf_ <- heatShadeRaster(flat, noc, b)
+  frac <- mean(values(sf_) == 1)
+  ok(sprintf("uniform roof plain is sunlit at %s (%.1f%% shaded)", b, 100 * frac),
+     frac < 0.02)
+}
+## an isolated building cannot shade itself either
+iso <- rast(flat); values(iso) <- 3L; iso[28:32, 28:32] <- 8L
+si <- heatShadeRaster(iso, noc, "midday")
+roof <- values(iso) == 8
+ok(sprintf("an isolated building does not shade its own roof (%.1f%%)",
+           100 * mean(values(si)[roof] == 1)),
+   mean(values(si)[roof] == 1) < 0.02)
+## but it must still shade the ground beside it, or the fix has gone too far
+ok("the same building still shades the ground beside it",
+   sum(values(si) == 1 & !roof) > 0,
+   sprintf("[%d cells]", sum(values(si) == 1 & !roof)))
+## A genuinely taller neighbour must still cast onto a lower roof - otherwise the
+## fix has replaced one error with the opposite one. This goes at the march
+## directly with heights of its own: the per-class heights cannot express the
+## case at all, since tree (15 m) beats building (12 m) by 3 m, which at 45 deg
+## reaches under 3 m horizontally and the march's first step is a whole cell.
+## Sun due east at 45 deg, so shade falls west and each step drops exactly 5 m.
+Hm <- matrix(0, 9, 25)
+Hm[, 20] <- 30                       # a 30 m wall
+Hm[, 15:19] <- 5                     # 5 m roofs to its west
+mm <- heat_shadow_march(Hm, res = 5, elev = 45, azim = 90)
+ok("a 30 m wall shades the 5 m roof beside it", all(mm[, 19]))
+ok("... and the ground further along, out to where the ray lands",
+   all(mm[, 14]))
+## The discriminating case: at col 15 the ray has fallen to 5 m, so a roof
+## standing 8 m there is above it and lit, while bare ground at that same spot
+## is below it and shaded. Only a march that compares against the cell's own
+## height can return both. 8 rather than 5 deliberately - level-with-the-ray is
+## a floating-point tie (tan(pi/4) is not exactly 1) and would test luck.
+Hr <- Hm; Hr[, 15] <- 8
+ok("a roof standing above the ray is lit",
+   !any(heat_shadow_march(Hr, 5, 45, 90)[, 15]))
+Hg <- Hm; Hg[, 15] <- 0
+ok("... while ground at that same distance is shaded",
+   all(heat_shadow_march(Hg, 5, 45, 90)[, 15]))
+
 cat(sprintf("\n%d check(s) failed\n", fails))
 quit(status = if (fails == 0) 0 else 1)
