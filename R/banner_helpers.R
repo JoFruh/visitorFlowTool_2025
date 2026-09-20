@@ -51,6 +51,39 @@ vftSetBanner <- function(id, src){
 # `data-tip-de/fr/en` attributes, and swap them on the client. One helper is
 # needed for that: give me every language of one key at UI build time.
 
+#' One i18n key as PLAIN TEXT in the Translator's current language.
+#'
+#' `i18n$t()` does not always return a string. Once `shiny.i18n::usei18n()` has
+#' run - and every step module calls it at the top of its UI - the Translator
+#' switches to client-side mode and `t()` returns a
+#' `<span class="i18n" data-key="...">` tag instead, so the browser can swap the
+#' text on a language change without a round trip. That tag is a three-element
+#' list, and anywhere a bare string was expected it silently becomes three
+#' values: `c(i18n$t(a), i18n$t(b), i18n$t(c))` is length 9, which is how a
+#' selectInput's choices came to fail with "'names' attribute [9] must be the
+#' same length as the vector [3]".
+#'
+#' The span already carries the right translation as its only child, so this
+#' unwraps it rather than re-translating. Use it wherever the result has to be
+#' character - a select's choice labels, a plot title, a tooltip attribute -
+#' and plain `i18n$t()` wherever a tag is fine, which is most of the UI.
+#'
+#' The cost of unwrapping is that the client can no longer swap that text, so a
+#' caller using this must refresh its own labels when the language changes.
+vftTrText <- function(i18n, key){
+  if(is.null(i18n)) return(key)
+  out <- suppressWarnings(try(i18n$t(key), silent = TRUE))
+  if(inherits(out, "try-error")) return(key)
+  if(inherits(out, "shiny.tag")){
+    txt <- tryCatch(paste0(as.character(out$children[[1]]), collapse = ""),
+                    error = function(e) "")
+    return(if(nzchar(txt)) txt else key)
+  }
+  if(length(out) == 1L && !is.na(out) && nzchar(as.character(out))){
+    as.character(out)
+  }else key
+}
+
 #' Every language of one i18n key, as a character vector named by language.
 #'
 #' `i18n$t()` translates into whatever language the Translator is currently set
@@ -74,9 +107,14 @@ vftTrAll <- function(i18n, key, langs = c("de", "fr", "en")){
   keep <- i18n$get_translation_language()
   on.exit(i18n$set_translation_language(keep), add = TRUE)
 
+  #through vftTrText(), because this is called from vftStepNav() in app_ui.R,
+  #which today runs BEFORE the first step module calls usei18n() - but only
+  #today. Called the other way round, every language came back as the German
+  #key, since a tag fails the length-1 test below and falls through to `key`.
+  #Nothing about the call site advertises that ordering, so it is removed as a
+  #condition rather than documented as one.
   vapply(langs, function(l){
     i18n$set_translation_language(l)
-    out <- suppressWarnings(i18n$t(key))
-    if(length(out) != 1L || is.na(out)) key else as.character(out)
+    vftTrText(i18n, key)
   }, character(1))
 }

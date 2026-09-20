@@ -1836,6 +1836,16 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
 
     r$currentLang <- "en"
   }
+
+  #The time-of-day labels are plain text, not the <span> the client swaps by
+  #itself, because a select's options cannot hold a tag - see heatBinChoices().
+  #So they are re-rendered here, keeping whatever bin is selected: passing
+  #`choices` without `selected` would silently reset the read-out to midday on
+  #every language change.
+  sel <- shiny::isolate(r$heatBin)
+  if(is.null(sel) || !nzchar(sel)) sel <- HEAT_BIN_DEFAULT
+  shiny::updateSelectInput(inputId = "heatBin",
+                           choices = heatBinChoices(i18n()), selected = sel)
 })
 ##Observe end of render ####
       #observe event when map finishes rendering

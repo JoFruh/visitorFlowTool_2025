@@ -397,6 +397,23 @@ heatGeometryTerm <- function(shade, svf, wall, geom = heatGeometry(),
 #' alone. Kept beside heatHeights(), which is the list this must agree with.
 HEAT_OBSTRUCTION_IDS <- c(6L, 7L, 8L)
 
+#' The time-of-day choices for the Hitzeminderung control, labelled.
+#'
+#' Values are HEAT_BINS, which is what heatRaster() takes; labels are the German
+#' keys translated into whatever language the Translator is currently set to.
+#' Lives here rather than in the UI so the UI and the language observer that
+#' refreshes it cannot drift apart - they are the same list or they are a bug.
+#'
+#' Through vftTrText(), because a select's labels must be plain character and
+#' i18n$t() returns a tag once usei18n() has run. See vftTrText() for what that
+#' costs and why the server has to update these on a language change.
+heatBinChoices <- function(i18n = NULL){
+  keys <- c(morning = "Morgen", midday = "Mittag", afternoon = "Nachmittag")
+  stats::setNames(HEAT_BINS,
+                  vapply(HEAT_BINS, function(b) vftTrText(i18n, keys[[b]]),
+                         character(1)))
+}
+
 #' A cache for repeated heatRaster() calls over one area.
 #'
 #' Hand the same environment back on every call and each term is recomputed only

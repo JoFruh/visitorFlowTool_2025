@@ -343,14 +343,24 @@ vftDbg("UI6")
                                                        #The wrapper kills selectInput's bottom margin, which would
                                                        #otherwise push this column out of line with the brush tools
                                                        #beside it.
+                                                       #vftTrText(), not i18n$t(): usei18n() above puts the
+                                                       #Translator in client-side mode, where t() returns a
+                                                       #<span> tag rather than a string. A select's option
+                                                       #labels are plain text and cannot hold one - and three
+                                                       #tags in a row become nine list elements, which is
+                                                       #exactly the "'names' attribute [9] must be the same
+                                                       #length as the vector [3]" this used to die with.
+                                                       #
+                                                       #Unwrapping means the client cannot swap these labels
+                                                       #on a language change either, so the server updates them
+                                                       #instead - see the heatBin block in the language
+                                                       #observer in newVersions_server.R.
                                                        shiny::div(
                                                          style = "margin-bottom:-15px; width:104px;",
                                                          shiny::selectInput(
                                                            inputId = shiny::NS(id, "heatBin"), label = NULL,
-                                                           choices = stats::setNames(
-                                                             c("morning", "midday", "afternoon"),
-                                                             c(i18n$t("Morgen"), i18n$t("Mittag"), i18n$t("Nachmittag"))),
-                                                           selected = "midday", width = "104px"
+                                                           choices = heatBinChoices(i18n),
+                                                           selected = HEAT_BIN_DEFAULT, width = "104px"
                                                          )
                                                        ),
                                                        #PLAN IMPORT. Opens the browser's file picker; the file
