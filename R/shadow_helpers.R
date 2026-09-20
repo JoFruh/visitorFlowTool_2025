@@ -206,7 +206,13 @@ heatShadeRaster <- function(ground, canopy, bin = "midday", geom = heatGeometry(
   #transpose the shade raster comes back transposed - which on a square window
   #still looks like a plausible map of shadows, and is silently wrong everywhere.
   out <- terra::setValues(terra::rast(H), as.integer(t(cast)))
-  own <- terra::ifel(canopy %in% c(6L, 7L), 1L, 0L)
+  #NOT `canopy %in% c(6L, 7L)`: terra defines an S4 `%in%` for SpatRaster, but
+  #this package reaches terra through `terra::` and imports nothing from it, so
+  #inside the namespace `%in%` is base's - which calls match() on the raster
+  #and dies with "'match' requires vector arguments". It works in any script
+  #that has library(terra) on the search path, which is why it passed every
+  #check and still killed the app.
+  own <- terra::ifel(canopy == 6L | canopy == 7L, 1L, 0L)
   own <- terra::ifel(is.na(own), 0L, own)
   out <- terra::ifel((out + own) > 0, 1L, 0L)
   names(out) <- "shade"

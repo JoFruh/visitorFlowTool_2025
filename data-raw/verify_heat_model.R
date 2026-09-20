@@ -319,5 +319,32 @@ ok("a change of area rebuilds instead of reusing the old grid",
    !is.null(h2c) && ext(h2c) == ext(h2) &&
      max(abs(values(h2c) - values(h2)), na.rm = TRUE) == 0)
 
+cat("\n=== 9. run it the way the app runs it: terra NOT on the search path ===\n")
+## The defect this exists for shipped twice and passed every check above:
+##   terra::ifel(canopy %in% c(6L, 7L), ...)   and   terra::ifel(pch %in% big, ...)
+## terra defines `%in%` as an S4 method on SpatRaster, but the package reaches
+## terra only through `terra::` and imports nothing from it - so inside the
+## package namespace `%in%` is *base's*, which calls match() on a SpatRaster and
+## dies with "'match' requires vector arguments". Every script in data-raw opens
+## with library(terra), which puts terra's generic on the search path and hides
+## the bug completely. So take it off and run the real functions.
+detach("package:terra")
+r9 <- try({
+  s9 <- heatShadeRaster(gr, cn, "midday")
+  m9 <- heat_source_mask(gr, cn, dtr, HEAT_RES)
+  h9 <- heatRaster(aoi, bin = "midday")
+  list(shade = s9, mask = m9, heat = h9)
+}, silent = TRUE)
+suppressPackageStartupMessages(library(terra))
+ok("the whole heat path runs with terra unattached (the app's condition)",
+   !inherits(r9, "try-error"),
+   if (inherits(r9, "try-error")) conditionMessage(attr(r9, "condition")) else "")
+ok("...and returns a surface, not an empty one",
+   !inherits(r9, "try-error") && !is.null(r9$heat) &&
+     any(is.finite(values(r9$heat))))
+ok("...and the shade raster is still 0/1",
+   !inherits(r9, "try-error") && !is.null(r9$shade) &&
+     all(stats::na.omit(unique(values(r9$shade))) %in% c(0, 1)))
+
 cat(sprintf("\n%d check(s) failed\n", fails))
 quit(status = if (fails == 0) 0 else 1)

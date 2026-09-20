@@ -304,7 +304,10 @@ heat_source_mask <- function(ground, canopy, row, res = NULL){
   fr  <- terra::freq(pch)
   big <- fr$value[fr$count * res^2 >= (if(is.na(mp)) 0 else mp) * 10000]
   if(!length(big)) return(NULL)
-  msk <- terra::ifel(pch %in% big, 1, 0)
+  #subst(), not `pch %in% big` - same trap as in heatShadeRaster(): terra's S4
+  #`%in%` is invisible inside this namespace, so that form falls through to
+  #base's and calls match() on a SpatRaster.
+  msk <- terra::subst(pch, from = big, to = rep(1, length(big)), others = 0)
   terra::ifel(is.na(msk), 0, msk)
 }
 
