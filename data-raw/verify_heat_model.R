@@ -231,6 +231,76 @@ for (s in walk) {
   ok(sprintf("cached frame is identical after: %s", s[[1]]),
      length(d) > 0 && max(d) == 0, sprintf("[max |diff| %.3g]", max(d)))
 }
+## The incremental baseline: a stroke INSIDE an already-painted area, so the
+## edits keep their extent and only a handful of 1 m cells differ. That is the
+## path heat_landcover() re-reads a window for, and the one a live repaint would
+## take on every flush. The whole stroke must still land, and nothing outside it
+## may move - a window snapped in rather than out would corrupt the blocks on the
+## boundary, where a 5 m cell would take its mode from only part of its cells.
+big <- ed(1, 400)
+stroke <- function(cls){
+  r <- big
+  ix <- cells(r, ext(CX - 30, CX + 30, CY - 30, CY + 30))
+  r[ix] <- as.integer(cls); r
+}
+ca2 <- heatCacheNew()
+invisible(heatRaster(aoi, big, NULL, bin = "midday", cache = ca2))
+for (cls in c(3, 5, 2)) {
+  cold <- heatRaster(aoi, stroke(cls), NULL, bin = "midday")
+  warm <- heatRaster(aoi, stroke(cls), NULL, bin = "midday", cache = ca2)
+  d <- abs(values(cold) - values(warm)); d <- d[is.finite(d)]
+  ok(sprintf("a stroke inside a painted area is exact (class %d)", cls),
+     length(d) > 0 && max(d) == 0, sprintf("[max |diff| %.3g]", max(d)))
+}
+## and the stroke really did reach the model, rather than being lost in a window
+## that never got re-read - which would also give max |diff| of 0 against a cold
+## call only if the cold call were wrong too, so compare the two class fields
+w3 <- heatRaster(aoi, stroke(3), NULL, bin = "midday", cache = ca2)
+w5 <- heatRaster(aoi, stroke(5), NULL, bin = "midday", cache = ca2)
+ok("and repainting that stroke changes the surface",
+   max(abs(values(w3) - values(w5)), na.rm = TRUE) > 1)
+
+## THE CASE THAT BREAKS A NAIVE DIRTY RECTANGLE.
+##
+## min_patch_ha is a property of a whole connected patch, so one cell can change
+## the eligibility of cells far outside any halo drawn around the edit. A 300 m
+## tree avenue at 0.3 ha clears the 0.2 ha floor; erase one cell pair at its
+## midpoint and it becomes two 0.15 ha halves, both below the floor, and the
+## entire line stops being a source - changing cells 256 m from the edit.
+##
+## The incremental path survives this because it diffs the mask AFTER the patch
+## test, not the class raster before it: every cell that stopped qualifying
+## shows up in that diff, so the window covers the whole avenue rather than the
+## erased cell. A diff taken on the raw paint would miss it entirely.
+avenue <- function(gap) {
+  r <- rast(ext(CX - 150, CX + 150, CY - 5, CY + 5), resolution = 1, crs = "EPSG:2056")
+  values(r) <- 7L
+  if (gap) r[cells(r, ext(CX - 3, CX + 3, CY - 5, CY + 5))] <- NA
+  r
+}
+ca3 <- heatCacheNew()
+a_full <- heatRaster(aoi, NULL, avenue(FALSE), bin = "midday", cache = ca3)
+inc    <- heatRaster(aoi, NULL, avenue(TRUE),  bin = "midday", cache = ca3)
+cold   <- heatRaster(aoi, NULL, avenue(TRUE),  bin = "midday")
+d <- abs(values(inc) - values(cold)); d <- d[is.finite(d)]
+ok("cutting a tree avenue below min_patch_ha is exact incrementally",
+   length(d) > 0 && max(d) == 0, sprintf("[max |diff| %.3g]", max(d)))
+ok("...and it really did change the surface far from the cut",
+   max(abs(values(a_full) - values(cold)), na.rm = TRUE) > 0.05,
+   sprintf("[%.2f K]", max(abs(values(a_full) - values(cold)), na.rm = TRUE)))
+
+## the windowed convolution must equal the full one wherever it is defined
+dtr <- dec[dec$class_id == 7, , drop = FALSE]
+mk  <- heat_source_mask(gr, cn, dtr, HEAT_RES)
+if (!is.null(mk)) {
+  fullf <- heat_adv_field(mk, dtr, HEAT_RES, HEAT_ADV_RES)
+  w     <- ext(CX - 200, CX + 200, CY - 150, CY + 150)
+  partf <- heat_adv_field(mk, dtr, HEAT_RES, HEAT_ADV_RES, win = w)
+  cmp   <- abs(values(crop(fullf, ext(partf))) - values(partf))
+  ok(sprintf("windowed advective field matches the full one (max %.3g K)",
+             max(cmp, na.rm = TRUE)), max(cmp, na.rm = TRUE) < 1e-9)
+}
+
 ## and it must still be a cache - a no-op call should reuse, not rebuild
 t0 <- Sys.time(); invisible(heatRaster(aoi, ed(5,120), NULL, bin="midday", cache=ca))
 twarm <- as.numeric(difftime(Sys.time(), t0, units = "secs"))

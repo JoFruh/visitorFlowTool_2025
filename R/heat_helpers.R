@@ -268,41 +268,88 @@ heatAdvectiveTerm <- function(ground, canopy, dec = heatDecay(), res = NULL,
   if(is.null(dec)) return(NULL)
   if(is.null(res)) res <- terra::res(ground)[1]
   acc <- ground * 0
-  cell_m2 <- res^2
-  fact <- max(1L, as.integer(round(conv_res / res)))
 
   for(i in seq_len(nrow(dec))){
-    half <- dec$half_dist_m[i]; mx <- dec$max_extent_m[i]
-    amp  <- dec$amp_edge_K[i];  mp <- dec$min_patch_ha[i]
-    if(is.na(half) || is.na(mx) || is.na(amp) || amp == 0) next
-
-    cid <- dec$class_id[i]
-    src <- terra::ifel((ground == cid) | (canopy == cid), 1, NA)
-    if(all(is.na(terra::values(src)))) next
-
-    #the patch-size test, at the FULL grid: coarsen first and a narrow avenue of
-    #trees disappears, and every patch area is misjudged
-    pch <- terra::patches(src, directions = 8, zeroAsNA = TRUE)
-    fr  <- terra::freq(pch)
-    big <- fr$value[fr$count * cell_m2 >= (if(is.na(mp)) 0 else mp) * 10000]
-    if(!length(big)) next
-    msk <- terra::ifel(pch %in% big, 1, 0)
-    msk <- terra::ifel(is.na(msk), 0, msk)
-
-    if(fact > 1){
-      #mean, not modal: fractional cover preserves the total source area, so a
-      #thin line of trees still weighs what it is worth on the coarse grid
-      mk <- terra::aggregate(msk, fact, fun = "mean", na.rm = TRUE)
-      k  <- heat_decay_kernel(half, mx, conv_res)
-      cv <- terra::focal(mk, w = k, fun = "sum", na.rm = TRUE, fillvalue = 0)
-      cv <- terra::resample(cv, msk, method = "bilinear")
-    }else{
-      k  <- heat_decay_kernel(half, mx, res)
-      cv <- terra::focal(msk, w = k, fun = "sum", na.rm = TRUE, fillvalue = 0)
-    }
-    acc <- acc + amp * cv / heat_kernel_halfplane(k)
+    msk <- heat_source_mask(ground, canopy, dec[i, , drop = FALSE], res)
+    if(is.null(msk)) next
+    cv <- heat_adv_field(msk, dec[i, , drop = FALSE], res, conv_res)
+    if(!is.null(cv)) acc <- acc + cv
   }
   acc
+}
+
+#' The cells of one class that qualify as an advective source, as a 0/1 raster.
+#'
+#' NULL when the class has no cell in the area, or none in a patch large enough
+#' to clear `min_patch_ha`. Split out of heatAdvectiveTerm() so a cached run can
+#' compare this against the mask it convolved last time: differencing *here*,
+#' after the patch test rather than before it, is what makes an incremental
+#' rebuild safe. `min_patch_ha` is a property of a whole connected patch, so a
+#' single erased cell can drop a 300 m tree avenue below the floor and change
+#' the field 256 m away; a diff taken on the raw class raster would miss that,
+#' while a diff taken here shows every cell that stopped qualifying.
+heat_source_mask <- function(ground, canopy, row, res = NULL){
+  half <- row$half_dist_m[1]; mx <- row$max_extent_m[1]
+  amp  <- row$amp_edge_K[1];  mp <- row$min_patch_ha[1]
+  if(is.na(half) || is.na(mx) || is.na(amp) || amp == 0) return(NULL)
+  if(is.null(res)) res <- terra::res(ground)[1]
+
+  cid <- row$class_id[1]
+  src <- terra::ifel((ground == cid) | (canopy == cid), 1, NA)
+  if(all(is.na(terra::values(src)))) return(NULL)
+
+  #the patch-size test, at the FULL grid: coarsen first and a narrow avenue of
+  #trees disappears, and every patch area is misjudged
+  pch <- terra::patches(src, directions = 8, zeroAsNA = TRUE)
+  fr  <- terra::freq(pch)
+  big <- fr$value[fr$count * res^2 >= (if(is.na(mp)) 0 else mp) * 10000]
+  if(!length(big)) return(NULL)
+  msk <- terra::ifel(pch %in% big, 1, 0)
+  terra::ifel(is.na(msk), 0, msk)
+}
+
+#' Convolve one class's source mask into its share of the advective term.
+#'
+#' `win` computes only that extent, for a caller that knows the rest of the
+#' field cannot have moved. The mask is still passed whole, because a cell
+#' inside `win` draws on sources up to `max_extent_m` outside it - bounding the
+#' *output* is safe, bounding the input is not.
+heat_adv_field <- function(msk, row, res = NULL, conv_res = HEAT_ADV_RES,
+                           win = NULL){
+  if(is.null(msk)) return(NULL)
+  if(is.null(res)) res <- terra::res(msk)[1]
+  half <- row$half_dist_m[1]; mx <- row$max_extent_m[1]; amp <- row$amp_edge_K[1]
+  fact <- max(1L, as.integer(round(conv_res / res)))
+
+  if(fact > 1){
+    #mean, not modal: fractional cover preserves the total source area, so a
+    #thin line of trees still weighs what it is worth on the coarse grid
+    mk <- terra::aggregate(msk, fact, fun = "mean", na.rm = TRUE)
+    k  <- heat_decay_kernel(half, mx, conv_res)
+    if(!is.null(win)) mk <- terra::crop(mk, heat_adv_pad(win, mx, mk))
+    cv <- terra::focal(mk, w = k, fun = "sum", na.rm = TRUE, fillvalue = 0)
+    cv <- terra::resample(cv, if(is.null(win)) msk else terra::crop(msk, win),
+                          method = "bilinear")
+  }else{
+    k  <- heat_decay_kernel(half, mx, res)
+    m2 <- if(is.null(win)) msk else terra::crop(msk, heat_adv_pad(win, mx, msk))
+    cv <- terra::focal(m2, w = k, fun = "sum", na.rm = TRUE, fillvalue = 0)
+    if(!is.null(win)) cv <- terra::crop(cv, win)
+  }
+  amp * cv / heat_kernel_halfplane(k)
+}
+
+#' `win` grown by one full reach and snapped to `r`'s grid.
+#'
+#' The kernel reaches `max_extent_m`, and terra's focal fills past the edge of
+#' what it is given with `fillvalue = 0`. Handing it exactly `win` would
+#' therefore treat every source just outside as absent and draw a cold ring
+#' around the window - so it gets a margin of real data to read, and the result
+#' is cropped back afterwards.
+heat_adv_pad <- function(win, mx, r){
+  p <- terra::ext(terra::xmin(win) - mx, terra::xmax(win) + mx,
+                  terra::ymin(win) - mx, terra::ymax(win) + mx)
+  terra::intersect(terra::align(p, r, snap = "out"), terra::ext(r))
 }
 
 #' The two geometry terms, converted from Tmrt into PET.
@@ -445,6 +492,148 @@ heat_cached <- function(cache, key, dirty, build){
   out
 }
 
+#' An edits raster reduced to what is needed to tell two of them apart.
+heat_edit_snap <- function(e){
+  if(is.null(e)) return(NULL)
+  list(ext = as.vector(terra::ext(e)), dim = dim(e)[1:2],
+       v = terra::values(e, mat = FALSE))
+}
+
+#' The extent a repaint changed, NULL for "nothing" and NA for "cannot tell".
+#'
+#' NA is returned whenever the two snapshots are not directly comparable - one
+#' side absent, a different extent, a different grid. That is the conservative
+#' answer and it costs a full rebuild, which is what the first call and a plan
+#' import both get.
+heat_edit_delta <- function(old, new){
+  if(is.null(old) && is.null(new)) return(NULL)
+  if(is.null(old) || is.null(new)) return(NA)
+
+  xr <- function(s) (s$ext[2] - s$ext[1]) / s$dim[2]
+  yr <- function(s) (s$ext[4] - s$ext[3]) / s$dim[1]
+  if(!isTRUE(all.equal(xr(old), xr(new))) ||
+     !isTRUE(all.equal(yr(old), yr(new)))) return(NA)
+
+  #The two extents are usually NOT the same. A version's painted raster is the
+  #bounding box of everything painted so far, so it grows the first time a
+  #stroke lands outside it - which is most strokes early on. Comparing only
+  #same-extent pairs would send all of those down the full-rebuild path, so the
+  #two are laid on their common grid first. Both are on the global paint grid
+  #(see PAINT_RES), so extending aligns them exactly.
+  if(!isTRUE(all.equal(old$ext, new$ext)) || !identical(old$dim, new$dim)){
+    a <- heat_edit_rast(old); b <- heat_edit_rast(new)
+    u <- terra::union(terra::ext(a), terra::ext(b))
+    a <- terra::extend(a, u); b <- terra::extend(b, u)
+    if(!all(dim(a)[1:2] == dim(b)[1:2])) return(NA)
+    old <- list(ext = as.vector(u), dim = dim(a)[1:2],
+                v = terra::values(a, mat = FALSE))
+    new <- list(ext = as.vector(u), dim = dim(b)[1:2],
+                v = terra::values(b, mat = FALSE))
+  }
+  if(length(old$v) != length(new$v)) return(NA)
+
+  d <- which(xor(is.na(old$v), is.na(new$v)) |
+             (!is.na(old$v) & !is.na(new$v) & old$v != new$v))
+  if(!length(d)) return(NULL)
+
+  nc  <- new$dim[2]
+  row <- ((d - 1L) %/% nc) + 1L
+  col <- ((d - 1L) %%  nc) + 1L
+  #rows run north to south, so row 1 is the top of the extent
+  terra::ext(new$ext[1] + (min(col) - 1) * xr(new), new$ext[1] + max(col) * xr(new),
+             new$ext[4] - max(row) * yr(new),       new$ext[4] - (min(row) - 1) * yr(new))
+}
+
+#' Rebuild an edits raster from the snapshot heat_edit_snap() kept of it.
+heat_edit_rast <- function(s){
+  r <- terra::rast(nrows = s$dim[1], ncols = s$dim[2],
+                   xmin = s$ext[1], xmax = s$ext[2],
+                   ymin = s$ext[3], ymax = s$ext[4], crs = "EPSG:2056")
+  terra::setValues(r, s$v)
+}
+
+#' The class rasters a heat run works on: the national baseline at `res`, with
+#' the version's paint laid over it.
+#'
+#' With a cache this rebuilds only the cells a repaint touched. Aggregation is
+#' blockwise - a 5 m cell is the modal class of its own 25 one-metre cells and
+#' of nothing else - so patching by the changed extent is exact rather than
+#' approximate, provided the window is snapped out to the coarse grid first.
+#'
+#' Worth doing because this is the only part of heatRaster() still working at
+#' 1 m: reading the two national rasters and laying the paint over them is
+#' 0.48 s of a 0.74 s warm call over 1.8 x 1.3 km, and 1.4 s over 3.6 x 2.6 km.
+#' Holding the 1 m seed instead would cost 150 MB on that larger area - 25x
+#' every other cached layer put together - which is why this re-reads a small
+#' window rather than keeping the big one.
+heat_landcover <- function(aoi, ge, ce, res, cache, ...){
+  full <- function(){
+    seed <- paintLandcoverSeed(aoi, ...)
+    if(is.null(seed)) return(NULL)
+    g <- paintOverlayEdits(seed$ground, ge)
+    c_ <- paintOverlayEdits(seed$canopy, ce)
+    f <- res / terra::res(g)[1]
+    if(f > 1){
+      g  <- terra::aggregate(g,  fact = f, fun = "modal", na.rm = TRUE)
+      c_ <- terra::aggregate(c_, fact = f, fun = "modal", na.rm = TRUE)
+    }
+    list(ground = g, canopy = c_)
+  }
+  if(is.null(cache)) return(full())
+
+  akey <- paste(c(res, format(as.vector(sf::st_bbox(aoi)), digits = 12)),
+                collapse = "|")
+  sg <- heat_edit_snap(ge); sc <- heat_edit_snap(ce)
+
+  store <- function(lc){
+    if(is.null(lc)) return(lc)
+    cache$akey  <- akey
+    cache$lctpl <- terra::rast(lc$ground)
+    cache$lcg   <- terra::values(lc$ground, mat = FALSE)
+    cache$lcc   <- terra::values(lc$canopy, mat = FALSE)
+    cache$eg    <- sg; cache$ec <- sc
+    lc
+  }
+  if(!identical(cache$akey, akey) || is.null(cache$lctpl)) return(store(full()))
+
+  #three answers, told apart by type rather than by value: NULL is "nothing
+  #changed", a SpatExtent is "this much changed", anything else is the NA that
+  #means "cannot tell". is.na() on a SpatExtent is an S4 warning, not a test.
+  dg <- heat_edit_delta(cache$eg, sg)
+  dc <- heat_edit_delta(cache$ec, sc)
+  known <- function(d) is.null(d) || inherits(d, "SpatExtent")
+  if(!known(dg) || !known(dc)) return(store(full()))
+
+  rebuild <- function(){
+    list(ground = terra::setValues(terra::rast(cache$lctpl), cache$lcg),
+         canopy = terra::setValues(terra::rast(cache$lctpl), cache$lcc))
+  }
+  if(is.null(dg) && is.null(dc)) return(rebuild())
+
+  win <- if(is.null(dg)) dc else if(is.null(dc)) dg else terra::union(dg, dc)
+  #snap out to the coarse grid: a block half inside the window would otherwise
+  #be recomputed from part of its cells and come back with the wrong mode
+  win <- terra::align(win, cache$lctpl, snap = "out")
+  win <- terra::intersect(win, terra::ext(cache$lctpl))
+  if(is.null(win)) return(rebuild())
+
+  seed <- paintLandcoverSeed(aoi, ..., win = win)
+  if(is.null(seed)) return(store(full()))
+  g <- paintOverlayEdits(seed$ground, if(is.null(ge)) NULL else terra::crop(ge, win))
+  c_ <- paintOverlayEdits(seed$canopy, if(is.null(ce)) NULL else terra::crop(ce, win))
+  f <- res / terra::res(g)[1]
+  if(f > 1){
+    g  <- terra::aggregate(g,  fact = f, fun = "modal", na.rm = TRUE)
+    c_ <- terra::aggregate(c_, fact = f, fun = "modal", na.rm = TRUE)
+  }
+  idx <- terra::cells(cache$lctpl, terra::ext(g))
+  if(length(idx) != terra::ncell(g)) return(store(full()))   #misaligned: refuse
+  cache$lcg[idx] <- terra::values(g,  mat = FALSE)
+  cache$lcc[idx] <- terra::values(c_, mat = FALSE)
+  cache$eg <- sg; cache$ec <- sc
+  rebuild()
+}
+
 #' The advective term, one cached layer per class.
 #'
 #' Same sum as heatAdvectiveTerm() over the whole table - it is called here once
@@ -457,14 +646,80 @@ heat_advective_cached <- function(ground, canopy, dec, res, cache, touched){
     cid <- dec$class_id[i]
     if(is.na(dec$half_dist_m[i]) || is.na(dec$amp_edge_K[i]) ||
        dec$amp_edge_K[i] == 0) next
-    row   <- dec[i, , drop = FALSE]
-    dirty <- is.null(touched) || cid %in% touched
-    lay   <- heat_cached(cache, paste0("adv", cid), dirty,
-                         function() heatAdvectiveTerm(ground, canopy, row, res = res))
-    if(is.null(lay)) next
+    row <- dec[i, , drop = FALSE]
+    key <- paste0("adv", cid)
+
+    #a class nothing was painted over or into cannot have moved
+    if(!is.null(touched) && !(cid %in% touched) && !is.null(cache) &&
+       !is.null(cache$v[[key]])){
+      lay <- terra::setValues(terra::rast(cache$tpl), cache$v[[key]])
+      acc <- if(is.null(acc)) lay else acc + lay
+      next
+    }
+
+    msk <- heat_source_mask(ground, canopy, row, res)
+    mv  <- if(is.null(msk)) NULL else terra::values(msk, mat = FALSE) > 0
+    win <- heat_mask_delta(cache, key, mv, msk, row$max_extent_m[1])
+
+    if(is.null(msk)){
+      if(!is.null(cache)) cache$v[[key]] <- NULL
+      next
+    }
+    if(identical(win, "none") && !is.null(cache$v[[key]])){
+      lay <- terra::setValues(terra::rast(cache$tpl), cache$v[[key]])
+      acc <- if(is.null(acc)) lay else acc + lay
+      next
+    }
+
+    if(inherits(win, "SpatExtent") && !is.null(cache$v[[key]])){
+      #only the part of the field that could have moved
+      part <- heat_adv_field(msk, row, res, HEAT_ADV_RES, win = win)
+      lay  <- terra::setValues(terra::rast(cache$tpl), cache$v[[key]])
+      idx  <- terra::cells(lay, terra::ext(part))
+      if(length(idx) == terra::ncell(part)){
+        vals <- cache$v[[key]]
+        vals[idx] <- terra::values(part, mat = FALSE)
+        cache$v[[key]] <- vals
+        lay <- terra::setValues(terra::rast(cache$tpl), vals)
+        acc <- if(is.null(acc)) lay else acc + lay
+        next
+      }
+    }
+
+    lay <- heat_adv_field(msk, row, res, HEAT_ADV_RES)
+    if(!is.null(cache)) cache$v[[key]] <- terra::values(lay, mat = FALSE)
     acc <- if(is.null(acc)) lay else acc + lay
   }
   acc
+}
+
+#' Where one class's eligible-source mask changed, and how far that reaches.
+#'
+#' "none" when the mask is untouched, a SpatExtent covering everything the
+#' change can reach, or NULL when there is nothing to compare against. The
+#' extent is the changed cells grown by `max_extent_m`, which is the whole of
+#' the kernel's reach - beyond it a changed source contributes exactly zero,
+#' because the decay curve is renormalised to land on zero there rather than
+#' being truncated while still carrying amplitude.
+heat_mask_delta <- function(cache, key, mv, msk, mx){
+  if(is.null(cache) || is.null(mv)) return(NULL)
+  slot <- paste0("m_", key)
+  old  <- cache[[slot]]
+  cache[[slot]] <- mv
+  if(is.null(old) || length(old) != length(mv)) return(NULL)
+  d <- which(old != mv)
+  if(!length(d)) return("none")
+
+  nc  <- terra::ncol(msk)
+  row <- ((d - 1L) %/% nc) + 1L
+  col <- ((d - 1L) %%  nc) + 1L
+  e   <- terra::ext(msk)
+  xr  <- terra::xres(msk); yr <- terra::yres(msk)
+  ch  <- terra::ext(terra::xmin(e) + (min(col) - 1) * xr,
+                    terra::xmin(e) + max(col) * xr,
+                    terra::ymax(e) - max(row) * yr,
+                    terra::ymax(e) - (min(row) - 1) * yr)
+  heat_adv_pad(ch, mx, msk)
 }
 
 #' The heat raster for an area.
@@ -486,26 +741,16 @@ heatRaster <- function(aoi, groundEdits = NULL, canopyEdits = NULL,
                        cache = NULL, ...){
   vftTime("heat:heatRaster", {
   bin  <- match.arg(bin, HEAT_BINS)
-  #The seed is deliberately NOT cached, although it depends on neither the edits
-  #nor the bin. It is the only raster here still at 1 m: holding it would cost
-  #150 MB on a 3.6 km area - 25x every cached layer below put together - to save
-  #0.33 s of the 2.38 s this function takes. The edits are painted at 1 m, so
-  #there is no coarser version of it to keep instead.
-  seed <- paintLandcoverSeed(aoi, ...)
-  if(is.null(seed)) return(NULL)
-
-  ground <- paintOverlayEdits(seed$ground, groundEdits)
-  canopy <- paintOverlayEdits(seed$canopy, canopyEdits)
-
-  #coarsen BEFORE the geometry, not after: the shadow march, the horizon scan
-  #and three distance transforms all run on this grid, and at 1 m over a 6 km
-  #AOI that is 36 M cells of work for a field that is smooth at 5 m anyway.
-  #`modal` and not `mean`, because these are class ids.
-  fact <- res / terra::res(ground)[1]
-  if(fact > 1){
-    ground <- terra::aggregate(ground, fact = fact, fun = "modal", na.rm = TRUE)
-    canopy <- terra::aggregate(canopy, fact = fact, fun = "modal", na.rm = TRUE)
-  }
+  #The baseline is read, painted and coarsened here. Coarsening happens BEFORE
+  #the geometry, not after: the shadow march, the horizon scan and three
+  #distance transforms all run on this grid, and at 1 m over a 6 km AOI that is
+  #36 M cells of work for a field that is smooth at 5 m anyway. `modal` and not
+  #`mean`, because these are class ids. With a cache, only the cells a repaint
+  #touched are re-read - see heat_landcover().
+  lc <- heat_landcover(aoi, groundEdits, canopyEdits, res, cache, ...)
+  if(is.null(lc)) return(NULL)
+  ground <- lc$ground
+  canopy <- lc$canopy
 
   geom  <- heatGeometry()
   #what this repaint touched, and therefore what has to be rebuilt. With no

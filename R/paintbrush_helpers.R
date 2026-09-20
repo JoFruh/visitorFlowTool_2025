@@ -248,9 +248,14 @@ paintAreaTooLarge <- function(aoi, buffer_m = 250, max_cells = 40e6,
 #' Masked-out cells become NA, which paintLandcoverBaselinePNG() writes as class
 #' 0 and the browser renders as nothing - the baseline ends up the shape of the
 #' study area. Pass `mask = FALSE` for the plain bounding box.
+#' `win` narrows the crop to an extent inside the area, for a caller that needs
+#' only part of it and does not want to pay for the rest. Everything else is
+#' unchanged - the same buffer, the same polygon mask - so a windowed read is
+#' cell-for-cell identical to the matching part of a full one. That is what lets
+#' heatRaster() rebuild only the cells a brush stroke touched.
 paintLandcoverSeed <- function(aoi, buffer_m = 250, max_cells = 40e6,
                                dir = paintLandcoverDir(), res = PAINT_RES,
-                               mask = TRUE){
+                               mask = TRUE, win = NULL){
   vftTime("paint:landcoverSeed", {
   if(is.null(aoi)) return(NULL)
   if(inherits(aoi, c("sf", "data.frame")) && nrow(aoi) == 0) return(NULL)
@@ -274,6 +279,12 @@ paintLandcoverSeed <- function(aoi, buffer_m = 250, max_cells = 40e6,
   if(inherits(shp, "try-error")) return(NULL)
   if(buffer_m > 0) shp <- sf::st_buffer(shp, buffer_m)
   e <- paintWindowExt(shp, res)
+  #narrowed BEFORE the cell count, so a windowed read of a huge area is not
+  #refused for the size of the area it is a window into
+  if(!is.null(win)){
+    if(terra::relate(e, win, "intersects")[1] == FALSE) return(NULL)
+    e <- terra::intersect(e, win)
+  }
 
   n <- paintWindowCells(e, res)
   if(n > max_cells){

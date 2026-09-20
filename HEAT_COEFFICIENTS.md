@@ -520,6 +520,49 @@ visible in the other direction too, where the distance transform simply returned
 zero and hid it. Splitting the two would need an inward length scale that no
 source in this set supports, so it is recorded rather than invented.
 
+## What it costs, and what a repaint costs
+
+A cold read-out is 1.7 s over 0.9 × 0.9 km, 2.4 s over 1.8 × 1.3 km and 11.8 s
+over 3.6 × 2.6 km — worse than linear, because `terra::patches()` and the
+convolution both are.
+
+`heatCacheNew()` makes the repeat calls cheap by keying each term on what it
+actually depends on. Nothing here is an approximation: every layer is reused
+untouched or rebuilt, and the verification demands the cached frame be *identical*
+to a cold one, not close to it.
+
+| | 0.9 km | 1.8 km | 3.6 km |
+| --- | --- | --- | --- |
+| cold | 1.71 | 2.36 | 11.77 |
+| brush stroke | 0.64 | 1.25 | 5.62 |
+| next stroke | 0.41 | 0.75 | 3.59 |
+| **time of day** | **0.23** | **0.24** | **0.42** |
+
+Three things make that work:
+
+- **the advective term is built one layer per class**, and a repaint can only
+  change the class painted over and the class painted
+- **the advective term and the SVF do not depend on the bin**, which is why a
+  change of time of day is nearly free — it used to recompute 1.93 s of work
+  whose inputs could not have moved
+- **only the 5 m blocks a stroke touched are re-read at 1 m**, which is what
+  separates the first stroke from the next one in the table above
+
+The window a stroke is rebuilt over comes from differencing the **eligible source
+mask** — after the patch test, not the class raster before it. That is what makes
+it safe. `min_patch_ha` is a property of a whole connected patch, so erasing one
+cell in a 300 m tree avenue drops the whole line below the floor and changes
+cells 256 m away; a window drawn around the edit would miss it, and a diff taken
+on the paint would not see it either. Taken on the mask, every cell that stopped
+qualifying is in the diff.
+
+**The floor is `terra::patches()`**, about 0.47 s per touched class at 3.6 km. It
+cannot be windowed — connectivity is global, and so is the area test that decides
+eligibility. So a repaint costs roughly `0.5 s × (classes touched)` on a large
+area however much else is cached. Live repaint is comfortable under about 1 km,
+workable at 2 km behind the brush's existing 800 ms debounce, and not realistic
+at 3.6 km without giving up either exactness or `min_patch_ha`.
+
 ## What is still not built
 
 - **No terrain anywhere.** The height field carries canopy and buildings only, so
