@@ -1465,13 +1465,7 @@ clearHeat <- function(){
     leaflet::removeControl("heatLegend")
   invisible(NULL)
 }
-
-#' Recompute from the current version's composite. Returns TRUE on success.
-#'
-#' Wrapped, and deliberately not fatal: the heat model is a read-out of the
-#' design, so a failure here must cost the read-out and nothing else - never the
-#' map or the paint the user has already done.
-#ONE CACHE PER SESSION, not per version.
+#ONE CACHE PER SESSION, not per version - and it no longer lives here.
 #
 #Terms are keyed on what they actually depend on, so a cache shared across
 #versions is not a leak between them: switching scenario changes the class
@@ -1479,13 +1473,39 @@ clearHeat <- function(){
 #rebuilt. Two versions that differ by one painted square therefore share the six
 #or seven layers they have in common, which is the case this is for.
 #
-#It lives here rather than in `r` on purpose. It holds no answer, only work
-#already done, so it must never take part in reactive invalidation - the
-#existing `r$heatRaster <- NULL` points stay exactly as they were and remain the
-#thing that decides when a surface is stale.
-heatCache <- heatCacheNew()
+#It now lives in the PROCESS THAT DOES THE WORK, because that is no longer this
+#one - see heatCacheFor() in R/heat_helpers.R. An environment cannot cross the
+#mirai boundary, and the 28 MB of value vectors it holds must not be serialised
+#onto this thread twice per call. The session token is the key.
+#
+#What has not changed is what decides when a surface is stale: the existing
+#`r$heatRaster <- NULL` points are still the only such decision, and the cache
+#still takes no part in reactive invalidation - it holds no answer, only work
+#already done.
 
-computeHeat <- function(){
+#A heat job already in flight. The recompute is seconds long and the switch is a
+#single click away from a second one, so without this a double click dispatches
+#twice and the two settle handlers race to write r$heatRaster.
+heatBusy <- FALSE
+
+#' Recompute from the current version's composite, OFF the main thread.
+#'
+#' `done(ok)` runs on the main thread once the surface is in `r$heatRaster`
+#' (ok = TRUE), or once it is known there is nothing to show (FALSE). Nothing is
+#' returned: the answer arrives through the callback, which is the whole change.
+#'
+#' This used to be synchronous, and on this deployment - one R process serving
+#' every user, see R/perf_helpers.R - a 12 second heat computation froze every
+#' connected session for its full duration, not just the one that clicked. The
+#' model is much faster now, but "faster" and "not on the shared thread" are
+#' different properties and only the second one scales.
+#'
+#' Wrapped, and deliberately not fatal: the heat model is a read-out of the
+#' design, so a failure here must cost the read-out and nothing else - never the
+#' map or the paint the user has already done.
+computeHeat <- function(done = function(ok) invisible(NULL)){
+  if(isTRUE(heatBusy)) return(invisible(NULL))
+
   pos <- shiny::isolate(r$position)
   aoi <- shape
   if(is.null(aoi) || length(sf::st_geometry(aoi)) == 0){
@@ -1504,28 +1524,51 @@ computeHeat <- function(){
   #session can reach this before the input has reported for the first time
   bin <- shiny::isolate(r$heatBin)
   if(is.null(bin) || !nzchar(bin)) bin <- HEAT_BIN_DEFAULT
-  ok <- tryCatch({
-    t0 <- Sys.time()
-    h  <- heatRaster(aoi,
-                     groundEdits = edits$paintedRaster,
-                     canopyEdits = edits$canopyRaster,
-                     bin = bin,
-                     cache = heatCache)
-    if(is.null(h)){
+
+  #terra objects are external pointers and cannot be serialised - wrap() out,
+  #unwrap() in the worker. Same contract as the providers in R/providers.R.
+  pack <- function(e) if(is.null(e)) NULL else terra::wrap(e)
+  ge  <- pack(edits$paintedRaster)
+  ce  <- pack(edits$canopyRaster)
+  key <- tryCatch(session$token, error = function(e) NULL)
+
+  #German source string as the key, per the convention in R/async_helpers.R: a
+  #deployment whose CSVs are behind shows readable German rather than a bare key.
+  progress <- vftProgress(message = "Hitzeberechnung",
+                          detail  = vftMsg("Dies sollte weniger als %d Sekunden dauern", 10),
+                          queue   = ipc::shinyQueue(),
+                          millis  = 1000)
+  heatBusy <<- TRUE
+  t0 <- Sys.time()
+
+  settle <- function(ok){
+    heatBusy <<- FALSE
+    done(ok)
+  }
+
+  vftFuture({
+    out <- heatRasterPacked(aoi, groundEdits = ge, canopyEdits = ce,
+                            bin = bin, key = key)
+    progress$close()
+    out
+  }, seed = TRUE, progress = progress) %...>% (function(packed){
+    if(is.null(packed)){
       message("heat: no land cover for this area - nothing to compute from")
-      FALSE
+      settle(FALSE)
     }else{
+      h <- terra::unwrap(packed)
       r$heatRaster <- h
       message(sprintf("heat: computed %d x %d at %g m for %s in %.1f s",
                       terra::nrow(h), terra::ncol(h), HEAT_RES, bin,
                       as.numeric(difftime(Sys.time(), t0, units = "secs"))))
-      TRUE
+      settle(TRUE)
     }
-  }, error = function(e){
-    message("heat: computation failed - ", conditionMessage(e))
-    FALSE
+  }) %...!% (function(e){
+    vftAsyncError(progress, "Hitzeberechnung")(e)
+    settle(FALSE)
   })
-  ok
+
+  invisible(NULL)
 }
 
 # The switch, and the only thing that computes heat.
@@ -1537,26 +1580,38 @@ computeHeat <- function(){
 # and the surface is redrawn from it instantly - which is what keeps toggling heat
 # off and back on free.
 #
-# The recompute still happens on a deliberate click and never on a stroke: it
-# costs seconds over a large area, on an R process every session shares. What
+# The recompute still happens on a deliberate click and never on a stroke. What
 # keeps that from going stale is the gate rather than a button - painting is
 # refused while heat is on, so the design cannot move underneath a displayed
 # surface. See applyPaintGates().
+#
+# Turning it ON is now two-phase: the click dispatches, and the switch only
+# lights up when the surface actually arrives. So "on" continues to mean "there
+# is a heat surface on the map" and never "a heat surface has been asked for" -
+# which matters because applyPaintGates() reads it to decide whether painting is
+# refused, and refusing paint for a surface that may yet fail to appear would
+# leave the brush dead with nothing to show for it.
 shiny::observeEvent(input$heatSwitch, {
   on <- !isTRUE(shiny::isolate(r$heatOn))
   if(on){
-    if(is.null(shiny::isolate(r$heatRaster)) && !computeHeat()){
-      return(NULL)   #nothing to show - leave the switch off rather than lying
+    show <- function(){
+      r$heatOn <- TRUE
+      shinyjs::addClass("heatSwitch", "paintToolActive")
+      drawHeat()
+      applyPaintGates()
     }
-    r$heatOn <- TRUE
-    shinyjs::addClass("heatSwitch", "paintToolActive")
-    drawHeat()
+    if(is.null(shiny::isolate(r$heatRaster))){
+      #nothing to show on failure - leave the switch off rather than lying
+      computeHeat(function(ok) if(isTRUE(ok)) show())
+      return(NULL)
+    }
+    show()
   }else{
     r$heatOn <- FALSE
     shinyjs::removeClass("heatSwitch", "paintToolActive")
     clearHeat()
+    applyPaintGates()
   }
-  applyPaintGates()
 }, ignoreInit = TRUE)
 
 # TIME OF DAY.
@@ -1575,17 +1630,24 @@ shiny::observeEvent(input$heatBin, {
   r$heatBin    <- bin
   r$heatRaster <- NULL
   if(!isTRUE(shiny::isolate(r$heatOn))) return(NULL)
-  if(computeHeat()){
-    drawHeat()
-  }else{
-    #nothing to show for this bin - drop the read-out rather than leave the
-    #previous time of day on screen under the new label
-    r$heatOn <- FALSE
-    shinyjs::removeClass("heatSwitch", "paintToolActive")
-    clearHeat()
-    applyPaintGates()
-  }
+  #The surface on screen belongs to the previous bin and is now mislabelled, so
+  #it goes at once rather than at the end of the job - the alternative is to
+  #leave midday on the map under a label that says afternoon for as long as the
+  #recompute takes, which is the exact confusion this observer exists to avoid.
+  clearHeat()
+  computeHeat(function(ok){
+    if(isTRUE(ok)){
+      drawHeat()
+    }else{
+      #nothing to show for this bin - drop the read-out rather than leave the
+      #switch claiming a surface that is not there
+      r$heatOn <- FALSE
+      shinyjs::removeClass("heatSwitch", "paintToolActive")
+      applyPaintGates()
+    }
+  })
 }, ignoreInit = TRUE)
+
 
 # An attempt to paint while heat is on. The browser swallowed the stroke and
 # asked for the explanation, which is given here because the translations are.

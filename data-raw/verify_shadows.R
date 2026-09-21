@@ -11,6 +11,19 @@ R <- Sys.getenv("VFT_R", file.path(getwd(), "R"))
 if(!dir.exists(R)) R <- "C:/Users/frueh/VScode_GitClones/visitorFlowTool_2025/R"
 source(file.path(R, "data_paths.R"))
 source(file.path(R, "shadow_helpers.R"))
+## The heat model's inner loops are C++ now (src/heat_cpp.cpp), so sourcing R/
+## alone no longer gives a runnable model. Load the WORKING TREE's compiled code,
+## not the installed package: the installed one is whatever was last built, and a
+## suite that silently tests an older binary than the source beside it is worse
+## than no suite. Build it with pkgbuild::compile_dll(".") if this fails.
+{
+  .dll <- file.path(dirname(R), "src", paste0("visitorFlowTool", .Platform$dynlib.ext))
+  if(!file.exists(.dll))
+    stop("compiled code missing: ", .dll,
+         " -- build it with:  Rscript -e 'pkgbuild::compile_dll(\".\")'")
+  dyn.load(.dll)
+  source(file.path(R, "RcppExports.R"))
+}
 
 fails <- 0
 ok <- function(what, cond, extra = "") {

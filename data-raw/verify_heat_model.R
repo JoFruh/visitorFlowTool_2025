@@ -13,6 +13,19 @@ for (f in c("perf_helpers.R", "data_paths.R", "paintbrush_helpers.R",
             "heat_helpers.R", "shadow_helpers.R", "svf_helpers.R")) {
   suppressWarnings(try(source(file.path(R, f)), silent = TRUE))
 }
+## The heat model's inner loops are C++ now (src/heat_cpp.cpp), so sourcing R/
+## alone no longer gives a runnable model. Load the WORKING TREE's compiled code,
+## not the installed package: the installed one is whatever was last built, and a
+## suite that silently tests an older binary than the source beside it is worse
+## than no suite. Build it with pkgbuild::compile_dll(".") if this fails.
+{
+  .dll <- file.path(dirname(R), "src", paste0("visitorFlowTool", .Platform$dynlib.ext))
+  if(!file.exists(.dll))
+    stop("compiled code missing: ", .dll,
+         " -- build it with:  Rscript -e 'pkgbuild::compile_dll(\".\")'")
+  dyn.load(.dll)
+  source(file.path(R, "RcppExports.R"))
+}
 
 fails <- 0
 ok <- function(what, cond, extra = "") {
@@ -195,6 +208,20 @@ ok(sprintf("almost nothing drops out as unclassified now (%.2f%%)", na_share),
    na_share < 1)
 
 cat("\n=== 8. the cache never changes an answer ===\n")
+## WHY THIS IS NO LONGER "== 0". The cache is still exact in the sense that
+## matters - a layer is either reused untouched or rebuilt over the whole area,
+## and no cell is ever left stale - but the convolution behind it is an FFT now
+## (heat_conv(), R/heat_helpers.R), and an FFT's rounding depends on the size of
+## the padded grid it runs on. A windowed rebuild pads to a different size than
+## a full one, so the two agree to floating point rather than to the bit.
+##
+## HEAT_EXACT_K is three orders of magnitude above that noise (measured at
+## 9.4e-13 K) and seven below the smallest error any of these checks exists to
+## catch: the avenue case below asserts that a real staleness shows up as more
+## than 0.05 K. So nothing is being waved through - a tolerance this tight
+## cannot hide a cell that failed to rebuild.
+HEAT_EXACT_K <- 1e-9
+
 ## A cache is only worth having if it is invisible in the output. This walks a
 ## realistic session - paint, switch bin, paint something that moves the
 ## geometry, switch back, erase - and demands the cached frame be IDENTICAL to a
@@ -229,7 +256,7 @@ for (s in walk) {
   warm <- heatRaster(aoi, s[[3]], s[[4]], bin = s[[2]], cache = ca)
   d <- abs(values(cold) - values(warm)); d <- d[is.finite(d)]
   ok(sprintf("cached frame is identical after: %s", s[[1]]),
-     length(d) > 0 && max(d) == 0, sprintf("[max |diff| %.3g]", max(d)))
+     length(d) > 0 && max(d) < HEAT_EXACT_K, sprintf("[max |diff| %.3g]", max(d)))
 }
 ## The incremental baseline: a stroke INSIDE an already-painted area, so the
 ## edits keep their extent and only a handful of 1 m cells differ. That is the
@@ -250,7 +277,7 @@ for (cls in c(3, 5, 2)) {
   warm <- heatRaster(aoi, stroke(cls), NULL, bin = "midday", cache = ca2)
   d <- abs(values(cold) - values(warm)); d <- d[is.finite(d)]
   ok(sprintf("a stroke inside a painted area is exact (class %d)", cls),
-     length(d) > 0 && max(d) == 0, sprintf("[max |diff| %.3g]", max(d)))
+     length(d) > 0 && max(d) < HEAT_EXACT_K, sprintf("[max |diff| %.3g]", max(d)))
 }
 ## and the stroke really did reach the model, rather than being lost in a window
 ## that never got re-read - which would also give max |diff| of 0 against a cold
@@ -284,7 +311,7 @@ inc    <- heatRaster(aoi, NULL, avenue(TRUE),  bin = "midday", cache = ca3)
 cold   <- heatRaster(aoi, NULL, avenue(TRUE),  bin = "midday")
 d <- abs(values(inc) - values(cold)); d <- d[is.finite(d)]
 ok("cutting a tree avenue below min_patch_ha is exact incrementally",
-   length(d) > 0 && max(d) == 0, sprintf("[max |diff| %.3g]", max(d)))
+   length(d) > 0 && max(d) < HEAT_EXACT_K, sprintf("[max |diff| %.3g]", max(d)))
 ok("...and it really did change the surface far from the cut",
    max(abs(values(a_full) - values(cold)), na.rm = TRUE) > 0.05,
    sprintf("[%.2f K]", max(abs(values(a_full) - values(cold)), na.rm = TRUE)))
@@ -317,7 +344,7 @@ h2c <- heatRaster(aoi2, bin = "midday", cache = ca)
 h2  <- heatRaster(aoi2, bin = "midday")
 ok("a change of area rebuilds instead of reusing the old grid",
    !is.null(h2c) && ext(h2c) == ext(h2) &&
-     max(abs(values(h2c) - values(h2)), na.rm = TRUE) == 0)
+     max(abs(values(h2c) - values(h2)), na.rm = TRUE) < HEAT_EXACT_K)
 
 cat("\n=== 9. run it the way the app runs it: terra NOT on the search path ===\n")
 ## The defect this exists for shipped twice and passed every check above:
@@ -345,6 +372,148 @@ ok("...and returns a surface, not an empty one",
 ok("...and the shade raster is still 0/1",
    !inherits(r9, "try-error") && !is.null(r9$shade) &&
      all(stats::na.omit(unique(values(r9$shade))) %in% c(0, 1)))
+
+
+cat("\n=== 10. the fast paths mean exactly what the slow ones meant ===\n")
+## Three inner loops were replaced for speed, taking a cold heatRaster() over
+## 3.6 x 2.6 km from 12.6 s to under 3 s. Speed is not the risk; a silent change
+## of meaning is. So each one is checked here against the implementation it
+## replaced, on the REAL land cover rather than a synthetic grid - the shapes
+## that break a connected-component labeller (diagonal touches, patches that
+## meet only at a corner, a patch that wraps a row boundary) are exactly the
+## shapes a hand-built test raster does not happen to contain.
+##
+## The originals are written out in full below rather than kept in R/. They are
+## not a fallback and must never be called by the model: a fallback that silently
+## catches a broken fast path is how a suite comes to pass while the app is
+## wrong, which is the failure mode group 9 exists for.
+
+## --- 10a. ccl_big_patches() vs terra::patches() + freq() + subst() ----------
+old_source_mask <- function(ground, canopy, row, res) {
+  half <- row$half_dist_m[1]; mx <- row$max_extent_m[1]
+  amp  <- row$amp_edge_K[1];  mp <- row$min_patch_ha[1]
+  if (is.na(half) || is.na(mx) || is.na(amp) || amp == 0) return(NULL)
+  cid <- row$class_id[1]
+  src <- terra::ifel((ground == cid) | (canopy == cid), 1, NA)
+  if (all(is.na(terra::values(src)))) return(NULL)
+  pch <- terra::patches(src, directions = 8, zeroAsNA = TRUE)
+  fr  <- terra::freq(pch)
+  big <- fr$value[fr$count * res^2 >= (if (is.na(mp)) 0 else mp) * 10000]
+  if (!length(big)) return(NULL)
+  msk <- terra::subst(pch, from = big, to = rep(1, length(big)), others = 0)
+  terra::ifel(is.na(msk), 0, msk)
+}
+n_mask <- 0; bad_mask <- character(0)
+for (i in seq_len(nrow(dec))) {
+  rw <- dec[i, , drop = FALSE]
+  a <- old_source_mask(gr, cn, rw, HEAT_RES)
+  b <- heat_source_mask(gr, cn, rw, HEAT_RES)
+  agree <- if (is.null(a) && is.null(b)) TRUE
+           else if (is.null(a) || is.null(b)) FALSE
+           else ext(a) == ext(b) && all(values(a) == values(b))
+  n_mask <- n_mask + 1
+  if (!isTRUE(agree)) bad_mask <- c(bad_mask, dec$class_name[i])
+}
+ok(sprintf("patch masks are bit-identical to terra::patches() (%d classes)", n_mask),
+   length(bad_mask) == 0, if (length(bad_mask)) paste("differ:", paste(bad_mask, collapse = ", ")) else "")
+
+## the floor itself must still bite, or the check above passes on two masks that
+## are identically wrong because nothing was ever excluded
+tiny <- dec[dec$class_id == 7, , drop = FALSE]; tiny$min_patch_ha <- 1e6
+ok("...and an impossible min_patch_ha still excludes everything",
+   is.null(heat_source_mask(gr, cn, tiny, HEAT_RES)))
+huge <- dec[dec$class_id == 7, , drop = FALSE]; huge$min_patch_ha <- 0
+ok("...and a zero floor keeps strictly more cells than the real one",
+   sum(values(heat_source_mask(gr, cn, huge, HEAT_RES))) >
+     sum(values(heat_source_mask(gr, cn, dec[dec$class_id == 7, , drop = FALSE], HEAT_RES))))
+
+## a corner-only join is the case 4-connectivity gets wrong and 8-connectivity
+## gets right, and it is what `directions = 8` in the original was for
+diag_r <- rast(ext(0, 40, 0, 40), resolution = 5, crs = "EPSG:2056")
+values(diag_r) <- 0L
+diag_r[cells(diag_r, ext(0, 20, 20, 40))]  <- 7L
+diag_r[cells(diag_r, ext(20, 40, 0, 20))] <- 7L   # touches the first only at a corner
+d8 <- ccl_big_patches(as.integer(values(diag_r, mat = FALSE)),
+                      nrow(diag_r), ncol(diag_r), 0)
+d_split <- ccl_big_patches(as.integer(values(diag_r, mat = FALSE)),
+                           nrow(diag_r), ncol(diag_r),
+                           sum(values(diag_r) == 7L) * 0.75)
+ok("corner-touching blocks are ONE patch under 8-connectivity",
+   sum(d8) == sum(values(diag_r) == 7L) && sum(d_split) == sum(d8))
+
+## --- 10b. svf_horizon() vs the R reference march ---------------------------
+Hm <- as.matrix(heatObstructionHeight(gr, cn, geo), wide = TRUE)
+Hm[is.na(Hm)] <- 0
+sv_cpp <- heat_svf_matrix(Hm, HEAT_RES)
+sv_r   <- heat_svf_matrix_r(Hm, HEAT_RES)
+ok(sprintf("SVF matches the R reference march (max |diff| %.3g)",
+           max(abs(sv_cpp - sv_r))), max(abs(sv_cpp - sv_r)) < 1e-12)
+## and the raster path, which skips the matrix and its transpose entirely, must
+## land on the same grid the same way round - a transposed SVF over a nearly
+## square window still looks like a plausible map and is wrong everywhere
+sv_rast <- heatSvfRaster(gr, cn, geom = geo)
+ok("...and heatSvfRaster() agrees with it cell for cell, untransposed",
+   max(abs(values(sv_rast, mat = FALSE) - as.vector(t(sv_r)))) < 1e-12)
+
+## --- 10c. heat_conv() vs terra::focal() ------------------------------------
+n_conv <- 0; worst <- 0
+for (i in which(!is.na(dec$half_dist_m) & dec$amp_edge_K != 0)) {
+  rw <- dec[i, , drop = FALSE]
+  mk0 <- heat_source_mask(gr, cn, rw, HEAT_RES)
+  if (is.null(mk0)) next
+  fct <- max(1L, as.integer(round(HEAT_ADV_RES / HEAT_RES)))
+  mk1 <- if (fct > 1) aggregate(mk0, fct, fun = "mean", na.rm = TRUE) else mk0
+  kk  <- heat_decay_kernel(rw$half_dist_m[1], rw$max_extent_m[1],
+                           if (fct > 1) HEAT_ADV_RES else HEAT_RES)
+  fo <- focal(mk1, w = kk, fun = "sum", na.rm = TRUE, fillvalue = 0)
+  ff <- heat_conv(mk1, kk)
+  d  <- abs(values(fo, mat = FALSE) - values(ff, mat = FALSE))
+  d  <- d[is.finite(d)]
+  worst <- max(worst, if (length(d)) max(d) else 0)
+  n_conv <- n_conv + 1
+}
+ok(sprintf("FFT convolution matches terra::focal() (%d classes, max %.3g K)",
+           n_conv, worst), n_conv > 0 && worst < 1e-9)
+
+## The kernel being radially symmetric is what makes correlation and convolution
+## the same operation here. If that ever stops being true, heat_conv() silently
+## returns a field flipped through the origin - so assert the property the proof
+## rests on rather than trusting the comment.
+ksym <- heat_decay_kernel(60, 200, HEAT_ADV_RES)
+ok("the decay kernel is symmetric under a 180 degree flip",
+   max(abs(ksym - ksym[nrow(ksym):1, ncol(ksym):1])) == 0)
+
+## --- 10d. the whole surface, end to end ------------------------------------
+## Everything above compares a part against the implementation it replaced.
+## This compares the whole answer against a stored surface, which is the only
+## check here that still bites once the old implementations are gone - and they
+## will be, because nobody keeps a reference copy of terra::patches() forever.
+##
+## The stored file was first written from the version measured equal to the
+## pre-C++ model over both AOI sizes and all three bins (max |diff| 9.4e-13 K),
+## so it does carry the old model's values - but it is a REGRESSION baseline,
+## not a proof of equivalence, and it is only as good as the run that wrote it.
+## Regenerate with VFT_HEAT_BASELINE=1 when a table or a coefficient
+## legitimately moves, and say so in the commit that does it.
+bl <- file.path(dirname(R), "data-raw", "heat_baseline_sion_midday.rds")
+h10 <- heatRaster(aoi, bin = "midday")
+if (nzchar(Sys.getenv("VFT_HEAT_BASELINE"))) {
+  saveRDS(list(ext = as.vector(ext(h10)), dim = dim(h10)[1:2],
+               v = values(h10, mat = FALSE)), bl)
+  cat("  baseline written to", bl, "\n")
+}
+if (file.exists(bl)) {
+  b10 <- readRDS(bl)
+  same_grid <- identical(as.integer(b10$dim), as.integer(dim(h10)[1:2])) &&
+    isTRUE(all.equal(b10$ext, as.vector(ext(h10))))
+  dd <- if (same_grid) abs(values(h10, mat = FALSE) - b10$v) else NA_real_
+  dd <- dd[is.finite(dd)]
+  ok(sprintf("the assembled surface still matches the stored baseline (max %.3g K)",
+             if (length(dd)) max(dd) else NA_real_),
+     same_grid && length(dd) > 0 && max(dd) < 1e-6)
+} else {
+  cat("  no stored baseline yet - run once with VFT_HEAT_BASELINE=1 to create it\n")
+}
 
 cat(sprintf("\n%d check(s) failed\n", fails))
 quit(status = if (fails == 0) 0 else 1)

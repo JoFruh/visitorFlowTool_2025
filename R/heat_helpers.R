@@ -202,6 +202,45 @@ heat_decay_kernel <- function(half, maxext, res){
   m
 }
 
+#' Convolve a raster with a radial kernel, by FFT.
+#'
+#' Replaces terra::focal(w = k, fun = "sum", na.rm = TRUE, fillvalue = 0) and
+#' means exactly the same thing, to 7e-13. focal walks every kernel cell for
+#' every raster cell - 41 x 41 weights over 311 x 411 cells is 215 M
+#' multiplications for the tree layer alone - where an FFT does it in
+#' n log n. Measured on that layer: 0.413 s -> 0.049 s, and 1.43 s -> 0.17 s
+#' over all seven classes.
+#'
+#' CORRELATION AND CONVOLUTION ARE THE SAME THING HERE, and only because of what
+#' the kernel is. An FFT computes a convolution, which is a correlation with the
+#' kernel flipped in both axes; focal computes the correlation. heat_decay_kernel()
+#' builds its weights from sqrt(i^2 + j^2), so it is symmetric under that flip and
+#' the two agree. A kernel that ever stops being radially symmetric - a wind
+#' direction, say - breaks this silently and in a way no check on a round kernel
+#' can catch, so it would need rev() on both axes here.
+#'
+#' The padding is what keeps a circular convolution from wrapping: an image of
+#' nr x nc and a kernel of 2*rad+1 needs at least nr + 2*rad rows, and
+#' stats::nextn() rounds that up to a length with small prime factors. NA is 0,
+#' which is what na.rm = TRUE meant, and the zeros past the edge are what
+#' fillvalue = 0 meant.
+heat_conv <- function(r, k){
+  m <- terra::as.matrix(r, wide = TRUE)
+  m[is.na(m)] <- 0
+  nr <- nrow(m); nc <- ncol(m)
+  rad <- (nrow(k) - 1L) %/% 2L
+  nr2 <- stats::nextn(nr + 2L * rad); nc2 <- stats::nextn(nc + 2L * rad)
+
+  P <- matrix(0, nr2, nc2); P[seq_len(nr), seq_len(nc)] <- m
+  K <- matrix(0, nr2, nc2); K[seq_len(nrow(k)), seq_len(ncol(k))] <- k
+  C <- Re(stats::fft(stats::fft(P) * stats::fft(K), inverse = TRUE)) / (nr2 * nc2)
+
+  #t() before flattening, for the reason heatShadeRaster() spells out: terra
+  #fills row by row, as.vector() on an R matrix walks column by column.
+  terra::setValues(terra::rast(r),
+                   as.vector(t(C[rad + seq_len(nr), rad + seq_len(nc), drop = FALSE])))
+}
+
 heat_kernel_halfplane <- function(m){
   rad <- (nrow(m) - 1) / 2
   sum(m[, seq_len(rad)])
@@ -295,20 +334,28 @@ heat_source_mask <- function(ground, canopy, row, res = NULL){
   if(is.null(res)) res <- terra::res(ground)[1]
 
   cid <- row$class_id[1]
-  src <- terra::ifel((ground == cid) | (canopy == cid), 1, NA)
-  if(all(is.na(terra::values(src)))) return(NULL)
+  #row-major, which is terra's own order and what ccl_big_patches() expects.
+  #NA is "not this class" here, the same as 0 - the perimeter mask and a cell of
+  #some other material are both simply not a source.
+  v <- terra::values(terra::ifel((ground == cid) | (canopy == cid), 1L, 0L),
+                     mat = FALSE)
+  v[is.na(v)] <- 0L
+  if(!any(v == 1L)) return(NULL)
 
-  #the patch-size test, at the FULL grid: coarsen first and a narrow avenue of
-  #trees disappears, and every patch area is misjudged
-  pch <- terra::patches(src, directions = 8, zeroAsNA = TRUE)
-  fr  <- terra::freq(pch)
-  big <- fr$value[fr$count * res^2 >= (if(is.na(mp)) 0 else mp) * 10000]
-  if(!length(big)) return(NULL)
-  #subst(), not `pch %in% big` - same trap as in heatShadeRaster(): terra's S4
-  #`%in%` is invisible inside this namespace, so that form falls through to
-  #base's and calls match() on a SpatRaster.
-  msk <- terra::subst(pch, from = big, to = rep(1, length(big)), others = 0)
-  terra::ifel(is.na(msk), 0, msk)
+  #The patch-size test, at the FULL grid: coarsen first and a narrow avenue of
+  #trees disappears, and every patch area is misjudged.
+  #
+  #ccl_big_patches() replaces patches() + freq() + subst() with one union-find
+  #pass and answers the only question asked here - "is this cell in a patch big
+  #enough to count". terra::patches() was 60 % of a cold heatRaster() and is
+  #superlinear with area: 7.6 s of a 12.6 s run over 3.6 x 2.6 km, and 53 s of
+  #73 s over 6.3 x 4.5 km. This is 21x and 49x faster respectively, and returns
+  #a bit-identical mask - which check group 10 asserts against the old pipeline.
+  mc  <- (if(is.na(mp)) 0 else mp) * 10000 / res^2
+  big <- ccl_big_patches(as.integer(v), terra::nrow(ground),
+                         terra::ncol(ground), mc)
+  if(!any(big == 1L)) return(NULL)
+  terra::setValues(terra::rast(ground), big)
 }
 
 #' Convolve one class's source mask into its share of the advective term.
@@ -330,13 +377,13 @@ heat_adv_field <- function(msk, row, res = NULL, conv_res = HEAT_ADV_RES,
     mk <- terra::aggregate(msk, fact, fun = "mean", na.rm = TRUE)
     k  <- heat_decay_kernel(half, mx, conv_res)
     if(!is.null(win)) mk <- terra::crop(mk, heat_adv_pad(win, mx, mk))
-    cv <- terra::focal(mk, w = k, fun = "sum", na.rm = TRUE, fillvalue = 0)
+    cv <- heat_conv(mk, k)
     cv <- terra::resample(cv, if(is.null(win)) msk else terra::crop(msk, win),
                           method = "bilinear")
   }else{
     k  <- heat_decay_kernel(half, mx, res)
     m2 <- if(is.null(win)) msk else terra::crop(msk, heat_adv_pad(win, mx, msk))
-    cv <- terra::focal(m2, w = k, fun = "sum", na.rm = TRUE, fillvalue = 0)
+    cv <- heat_conv(m2, k)
     if(!is.null(win)) cv <- terra::crop(cv, win)
   }
   amp * cv / heat_kernel_halfplane(k)
@@ -440,6 +487,66 @@ heatBinChoices <- function(i18n = NULL){
 #' different grid is detected and rebuilds everything; different `...` options on
 #' the same grid are not, so use a fresh cache if those ever vary.
 heatCacheNew <- function() new.env(parent = emptyenv())
+
+#' How many sessions' heat caches one process keeps.
+#'
+#' A cache holds every computed layer as a value vector - about 28 MB over a
+#' 3.6 x 2.6 km area, more over a larger one - so these cannot accumulate for
+#' the life of a daemon. The cap is small because the thing being protected is a
+#' single user's repaint loop, not a history.
+HEAT_CACHE_SESSIONS <- 4L
+
+#' One session's heat cache, inside whichever process is doing the work.
+#'
+#' heatRaster()'s cache is an environment, and an environment cannot cross the
+#' mirai boundary - nor would we want it to. It holds every layer as a value
+#' vector, and serialising 28 MB on the main thread at both ends of every call
+#' is precisely the cost that moving this job off the thread exists to remove.
+#' So the cache stays in the process that builds it, keyed by session, exactly
+#' as the national raster caches in R/providers.R do.
+#'
+#' The consequence is worth stating plainly rather than discovering later: with
+#' more than one daemon, a session's next heat job may land on a daemon that has
+#' never seen this area, and that call rebuilds everything. That is slower than
+#' a hit, but it is not wrong - heat_cache_state() sees an unknown grid and
+#' rebuilds - and it is still off the thread every other user is waiting on. A
+#' miss costs the user who asked for it; the synchronous version charged it to
+#' everybody.
+#'
+#' `.GlobalEnv` and not this namespace, for the reason given at .vftP() in
+#' R/perf_helpers.R: a reinstall or load_all() builds a fresh namespace, and a
+#' registry living in one would be silently abandoned along with its contents.
+heatCacheFor <- function(key){
+  if(is.null(key) || !nzchar(key)) return(heatCacheNew())
+  if(!exists(".vft_heatCaches", envir = .GlobalEnv))
+    assign(".vft_heatCaches", new.env(parent = emptyenv()), envir = .GlobalEnv)
+  reg <- get(".vft_heatCaches", envir = .GlobalEnv)
+
+  if(is.null(reg[[key]])) reg[[key]] <- heatCacheNew()
+  #touch order, so the eviction below drops the session that has been idle
+  #longest rather than an arbitrary one
+  reg$.order <- c(setdiff(reg$.order, key), key)
+  keep <- utils::tail(reg$.order, HEAT_CACHE_SESSIONS)
+  for(k in setdiff(reg$.order, keep)) rm(list = k, envir = reg)
+  reg$.order <- keep
+  reg[[key]]
+}
+
+#' heatRaster() across a process boundary: plain arguments in, a packed raster out.
+#'
+#' The entry point the worker runs. Everything terra touches is an external
+#' pointer and cannot be serialised, so the painted rasters arrive wrapped and
+#' the surface goes back wrapped - the same contract R/providers.R states at the
+#' top of the file. `key` is the session token that selects the cache above; a
+#' NULL key means "no cache", which is what a verification script wants.
+heatRasterPacked <- function(aoi, groundEdits = NULL, canopyEdits = NULL,
+                             bin = HEAT_BIN_DEFAULT, res = HEAT_RES,
+                             key = NULL, ...){
+  unpack <- function(x) if(is.null(x)) NULL else terra::unwrap(x)
+  out <- heatRaster(aoi, unpack(groundEdits), unpack(canopyEdits),
+                    bin = bin, res = res, cache = heatCacheFor(key), ...)
+  if(is.null(out)) NULL else terra::wrap(out)
+}
 
 #' What a repaint changed, and whether the geometry has to be redone.
 #'

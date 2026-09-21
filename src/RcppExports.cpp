@@ -200,6 +200,36 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// ccl_big_patches
+IntegerVector ccl_big_patches(IntegerVector src, int nrow, int ncol, double min_cells);
+RcppExport SEXP _visitorFlowTool_ccl_big_patches(SEXP srcSEXP, SEXP nrowSEXP, SEXP ncolSEXP, SEXP min_cellsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerVector >::type src(srcSEXP);
+    Rcpp::traits::input_parameter< int >::type nrow(nrowSEXP);
+    Rcpp::traits::input_parameter< int >::type ncol(ncolSEXP);
+    Rcpp::traits::input_parameter< double >::type min_cells(min_cellsSEXP);
+    rcpp_result_gen = Rcpp::wrap(ccl_big_patches(src, nrow, ncol, min_cells));
+    return rcpp_result_gen;
+END_RCPP
+}
+// svf_horizon
+NumericVector svf_horizon(NumericVector H, int nrow, int ncol, double res, int n_dir, double max_dist_m);
+RcppExport SEXP _visitorFlowTool_svf_horizon(SEXP HSEXP, SEXP nrowSEXP, SEXP ncolSEXP, SEXP resSEXP, SEXP n_dirSEXP, SEXP max_dist_mSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type H(HSEXP);
+    Rcpp::traits::input_parameter< int >::type nrow(nrowSEXP);
+    Rcpp::traits::input_parameter< int >::type ncol(ncolSEXP);
+    Rcpp::traits::input_parameter< double >::type res(resSEXP);
+    Rcpp::traits::input_parameter< int >::type n_dir(n_dirSEXP);
+    Rcpp::traits::input_parameter< double >::type max_dist_m(max_dist_mSEXP);
+    rcpp_result_gen = Rcpp::wrap(svf_horizon(H, nrow, ncol, res, n_dir, max_dist_m));
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_visitorFlowTool_filterRouteChoices_cpp", (DL_FUNC) &_visitorFlowTool_filterRouteChoices_cpp, 5},
@@ -213,6 +243,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_visitorFlowTool_generateAdjListAndDistTbl_cpp", (DL_FUNC) &_visitorFlowTool_generateAdjListAndDistTbl_cpp, 2},
     {"_visitorFlowTool_findShortestRoute_cpp", (DL_FUNC) &_visitorFlowTool_findShortestRoute_cpp, 27},
     {"_visitorFlowTool_findClosestAOI_cpp", (DL_FUNC) &_visitorFlowTool_findClosestAOI_cpp, 18},
+    {"_visitorFlowTool_ccl_big_patches", (DL_FUNC) &_visitorFlowTool_ccl_big_patches, 4},
+    {"_visitorFlowTool_svf_horizon", (DL_FUNC) &_visitorFlowTool_svf_horizon, 6},
     {NULL, NULL, 0}
 };
 
