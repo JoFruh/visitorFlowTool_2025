@@ -106,6 +106,14 @@ step2_server <- function(id, fshape, i18n,
 
     #INITIALIZE VARIABLES ####
     SMUpdate <- shiny::reactiveVal(0)
+    #What the map render listens to. One click on "Alle" or a group box is not
+    #one change: the checkbox observers drive each other through several
+    #update*Input() round trips (see the shinyjs::delay() calls below), and each
+    #one bumped SMUpdate and so repainted the whole map - basemap, sensitivity
+    #matrix, alpha overlay - on the shared main thread. The matrix itself is
+    #still recomputed on every step; only the drawing waits until the burst has
+    #settled.
+    SMUpdateD <- shiny::debounce(SMUpdate, 250)
     triggerUpdate <- shiny::reactiveVal()
     #bumped by enter(): the map is drawn from plain locals (the perimeter, the
     #basemap), so a return visit has nothing reactive to re-render it.
@@ -1719,7 +1727,14 @@ vftDbg("CHOSEN")
 
             #determine total SM by ADDING layer values between them
             #(offers a form of alpha diversity of critical species)
-            r$SM_pres <- terra::app(chosenLayers, fun = function(x) sum(x))
+            #"sum" by NAME, which terra runs in C++. An R closure here -
+            #function(x) sum(x) - is called cell by cell: ~10x slower on a
+            #300-layer stack, on the shared thread, on every checkbox or weight
+            #change. Same values and the same NA cells (na.rm stays FALSE); only
+            #the layer name differs, so the old one is kept - it is the band name
+            #in the downloaded GeoTIFF and in every save.
+            r$SM_pres <- terra::app(chosenLayers, fun = "sum")
+            names(r$SM_pres) <- "lyr.1"
 
           }else if (terra::nlyr(chosenLayers) == 1){
 
@@ -2124,7 +2139,7 @@ vftDbg("CHOSEN")
         terra::plot(basemapWhite, y = 1, type = "continuous", col = "#FFFFFF", ext = terra::ext(terra::vect(shp_WGS84)), range = c(0,12), legend = FALSE, box = FALSE, axes = FALSE,  mar = c(6.1, 0, 0, 0), plg = list(legend = "bottom", horiz = TRUE, title = "Sensitivity", title.adj = 0))
       }
         vftDbg("SMUPDATE")
-      if(SMUpdate() > 0){
+      if(SMUpdateD() > 0){
 
 #expose reactive to refreshing plot
        input$minValThreshold
@@ -2180,7 +2195,7 @@ shiny::isolate({
           terra::plot(basemap, 1, col = "#000000",legend = FALSE,  add = TRUE, alpha = alphaMap *0.7 )
         }) # end isolate
 
-      }else if (SMUpdate() == 0){
+      }else if (SMUpdateD() == 0){
         #plot empty area (correction: plot empty map)
         # plot.new()
         terra::plot(basemap, col = "#000000", box = FALSE, axes = FALSE, add = TRUE, alpha = alphaMap * 0.7, legend = FALSE)

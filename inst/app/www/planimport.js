@@ -753,10 +753,24 @@
    * grey range, so every fill edge shows as a clear step. The paper (the
    * lightest tone) stays white and so drops out under multiply. The darkest
    * tone is kept at SHOWN_FLOOR so the map stays readable under it.
+   *
+   * Blue keeps its colour. Water is sparse, it barely moves between plan
+   * editions and the map shows it too, so it is the surest thing to line a
+   * plan up against - as grey it would be one more pale fill. A blue pixel is
+   * rebuilt rather than passed through: a plan blue is pale and would multiply
+   * onto the map as almost nothing, while the equalised tone that fits the
+   * greys turns it near-black. It is redrawn flat in BLUE_SHOWN instead - a
+   * water body reads as one shape, not as a tonal range, and a fixed light
+   * blue keeps the map under it legible. Blues are left out of the grey
+   * histogram as well, so a large lake does not eat the grey range.
    * A copy: imp.canvas keeps the real colours for the palette. */
   var SHOWN_MAX = 2048;    //px, long side; the screen never shows more
   var SHOWN_FLOOR = 60;
   var SHOWN_CAP = 0.02;    //most weight one tone can have, as a share of pixels
+  var BLUE_DELTA = 16;     //B must beat R by this much to count as blue
+  var BLUE_SLACK = 24;     //how far G may pass B before it is green, not cyan
+  var BLUE_MIN = 48;       //below this a bluish pixel is just a dark line
+  var BLUE_SHOWN = [126, 198, 222];   //#7ec6de, the colour every blue is drawn in
   function planDisplay(src) {
     var s = Math.min(1, SHOWN_MAX / Math.max(src.width, src.height));
     var w = Math.max(1, Math.round(src.width * s)), h = Math.max(1, Math.round(src.height * s));
@@ -767,10 +781,13 @@
     ctx.fillRect(0, 0, w, h);
     ctx.drawImage(src, 0, 0, w, h);
     var img = ctx.getImageData(0, 0, w, h), d = img.data, n = w * h;
-    var gray = new Uint8Array(n), hist = new Float64Array(256);
+    var gray = new Uint8Array(n), blue = new Uint8Array(n), hist = new Float64Array(256);
     for (var i = 0, j = 0; i < n; i++, j += 4) {
       var v = (d[j] * 299 + d[j + 1] * 587 + d[j + 2] * 114 + 500) / 1000 | 0;
-      gray[i] = v; hist[v]++;
+      gray[i] = v;
+      if (d[j + 2] - d[j] >= BLUE_DELTA && d[j + 2] + BLUE_SLACK >= d[j + 1] &&
+          d[j + 2] >= BLUE_MIN) blue[i] = 1;
+      else hist[v]++;
     }
     //Each tone's weight is capped first: otherwise one large fill would take
     //most of the range and push its neighbours together. A tone then maps to
@@ -789,7 +806,11 @@
       lut[v] = Math.round(SHOWN_FLOOR + t * (255 - SHOWN_FLOOR));
     }
     for (i = 0, j = 0; i < n; i++, j += 4) {
-      d[j] = d[j + 1] = d[j + 2] = lut[gray[i]];
+      if (blue[i]) {
+        d[j] = BLUE_SHOWN[0]; d[j + 1] = BLUE_SHOWN[1]; d[j + 2] = BLUE_SHOWN[2];
+      } else {
+        d[j] = d[j + 1] = d[j + 2] = lut[gray[i]];
+      }
       d[j + 3] = 255;
     }
     ctx.putImageData(img, 0, 0);

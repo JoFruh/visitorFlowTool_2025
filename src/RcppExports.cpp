@@ -26,8 +26,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // chooseBestRoutes_cpp
-List chooseBestRoutes_cpp(List viableRoutes, DataFrame DULN_df, List priorVs, StringVector agentTyps, DataFrame V_coords_df, NumericVector currentVs);
-RcppExport SEXP _visitorFlowTool_chooseBestRoutes_cpp(SEXP viableRoutesSEXP, SEXP DULN_dfSEXP, SEXP priorVsSEXP, SEXP agentTypsSEXP, SEXP V_coords_dfSEXP, SEXP currentVsSEXP) {
+List chooseBestRoutes_cpp(List viableRoutes, DataFrame DULN_df, List priorVs, StringVector agentTyps, DataFrame V_coords_df, NumericVector currentVs, SEXP nodeRow_ptr);
+RcppExport SEXP _visitorFlowTool_chooseBestRoutes_cpp(SEXP viableRoutesSEXP, SEXP DULN_dfSEXP, SEXP priorVsSEXP, SEXP agentTypsSEXP, SEXP V_coords_dfSEXP, SEXP currentVsSEXP, SEXP nodeRow_ptrSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -37,23 +37,57 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< StringVector >::type agentTyps(agentTypsSEXP);
     Rcpp::traits::input_parameter< DataFrame >::type V_coords_df(V_coords_dfSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type currentVs(currentVsSEXP);
-    rcpp_result_gen = Rcpp::wrap(chooseBestRoutes_cpp(viableRoutes, DULN_df, priorVs, agentTyps, V_coords_df, currentVs));
+    Rcpp::traits::input_parameter< SEXP >::type nodeRow_ptr(nodeRow_ptrSEXP);
+    rcpp_result_gen = Rcpp::wrap(chooseBestRoutes_cpp(viableRoutes, DULN_df, priorVs, agentTyps, V_coords_df, currentVs, nodeRow_ptr));
+    return rcpp_result_gen;
+END_RCPP
+}
+// buildEdgeMap_cpp
+SEXP buildEdgeMap_cpp(DataFrame edgeTable);
+RcppExport SEXP _visitorFlowTool_buildEdgeMap_cpp(SEXP edgeTableSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< DataFrame >::type edgeTable(edgeTableSEXP);
+    rcpp_result_gen = Rcpp::wrap(buildEdgeMap_cpp(edgeTable));
+    return rcpp_result_gen;
+END_RCPP
+}
+// buildNodeRowMap_cpp
+SEXP buildNodeRowMap_cpp(NumericVector nodeIDs);
+RcppExport SEXP _visitorFlowTool_buildNodeRowMap_cpp(SEXP nodeIDsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type nodeIDs(nodeIDsSEXP);
+    rcpp_result_gen = Rcpp::wrap(buildNodeRowMap_cpp(nodeIDs));
+    return rcpp_result_gen;
+END_RCPP
+}
+// adjListsToPtr_cpp
+SEXP adjListsToPtr_cpp(List listOfPointers);
+RcppExport SEXP _visitorFlowTool_adjListsToPtr_cpp(SEXP listOfPointersSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< List >::type listOfPointers(listOfPointersSEXP);
+    rcpp_result_gen = Rcpp::wrap(adjListsToPtr_cpp(listOfPointers));
     return rcpp_result_gen;
 END_RCPP
 }
 // getEdges_cpp
-List getEdges_cpp(IntegerVector currentVs, IntegerVector nextVs, DataFrame edgeTable, bool usingPathToGoal, List pathToGoal, List oldPriorEs);
-RcppExport SEXP _visitorFlowTool_getEdges_cpp(SEXP currentVsSEXP, SEXP nextVsSEXP, SEXP edgeTableSEXP, SEXP usingPathToGoalSEXP, SEXP pathToGoalSEXP, SEXP oldPriorEsSEXP) {
+List getEdges_cpp(IntegerVector currentVs, IntegerVector nextVs, SEXP edgeMap_ptr, bool usingPathToGoal, List pathToGoal, List oldPriorEs);
+RcppExport SEXP _visitorFlowTool_getEdges_cpp(SEXP currentVsSEXP, SEXP nextVsSEXP, SEXP edgeMap_ptrSEXP, SEXP usingPathToGoalSEXP, SEXP pathToGoalSEXP, SEXP oldPriorEsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< IntegerVector >::type currentVs(currentVsSEXP);
     Rcpp::traits::input_parameter< IntegerVector >::type nextVs(nextVsSEXP);
-    Rcpp::traits::input_parameter< DataFrame >::type edgeTable(edgeTableSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type edgeMap_ptr(edgeMap_ptrSEXP);
     Rcpp::traits::input_parameter< bool >::type usingPathToGoal(usingPathToGoalSEXP);
     Rcpp::traits::input_parameter< List >::type pathToGoal(pathToGoalSEXP);
     Rcpp::traits::input_parameter< List >::type oldPriorEs(oldPriorEsSEXP);
-    rcpp_result_gen = Rcpp::wrap(getEdges_cpp(currentVs, nextVs, edgeTable, usingPathToGoal, pathToGoal, oldPriorEs));
+    rcpp_result_gen = Rcpp::wrap(getEdges_cpp(currentVs, nextVs, edgeMap_ptr, usingPathToGoal, pathToGoal, oldPriorEs));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -136,59 +170,29 @@ BEGIN_RCPP
 END_RCPP
 }
 // findShortestRoute_cpp
-List findShortestRoute_cpp(int V_ptr, std::vector<std::vector<int>> adjList_IDs_ptr, std::vector<std::vector<double>> adjList_dist_ptr_walkNat, std::vector<std::vector<double>> adjList_dist_ptr_walkNat_attr, std::vector<std::vector<double>> adjList_dist_ptr_walkNat_ATTR, std::vector<std::vector<double>> adjList_dist_ptr_walkSoc, std::vector<std::vector<double>> adjList_dist_ptr_walkSoc_attr, std::vector<std::vector<double>> adjList_dist_ptr_walkSoc_ATTR, std::vector<std::vector<double>> adjList_dist_ptr_dogNat, std::vector<std::vector<double>> adjList_dist_ptr_dogNat_attr, std::vector<std::vector<double>> adjList_dist_ptr_dogNat_ATTR, std::vector<std::vector<double>> adjList_dist_ptr_dogProx, std::vector<std::vector<double>> adjList_dist_ptr_dogProx_attr, std::vector<std::vector<double>> adjList_dist_ptr_dogProx_ATTR, std::vector<std::vector<double>> adjList_dist_ptr_ebikeNat, std::vector<std::vector<double>> adjList_dist_ptr_ebikeNat_attr, std::vector<std::vector<double>> adjList_dist_ptr_ebikeNat_ATTR, std::vector<std::vector<double>> adjList_dist_ptr_bikeSport, std::vector<std::vector<double>> adjList_dist_ptr_bikeSport_attr, std::vector<std::vector<double>> adjList_dist_ptr_bikeSport_ATTR, std::vector<std::vector<double>> adjList_dist_ptr_jogger, std::vector<std::vector<double>> adjList_dist_ptr_jogger_attr, std::vector<std::vector<double>> adjList_dist_ptr_jogger_ATTR, String weighingMethod, std::vector<int> src_v, std::vector<int> goal_v, std::vector<std::string> agentTyps);
-RcppExport SEXP _visitorFlowTool_findShortestRoute_cpp(SEXP V_ptrSEXP, SEXP adjList_IDs_ptrSEXP, SEXP adjList_dist_ptr_walkNatSEXP, SEXP adjList_dist_ptr_walkNat_attrSEXP, SEXP adjList_dist_ptr_walkNat_ATTRSEXP, SEXP adjList_dist_ptr_walkSocSEXP, SEXP adjList_dist_ptr_walkSoc_attrSEXP, SEXP adjList_dist_ptr_walkSoc_ATTRSEXP, SEXP adjList_dist_ptr_dogNatSEXP, SEXP adjList_dist_ptr_dogNat_attrSEXP, SEXP adjList_dist_ptr_dogNat_ATTRSEXP, SEXP adjList_dist_ptr_dogProxSEXP, SEXP adjList_dist_ptr_dogProx_attrSEXP, SEXP adjList_dist_ptr_dogProx_ATTRSEXP, SEXP adjList_dist_ptr_ebikeNatSEXP, SEXP adjList_dist_ptr_ebikeNat_attrSEXP, SEXP adjList_dist_ptr_ebikeNat_ATTRSEXP, SEXP adjList_dist_ptr_bikeSportSEXP, SEXP adjList_dist_ptr_bikeSport_attrSEXP, SEXP adjList_dist_ptr_bikeSport_ATTRSEXP, SEXP adjList_dist_ptr_joggerSEXP, SEXP adjList_dist_ptr_jogger_attrSEXP, SEXP adjList_dist_ptr_jogger_ATTRSEXP, SEXP weighingMethodSEXP, SEXP src_vSEXP, SEXP goal_vSEXP, SEXP agentTypsSEXP) {
+List findShortestRoute_cpp(SEXP adj_ptr, String weighingMethod, std::vector<int> src_v, std::vector<int> goal_v, std::vector<std::string> agentTyps);
+RcppExport SEXP _visitorFlowTool_findShortestRoute_cpp(SEXP adj_ptrSEXP, SEXP weighingMethodSEXP, SEXP src_vSEXP, SEXP goal_vSEXP, SEXP agentTypsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< int >::type V_ptr(V_ptrSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<int>> >::type adjList_IDs_ptr(adjList_IDs_ptrSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<double>> >::type adjList_dist_ptr_walkNat(adjList_dist_ptr_walkNatSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<double>> >::type adjList_dist_ptr_walkNat_attr(adjList_dist_ptr_walkNat_attrSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<double>> >::type adjList_dist_ptr_walkNat_ATTR(adjList_dist_ptr_walkNat_ATTRSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<double>> >::type adjList_dist_ptr_walkSoc(adjList_dist_ptr_walkSocSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<double>> >::type adjList_dist_ptr_walkSoc_attr(adjList_dist_ptr_walkSoc_attrSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<double>> >::type adjList_dist_ptr_walkSoc_ATTR(adjList_dist_ptr_walkSoc_ATTRSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<double>> >::type adjList_dist_ptr_dogNat(adjList_dist_ptr_dogNatSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<double>> >::type adjList_dist_ptr_dogNat_attr(adjList_dist_ptr_dogNat_attrSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<double>> >::type adjList_dist_ptr_dogNat_ATTR(adjList_dist_ptr_dogNat_ATTRSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<double>> >::type adjList_dist_ptr_dogProx(adjList_dist_ptr_dogProxSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<double>> >::type adjList_dist_ptr_dogProx_attr(adjList_dist_ptr_dogProx_attrSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<double>> >::type adjList_dist_ptr_dogProx_ATTR(adjList_dist_ptr_dogProx_ATTRSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<double>> >::type adjList_dist_ptr_ebikeNat(adjList_dist_ptr_ebikeNatSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<double>> >::type adjList_dist_ptr_ebikeNat_attr(adjList_dist_ptr_ebikeNat_attrSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<double>> >::type adjList_dist_ptr_ebikeNat_ATTR(adjList_dist_ptr_ebikeNat_ATTRSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<double>> >::type adjList_dist_ptr_bikeSport(adjList_dist_ptr_bikeSportSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<double>> >::type adjList_dist_ptr_bikeSport_attr(adjList_dist_ptr_bikeSport_attrSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<double>> >::type adjList_dist_ptr_bikeSport_ATTR(adjList_dist_ptr_bikeSport_ATTRSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<double>> >::type adjList_dist_ptr_jogger(adjList_dist_ptr_joggerSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<double>> >::type adjList_dist_ptr_jogger_attr(adjList_dist_ptr_jogger_attrSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<double>> >::type adjList_dist_ptr_jogger_ATTR(adjList_dist_ptr_jogger_ATTRSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type adj_ptr(adj_ptrSEXP);
     Rcpp::traits::input_parameter< String >::type weighingMethod(weighingMethodSEXP);
     Rcpp::traits::input_parameter< std::vector<int> >::type src_v(src_vSEXP);
     Rcpp::traits::input_parameter< std::vector<int> >::type goal_v(goal_vSEXP);
     Rcpp::traits::input_parameter< std::vector<std::string> >::type agentTyps(agentTypsSEXP);
-    rcpp_result_gen = Rcpp::wrap(findShortestRoute_cpp(V_ptr, adjList_IDs_ptr, adjList_dist_ptr_walkNat, adjList_dist_ptr_walkNat_attr, adjList_dist_ptr_walkNat_ATTR, adjList_dist_ptr_walkSoc, adjList_dist_ptr_walkSoc_attr, adjList_dist_ptr_walkSoc_ATTR, adjList_dist_ptr_dogNat, adjList_dist_ptr_dogNat_attr, adjList_dist_ptr_dogNat_ATTR, adjList_dist_ptr_dogProx, adjList_dist_ptr_dogProx_attr, adjList_dist_ptr_dogProx_ATTR, adjList_dist_ptr_ebikeNat, adjList_dist_ptr_ebikeNat_attr, adjList_dist_ptr_ebikeNat_ATTR, adjList_dist_ptr_bikeSport, adjList_dist_ptr_bikeSport_attr, adjList_dist_ptr_bikeSport_ATTR, adjList_dist_ptr_jogger, adjList_dist_ptr_jogger_attr, adjList_dist_ptr_jogger_ATTR, weighingMethod, src_v, goal_v, agentTyps));
+    rcpp_result_gen = Rcpp::wrap(findShortestRoute_cpp(adj_ptr, weighingMethod, src_v, goal_v, agentTyps));
     return rcpp_result_gen;
 END_RCPP
 }
 // findClosestAOI_cpp
-List findClosestAOI_cpp(std::vector<std::string> AOIList_o, std::vector<std::string> AOI_v, int V_ptr, std::vector<std::vector<int>> adjList_IDs_ptr, std::vector<std::vector<double>> adjList_dist_ptr_walkNat, std::vector<std::vector<double>> adjList_dist_ptr_walkSoc, std::vector<std::vector<double>> adjList_dist_ptr_dogNat, std::vector<std::vector<double>> adjList_dist_ptr_dogProx, std::vector<std::vector<double>> adjList_dist_ptr_ebikeNat, std::vector<std::vector<double>> adjList_dist_ptr_bikeSport, std::vector<std::vector<double>> adjList_dist_ptr_jogger, std::vector<int> src_v, std::vector<double> agentSpeeds, std::vector<double> agentDurations, std::vector<std::string> AOI_aois, std::vector<double> AOI_dulns, std::vector<std::string> agentTyps, std::vector<double> AOI_areas);
-RcppExport SEXP _visitorFlowTool_findClosestAOI_cpp(SEXP AOIList_oSEXP, SEXP AOI_vSEXP, SEXP V_ptrSEXP, SEXP adjList_IDs_ptrSEXP, SEXP adjList_dist_ptr_walkNatSEXP, SEXP adjList_dist_ptr_walkSocSEXP, SEXP adjList_dist_ptr_dogNatSEXP, SEXP adjList_dist_ptr_dogProxSEXP, SEXP adjList_dist_ptr_ebikeNatSEXP, SEXP adjList_dist_ptr_bikeSportSEXP, SEXP adjList_dist_ptr_joggerSEXP, SEXP src_vSEXP, SEXP agentSpeedsSEXP, SEXP agentDurationsSEXP, SEXP AOI_aoisSEXP, SEXP AOI_dulnsSEXP, SEXP agentTypsSEXP, SEXP AOI_areasSEXP) {
+List findClosestAOI_cpp(std::vector<std::string> AOIList_o, std::vector<std::string> AOI_v, SEXP adj_ptr, std::vector<int> src_v, std::vector<double> agentSpeeds, std::vector<double> agentDurations, std::vector<std::string> AOI_aois, std::vector<double> AOI_dulns, std::vector<std::string> agentTyps, std::vector<double> AOI_areas);
+RcppExport SEXP _visitorFlowTool_findClosestAOI_cpp(SEXP AOIList_oSEXP, SEXP AOI_vSEXP, SEXP adj_ptrSEXP, SEXP src_vSEXP, SEXP agentSpeedsSEXP, SEXP agentDurationsSEXP, SEXP AOI_aoisSEXP, SEXP AOI_dulnsSEXP, SEXP agentTypsSEXP, SEXP AOI_areasSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< std::vector<std::string> >::type AOIList_o(AOIList_oSEXP);
     Rcpp::traits::input_parameter< std::vector<std::string> >::type AOI_v(AOI_vSEXP);
-    Rcpp::traits::input_parameter< int >::type V_ptr(V_ptrSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<int>> >::type adjList_IDs_ptr(adjList_IDs_ptrSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<double>> >::type adjList_dist_ptr_walkNat(adjList_dist_ptr_walkNatSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<double>> >::type adjList_dist_ptr_walkSoc(adjList_dist_ptr_walkSocSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<double>> >::type adjList_dist_ptr_dogNat(adjList_dist_ptr_dogNatSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<double>> >::type adjList_dist_ptr_dogProx(adjList_dist_ptr_dogProxSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<double>> >::type adjList_dist_ptr_ebikeNat(adjList_dist_ptr_ebikeNatSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<double>> >::type adjList_dist_ptr_bikeSport(adjList_dist_ptr_bikeSportSEXP);
-    Rcpp::traits::input_parameter< std::vector<std::vector<double>> >::type adjList_dist_ptr_jogger(adjList_dist_ptr_joggerSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type adj_ptr(adj_ptrSEXP);
     Rcpp::traits::input_parameter< std::vector<int> >::type src_v(src_vSEXP);
     Rcpp::traits::input_parameter< std::vector<double> >::type agentSpeeds(agentSpeedsSEXP);
     Rcpp::traits::input_parameter< std::vector<double> >::type agentDurations(agentDurationsSEXP);
@@ -196,7 +200,7 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< std::vector<double> >::type AOI_dulns(AOI_dulnsSEXP);
     Rcpp::traits::input_parameter< std::vector<std::string> >::type agentTyps(agentTypsSEXP);
     Rcpp::traits::input_parameter< std::vector<double> >::type AOI_areas(AOI_areasSEXP);
-    rcpp_result_gen = Rcpp::wrap(findClosestAOI_cpp(AOIList_o, AOI_v, V_ptr, adjList_IDs_ptr, adjList_dist_ptr_walkNat, adjList_dist_ptr_walkSoc, adjList_dist_ptr_dogNat, adjList_dist_ptr_dogProx, adjList_dist_ptr_ebikeNat, adjList_dist_ptr_bikeSport, adjList_dist_ptr_jogger, src_v, agentSpeeds, agentDurations, AOI_aois, AOI_dulns, agentTyps, AOI_areas));
+    rcpp_result_gen = Rcpp::wrap(findClosestAOI_cpp(AOIList_o, AOI_v, adj_ptr, src_v, agentSpeeds, agentDurations, AOI_aois, AOI_dulns, agentTyps, AOI_areas));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -233,7 +237,10 @@ END_RCPP
 
 static const R_CallMethodDef CallEntries[] = {
     {"_visitorFlowTool_filterRouteChoices_cpp", (DL_FUNC) &_visitorFlowTool_filterRouteChoices_cpp, 5},
-    {"_visitorFlowTool_chooseBestRoutes_cpp", (DL_FUNC) &_visitorFlowTool_chooseBestRoutes_cpp, 6},
+    {"_visitorFlowTool_chooseBestRoutes_cpp", (DL_FUNC) &_visitorFlowTool_chooseBestRoutes_cpp, 7},
+    {"_visitorFlowTool_buildEdgeMap_cpp", (DL_FUNC) &_visitorFlowTool_buildEdgeMap_cpp, 1},
+    {"_visitorFlowTool_buildNodeRowMap_cpp", (DL_FUNC) &_visitorFlowTool_buildNodeRowMap_cpp, 1},
+    {"_visitorFlowTool_adjListsToPtr_cpp", (DL_FUNC) &_visitorFlowTool_adjListsToPtr_cpp, 1},
     {"_visitorFlowTool_getEdges_cpp", (DL_FUNC) &_visitorFlowTool_getEdges_cpp, 6},
     {"_visitorFlowTool_getVisitedEdges_cpp", (DL_FUNC) &_visitorFlowTool_getVisitedEdges_cpp, 3},
     {"_visitorFlowTool_updateNicestHistory_cpp", (DL_FUNC) &_visitorFlowTool_updateNicestHistory_cpp, 2},
@@ -241,8 +248,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_visitorFlowTool_historyToPassage_cpp", (DL_FUNC) &_visitorFlowTool_historyToPassage_cpp, 3},
     {"_visitorFlowTool_appendCurrentToPrior_cpp", (DL_FUNC) &_visitorFlowTool_appendCurrentToPrior_cpp, 4},
     {"_visitorFlowTool_generateAdjListAndDistTbl_cpp", (DL_FUNC) &_visitorFlowTool_generateAdjListAndDistTbl_cpp, 2},
-    {"_visitorFlowTool_findShortestRoute_cpp", (DL_FUNC) &_visitorFlowTool_findShortestRoute_cpp, 27},
-    {"_visitorFlowTool_findClosestAOI_cpp", (DL_FUNC) &_visitorFlowTool_findClosestAOI_cpp, 18},
+    {"_visitorFlowTool_findShortestRoute_cpp", (DL_FUNC) &_visitorFlowTool_findShortestRoute_cpp, 5},
+    {"_visitorFlowTool_findClosestAOI_cpp", (DL_FUNC) &_visitorFlowTool_findClosestAOI_cpp, 10},
     {"_visitorFlowTool_ccl_big_patches", (DL_FUNC) &_visitorFlowTool_ccl_big_patches, 4},
     {"_visitorFlowTool_svf_horizon", (DL_FUNC) &_visitorFlowTool_svf_horizon, 6},
     {NULL, NULL, 0}

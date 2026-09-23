@@ -10,6 +10,7 @@ terraOptions(progress = 0)
 R <- Sys.getenv("VFT_R", file.path(getwd(), "R"))
 if(!dir.exists(R)) R <- "C:/Users/frueh/VScode_GitClones/visitorFlowTool_2025/R"
 source(file.path(R, "data_paths.R"))
+source(file.path(R, "paintbrush_helpers.R"))   ## PAINT_CATEGORIES: heatHeights() is keyed off it
 source(file.path(R, "shadow_helpers.R"))
 ## The heat model's inner loops are C++ now (src/heat_cpp.cpp), so sourcing R/
 ## alone no longer gives a runnable model. Load the WORKING TREE's compiled code,
@@ -24,6 +25,14 @@ source(file.path(R, "shadow_helpers.R"))
   dyn.load(.dll)
   source(file.path(R, "RcppExports.R"))
 }
+
+## heat_helpers.R is here for ONE function: heat_modal_class(), the two-stage
+## modal the app coarsens the land cover with. Nothing below runs the heat model
+## - this file stays what it was - but a fixture built with a plain modal is not
+## the raster the app marches over, and over height ids the two genuinely
+## differ: a 5 m cell that is entirely forest can come out as open sky simply
+## because the crowns in it are two different heights.
+source(file.path(R, "heat_helpers.R"))
 
 fails <- 0
 ok <- function(what, cond, extra = "") {
@@ -44,20 +53,30 @@ mk <- function(h, n = 201) {
   r[n %/% 2 + 1, n %/% 2 + 1] <- h
   r
 }
+## Every step of every ramp, not just the three defaults. This is the direct
+## test that the height bar does what it says: a 25 m tree has to reach 24.3 m in
+## the morning and a 3 m one 2.9 m, and both numbers come from the same table the
+## march is supposed to reproduce.
+##
+## The grid has to be big enough for the longest shadow in the table - a 50 m
+## block reaches 48.6 m - or the reach is clipped by the window and every tall
+## class fails for a reason that has nothing to do with the caster.
+HCLASSES <- PAINT_CATEGORIES[!is.na(PAINT_CATEGORIES$height), c("id", "name", "height")]
+NGRID <- 2 * ceiling(max(HCLASSES$height) / tan(heatSunPosition("morning")$elevation * pi / 180) / RES) + 21
 for (bin in HEAT_BINS) {
   s <- heatSunPosition(bin)
-  for (cls in c(canopy_tree = 7, artificial_block = 8, canopy_artificial = 6)) {
+  for (k in seq_len(nrow(HCLASSES))) {
+    cls <- HCLASSES$id[k]
     h <- unname(heatHeights()[[as.character(cls)]])
-    H <- mk(h)
+    H <- mk(h, n = NGRID)
     m <- as.matrix(H, wide = TRUE)
     sh <- heat_shadow_march(m, RES, s$elevation, s$azimuth)
     idx <- which(sh, arr.ind = TRUE)
     ctr <- nrow(m) %/% 2 + 1
     reach <- if (nrow(idx)) max(sqrt((idx[, 1] - ctr)^2 + (idx[, 2] - ctr)^2)) * RES else 0
-    want <- unname(g[[sprintf("shadow_length_%s_%s",
-                              names(which(c(canopy_tree = 7, artificial_block = 8,
-                                            canopy_artificial = 6) == cls)), bin)]])
-    ok(sprintf("%s / %s reach %.1f m vs table %.1f m", bin, cls, reach, want),
+    want <- unname(g[[sprintf("shadow_length_%s_%s", HCLASSES$name[k], bin)]])
+    ok(sprintf("%s / %s (%g m) reach %.1f m vs table %.1f m",
+               bin, HCLASSES$name[k], h, reach, want),
        abs(reach - want) <= 1.5)
   }
 }
@@ -112,8 +131,11 @@ if(!file.exists(file.path(LC, "ground_CH_1m.tif"))){
 }
 CX <- 2593956; CY <- 1119554
 e <- ext(CX - 600, CX + 600, CY - 600, CY + 600)
-gr <- aggregate(crop(rast(file.path(LC, "ground_CH_1m.tif")), e), 5, fun = "modal")
-cn <- aggregate(crop(rast(file.path(LC, "canopy_CH_1m.tif")), e), 5, fun = "modal")
+## heat_modal_class(), not a plain modal: the app coarsens this way, and over
+## height ids a plain modal can turn a 5 m cell that is entirely forest into open
+## sky merely because the crowns in it are two different heights.
+gr <- heat_modal_class(crop(rast(file.path(LC, "ground_CH_1m.tif")), e), 5)
+cn <- heat_modal_class(crop(rast(file.path(LC, "canopy_CH_1m.tif")), e), 5)
 Hh <- heatObstructionHeight(gr, cn)
 ok("height field has no NA", !any(is.na(values(Hh))))
 cat("   height values present:", paste(sort(unique(values(Hh))), collapse = ", "), "\n")
@@ -143,8 +165,8 @@ ok("cast shade exceeds own-canopy shade", mean(values(sd_mid)) > mean(values(own
 ## and the test is that shade must TOUCH the thing that casts it.
 cat("\n")
 e2 <- ext(CX - 500, CX + 500, CY - 300, CY + 300)     # 1000 x 600 m
-g2 <- aggregate(crop(rast(file.path(LC, "ground_CH_1m.tif")), e2), 5, fun = "modal")
-c2 <- aggregate(crop(rast(file.path(LC, "canopy_CH_1m.tif")), e2), 5, fun = "modal")
+g2 <- heat_modal_class(crop(rast(file.path(LC, "ground_CH_1m.tif")), e2), 5)
+c2 <- heat_modal_class(crop(rast(file.path(LC, "canopy_CH_1m.tif")), e2), 5)
 ok("non-square window really is non-square", nrow(g2) != ncol(g2),
    sprintf("[%d x %d]", nrow(g2), ncol(g2)))
 s2 <- heatShadeRaster(g2, c2, "midday")
@@ -200,10 +222,19 @@ roof <- values(iso) == 8
 ok(sprintf("an isolated building does not shade its own roof (%.1f%%)",
            100 * mean(values(si)[roof] == 1)),
    mean(values(si)[roof] == 1) < 0.02)
-## but it must still shade the ground beside it, or the fix has gone too far
+## but it must still shade the ground beside it, or the fix has gone too far.
+##
+## AT MORNING, NOT MIDDAY, and the difference is the grid rather than the model.
+## The default block is 10 m since the height ramps were fixed, and at the midday
+## elevation (64.5 deg) that casts 10/tan = 4.8 m - less than one 5 m cell, so
+## the march's very first step drops the ray 10.4 m and clears the building.
+## Zero shaded cells there is the right answer for a 10 m block on a 5 m grid,
+## not a regression; the case this check exists for is "a building casts at all",
+## and morning (45.8 deg, 9.7 m, two cells) is where that question has an answer.
+sim <- heatShadeRaster(iso, noc, "morning")
 ok("the same building still shades the ground beside it",
-   sum(values(si) == 1 & !roof) > 0,
-   sprintf("[%d cells]", sum(values(si) == 1 & !roof)))
+   sum(values(sim) == 1 & !roof) > 0,
+   sprintf("[%d cells]", sum(values(sim) == 1 & !roof)))
 ## A genuinely taller neighbour must still cast onto a lower roof - otherwise the
 ## fix has replaced one error with the opposite one. This goes at the march
 ## directly with heights of its own: the per-class heights cannot express the

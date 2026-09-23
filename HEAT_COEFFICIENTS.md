@@ -50,16 +50,25 @@ Because the CSVs live outside the repo, the scripts that produce them are kept
 **inside** it, in `data-raw/` alongside the existing standalone data-prep scripts:
 
 ```
-data-raw/build_heat_tables.py   # the values live here - edit this, not the CSV
-data-raw/verify_heat_tables.R   # 43 checks on the tables
-data-raw/build_heat_xlsx.R      # the review workbook, built from the CSVs
-data-raw/verify_shadows.R       # 24 checks on Phase 2
-data-raw/verify_svf.R           # 23 checks on Phase 3
-data-raw/verify_heat_model.R    # 43 checks on the assembled model
+data-raw/build_heat_tables.py        # the values live here - edit this, not the CSV
+data-raw/verify_heat_tables.R        # 43 checks on the tables
+data-raw/build_heat_xlsx.R           # the review workbook, built from the CSVs
+data-raw/verify_shadows.R            # 63 checks on Phase 2
+data-raw/verify_svf.R                # 24 checks on Phase 3
+data-raw/verify_heat_model.R         # 100 checks on the assembled model
+data-raw/verify_landcover_heights.R  # 67 checks on the heights in the land cover
 ```
 
-Each exits non-zero on failure. Run in that order. Generation is Python and verification is R **on purpose**, so
-the check is independent of the toolchain that produced the files. Both take a
+Each exits non-zero on failure. Run in that order. A suite that touches the
+national land cover must build its fixture the way the app does - coarsen with
+`heat_modal_class()`, march the geometry terms over the RAW height-bearing ids,
+and hand `paintBaseRaster()` output to the local and advective terms. Getting
+that wrong is silent rather than loud: raw ids reaching `heatLocalTerm()` drop
+every block variant out of the map, and a forest split across five tree classes
+falls under `min_patch_ha` and yields no advective source at all.
+
+Generation is Python and verification is R **on purpose**, so the check is
+independent of the toolchain that produced the files. Both take a
 `VFT_TABLES` environment variable to override the output directory.
 
 `build_heat_tables.py` is the editable source of truth for every number. Editing
@@ -264,9 +273,11 @@ Also on the `limitations` sheet of the workbook.
 [R/shadow_helpers.R](R/shadow_helpers.R). Ratti & Richens (2004), the same
 marching algorithm SOLWEIG uses: step the obstruction-height field toward the
 sun one cell at a time, lower the ray by `step · tan(elevation)` each step, keep
-the running maximum. Obstruction heights are the fixed per-class values in
-`heat_geometry.csv` (tree 15 m, building 12 m, artificial canopy 4 m), so this
-needs **no height raster and no new data dependency**.
+the running maximum. Obstruction heights come from `heat_geometry.csv`, one row
+per class id — and since the height bar there is a *ramp* per material rather
+than a single value: trees at 3/10/15/20/25 m, artificial canopy at 5/10/15 m,
+blocks at 5/10/15/25/50 m. **The class id is the height**, so this still needs
+no height raster and no second band anywhere in the pipeline.
 
 **What it changes.** Shade stops falling straight down. Over central Sion at
 5 m, the shaded fraction goes from **10.3 %** — the canopy's own footprint, all
@@ -300,8 +311,19 @@ afternoon. Flat ground casts nothing; a sun below the horizon shades everything.
 
 Two limits are structural and deliberate:
 
-- **No height raster**, so every tree is 15 m. Shadow *lengths* are right on
-  average and wrong per object. Retune in `heat_geometry.csv`, not in the code.
+- **No height raster** — but height is no longer one number per class either.
+  Each obstruction material carries a ramp of class ids, the national land cover
+  assigns each cell the step nearest its measured height (trees from the 5 m
+  vegetation height model, buildings from swissBUILDINGS3D), and the brush can
+  paint any step directly. What remains is the quantisation: a tree is one of
+  five heights and not its own, so it is wrong by up to 2.5 m over most of the
+  ramp and 3.5 m in the wide 3–10 m band. Retune in `heat_geometry.csv` and in
+  `PAINT_CATEGORIES`, which must agree; `verify_heat_model.R` asserts they do.
+- **A height under one march step casts nothing.** The ray drops
+  `res · tan(elevation)` per step — 5.1 m morning and afternoon, 10.4 m at
+  midday on the 5 m heat grid — so a 3 m tree or a 5 m carport casts no cell of
+  shadow at midday. That is arithmetic rather than a bug, and it is the reason
+  the low ramp steps look inert when you paint them.
 - **No terrain.** The height field carries canopy and buildings only, so a valley
   in its own mountain's shadow is invisible — which matters in exactly the alpine
   settings this tool is often pointed at. A DEM would enter at Phase 3's horizon

@@ -191,7 +191,45 @@ def sun_position(lat_deg, decl_deg, hour_angle_deg):
     return math.degrees(el), (math.degrees(az) + 360) % 360
 
 LAT, DECL = 47.0, 21.5          # 47 deg N, mid-July declination
-HEIGHTS = [("canopy_tree", 7, 15.0), ("artificial_block", 8, 12.0), ("canopy_artificial", 6, 4.0)]
+# Obstruction height per class id, and the ONLY place these numbers are written
+# down. R reads them back through heatHeights(), which takes its id list from
+# PAINT_CATEGORIES (R/paintbrush_helpers.R) and looks up one height_<name> row
+# here per id - so this list and that table have to name the same thirteen
+# classes, and verify_heat_model.R asserts they do.
+#
+# Since the height bar there are three RAMPS rather than three scalars: the user
+# picks a step and the class id carries it. Each material keeps its original id
+# as the default step, which is what the national land cover writes and what a
+# version saved before the bar replays as - so ids 6, 7 and 8 are the surveyed
+# heights and must stay in this list even though they now sit inside a ramp.
+#
+# 6 and 8 moved when the ramps were fixed: an artificial canopy was 4 m and is
+# now 5 m, a block was 12 m and is now 10 m, both snapped onto the nearest step
+# the bar offers so that no height exists anywhere except the ones a user can
+# choose. That moves every surveyed building and bridge in the country by a
+# couple of metres of shadow, which is why the stored Sion regression baseline
+# has to be regenerated alongside this file.
+#
+# 19 was added later, when swissBUILDINGS3D gave every building in the country a
+# real height: the median Swiss building measures 13.6 m, which is almost exactly
+# the midpoint of the 10-25 m gap the ramp had, so a third of all buildings were
+# taking the larger rounding error. It is a ramp STEP and not a new material -
+# heat_materials.csv is untouched by it.
+HEIGHTS = [
+    ("canopy_tree_3",         10,  3.0),
+    ("canopy_tree_10",        11, 10.0),
+    ("canopy_tree",            7, 15.0),   # default step of the tree ramp
+    ("canopy_tree_20",        12, 20.0),
+    ("canopy_tree_25",        13, 25.0),
+    ("canopy_artificial",      6,  5.0),   # default step, was 4.0
+    ("canopy_artificial_10",  14, 10.0),
+    ("canopy_artificial_15",  15, 15.0),
+    ("artificial_block_5",    16,  5.0),
+    ("artificial_block",       8, 10.0),   # default step, was 12.0
+    ("artificial_block_15",   19, 15.0),
+    ("artificial_block_25",   17, 25.0),
+    ("artificial_block_50",   18, 50.0),
+]
 
 def write_geometry(path):
     rows = []
@@ -208,7 +246,8 @@ def write_geometry(path):
         add("sun_azimuth_%s" % b, dec(az), "deg from N", R_VDI, "high", "clockwise from north")
     for name, cid, h in HEIGHTS:
         add("height_%s" % name, dec(h), "m", R_MEEUS, "medium",
-            "class %d representative obstruction height; no height raster is read" % cid)
+            "class %d obstruction height; no height raster is read - the class id "
+            "carries the height, see PAINT_CATEGORIES" % cid)
     add("svf_coefficient", dec(20.0), "K Tmrt per unit SVF", R_SOLWEIG, "low",
         "Tmrt sensitivity to sky view factor, beam blocking included; Phase 3")
     # Without this, Phase 4 double-counts shade. svf_coefficient is the FULL

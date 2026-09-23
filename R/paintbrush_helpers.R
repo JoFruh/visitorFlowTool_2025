@@ -1,26 +1,62 @@
 #' Paint materials, one row per button. `level` says which of the two stacked
 #' rasters a stroke of that material lands in: "ground" -> paintedRaster,
-#' "canopy" -> canopyRaster, "both" -> the same cells in each. The canopy colors
-#' are deliberately darker than their ground counterparts (artificial/vegetation)
-#' so the two levels stay distinguishable when the canopy layer is drawn over the
-#' ground layer.
+#' "canopy" -> canopyRaster, "both" -> the same cells in each.
 #'
 #' Vegetation is split by height across the two levels rather than duplicated:
 #' "bush" is ground-level woody growth that does not reach a canopy (roughly
-#' 0.5-3 m), while anything taller is "canopy_tree" on the canopy level. That is
-#' why there is no ground-level tree - a tree's crown is the canopy, and what it
-#' stands on is the ground class underneath it. The three greens are ordered by
-#' height so the map reads bottom-up: lightgreen grass, #6aa84f bush, #14532d
-#' canopy.
+#' 0.5-3 m), while anything taller is a canopy tree. That is why there is no
+#' ground-level tree - a tree's crown is the canopy, and what it stands on is
+#' the ground class underneath it.
 #'
 #' "both" exists for a building: a solid block occupies the ground and everything
 #' above it, so one stroke has to fill either raster at once. It belongs to no
 #' level, which is why its button is never disabled by the level switch.
 #'
+#' HEIGHT IS THE COLOUR. The three materials that obstruct the sky - a tree, an
+#' artificial canopy, a solid block - each come as a ramp of ids, one per step
+#' the height bar offers, and the nuance of the colour *is* the metres.
+#'
+#' That is the whole mechanism, and it is chosen because a painted cell is ONE
+#' INTEGER everywhere it travels: the browser's cell map, the {id, runs} wire
+#' format, the 8-bit class PNG, the SpatRaster cell value. A second per-cell
+#' channel would have meant a third raster beside paintedRaster/canopyRaster, a
+#' third wrap() across the async boundary and a new dimension on the heat cache.
+#' More ids cost none of that, and paintbrush.js needs no change at all -
+#' paintInitPayload() already ships `colors` and `levels` keyed by id, so a new
+#' row here is a new brush colour in the browser for free.
+#'
+#' `base` is what a variant is MADE OF, and it is the seam that keeps every
+#' thermal table (heat_materials.csv, heat_decay.csv) keyed on the nine original
+#' classes: a 3 m tree crown and a 25 m one are the same stuff, and only their
+#' geometry differs. heatRaster() substitutes the variants away with
+#' paintBaseRaster() before the local and advective terms, and keeps the RAW ids
+#' for shade, SVF and the wall term - those are the three that read a height.
+#'
+#' `height` is metres, and it is the LABEL the bar prints. heat_geometry.csv
+#' holds the value the model actually marches with (one height_<name> row per id
+#' here), because that file is where the project retunes its coefficients;
+#' verify_heat_model.R asserts the two agree rather than picking one.
+#'
+#' IDS 1-9 ARE FROZEN. They are what generate_ground_canopy_CH.r wrote into the
+#' national land cover and what every version saved before the height bar
+#' carries. Each of the three obstruction materials keeps its original id as the
+#' DEFAULT step of its ramp, so a surveyed tree and a year-old saved version
+#' both still mean exactly what they always did. New steps are APPENDED, never
+#' inserted: id 19 is the 15 m block and sits in the middle of its ramp by
+#' height, so this table's row order is not the ramp order. vftHeightRamps()
+#' sorts by `height`, and nothing should read the ramps off the row order here.
+#'
 #' `hex` is the single source of truth for a material's color: it is what the
-#' UI buttons are styled with (newVersions_ui.R), what the brush cursor is drawn
-#' in, and what the browser fills painted cells with. There is no server-side
-#' palette any more - R never renders the painted layers.
+#' brush cursor is drawn in and what the browser fills painted cells with. There
+#' is no server-side palette any more - R never renders the painted layers. The
+#' eight material buttons in newVersions_ui.R restate their hexes in inline CSS
+#' and have to be edited together with this table.
+#'
+#' THE GREYS DO NOT COLLIDE. Ground "artificial" is plain grey (#808080); the
+#' canopy-artificial ramp sits entirely above it (light grey -> grey, darkening
+#' with height) and the block ramp entirely below it (grey -> black). That is
+#' what replaced the older "canopy is always darker than its ground counterpart"
+#' rule, which cannot survive two grey ramps and a grey ground material at once.
 #'
 #' "canopy_cleared" (9) is the one material with no button. It is what a plan
 #' import (planimport.js) writes on the canopy level under a ground material,
@@ -30,19 +66,144 @@
 #' browser draws it as a hole punched through the baseline (`holes` in
 #' paintInitPayload) and the heat model counts it as open sky (HEAT_CANOPY).
 PAINT_CATEGORIES <- data.frame(
-  id     = 1:9,
+  id     = 1:19,
   name   = c("grass", "bush", "artificial", "natural", "water",
              "canopy_artificial", "canopy_tree", "artificial_block",
-             "canopy_cleared"),
-  level  = c(rep("ground", 5), rep("canopy", 2), "both", "canopy"),
+             "canopy_cleared",
+             "canopy_tree_3", "canopy_tree_10", "canopy_tree_20",
+             "canopy_tree_25", "canopy_artificial_10", "canopy_artificial_15",
+             "artificial_block_5", "artificial_block_25", "artificial_block_50",
+             "artificial_block_15"),
+  level  = c(rep("ground", 5), rep("canopy", 2), "both", "canopy",
+             rep("canopy", 6), rep("both", 4)),
+  #the three ramps read bottom-up in metres. Tree: five greens from #006400 at
+  #3 m to #002100 at 25 m. Canopy artificial: light grey to grey, all lighter
+  #than ground grey. Block: grey to black, all darker than it.
   hex    = c("lightgreen", "#6aa84f", "grey", "#a05a3c", "dodgerblue",
-             "#3f3f3f", "#14532d", "#1f1f1f", "transparent"),
-  button = c(rep(TRUE, 8), FALSE),
+             "#e0e0e0", "#004200", "#3d3d3d", "transparent",
+             "#006400", "#005300", "#003200", "#002100",
+             "#c0c0c0", "#a0a0a0",
+             "#5a5a5a", "#202020", "#000000", "#2e2e2e"),
+  #only the eight base materials get a button; a height variant is reached
+  #through the height bar, which arms it by id (see armBrush() in
+  #newVersions_server.R) and so never needs a row in PAINT_BUTTONS
+  button = c(rep(TRUE, 8), rep(FALSE, 11)),
+  base   = c(1:9, 7L, 7L, 7L, 7L, 6L, 6L, 8L, 8L, 8L, 8L),
+  height = c(rep(NA_real_, 5), 5, 15, 10, NA,
+             3, 10, 20, 25, 10, 15, 5, 25, 50, 15),
   stringsAsFactors = FALSE
 )
 
 #' Materials drawn as a hole in the layer rather than as a colour.
 PAINT_HOLE_IDS <- PAINT_CATEGORIES$id[PAINT_CATEGORIES$name == "canopy_cleared"]
+
+#' Ids that are a height variant of some other material.
+PAINT_VARIANT_IDS <- PAINT_CATEGORIES$id[PAINT_CATEGORIES$id != PAINT_CATEGORIES$base]
+
+#' Ids that carry a height, i.e. the three obstruction ramps. HEAT_OBSTRUCTION_IDS
+#' and heatHeights() are both derived from this, so they cannot drift apart.
+PAINT_HEIGHT_IDS <- PAINT_CATEGORIES$id[!is.na(PAINT_CATEGORIES$height)]
+
+#' Class ids that change the obstruction height field.
+#'
+#' Only these make a shadow, occlude sky or present a wall, so a repaint that
+#' touches none of them cannot move the shade, SVF or wall terms - and those are
+#' 0.61 s of a 2.4 s read-out over central Sion. Every other id is a ground
+#' material that reaches the output through the local and advective terms alone.
+#'
+#' DERIVED, not written out, and that matters more since the height bar than it
+#' did before it. These ids used to be c(6L, 7L, 8L) and a ramp step added to
+#' PAINT_CATEGORIES without a matching edit here would not fail, it would give a
+#' WRONG ANSWER QUIETLY: repaint a tree from 10 m to 25 m, `touched` is
+#' {11, 13}, neither is in the list, geom_dirty comes back FALSE and the cached
+#' shade, SVF and wall layers are reused with the old tree still in them. Same
+#' shape of bug as the stale per-bin geometry below, which cost 5 K on a real
+#' sequence. heatHeights() reads the same column, so the two cannot disagree.
+HEAT_OBSTRUCTION_IDS <- as.integer(PAINT_HEIGHT_IDS)
+
+#' What a variant is made of: a height variant -> its base material, anything
+#' else -> itself.
+#'
+#' Unknown ids pass through rather than becoming NA. Both callers are
+#' bookkeeping - cache invalidation and raster substitution - and a stray value
+#' should be left alone there, not turned into a hole; paintLandcoverBaselinePNG()
+#' is where an out-of-range class is squashed, and it does that on the way in.
+paintBaseId <- function(ids){
+  out <- as.integer(ids)
+  i   <- match(out, PAINT_CATEGORIES$id)
+  hit <- !is.na(i)
+  out[hit] <- as.integer(PAINT_CATEGORIES$base[i[hit]])
+  out
+}
+
+#' Substitute the height variants away, leaving a raster of base material ids.
+#'
+#' This is what every THERMAL lookup reads. heat_materials.csv and heat_decay.csv
+#' are keyed on the nine original classes and must stay that way - a 3 m tree
+#' crown and a 25 m one are made of the same thing, and giving every ramp step
+#' its own set of thermal rows would say otherwise. Height reaches the model the other way, through
+#' heatObstructionHeight() off the RAW raster.
+#'
+#' Not optional, and the failure is silent rather than loud: heatLocalTerm()
+#' resolves ground classes with `others = NA`, so an unlisted block variant would
+#' drop its cells out of the finished map altogether, and canopy classes with
+#' `others = 0`, so an unlisted tree variant would read as open sky.
+#'
+#' `others = NULL` keeps everything that is not a variant, so this is a no-op on
+#' a raster with no height painted in it - which is the common case, the national
+#' land cover, and every version saved before the height bar existed.
+paintBaseRaster <- function(r){
+  if(is.null(r) || !length(PAINT_VARIANT_IDS)) return(r)
+  terra::subst(r, from = as.integer(PAINT_VARIANT_IDS),
+               to   = paintBaseId(PAINT_VARIANT_IDS), others = NULL)
+}
+
+#' Readable text over a swatch: black on a light one, white on a dark one.
+#'
+#' The height ramps run from #e0e0e0 to #000000, so no single fixed foreground
+#' works across them. Rec. 601 luma rather than a hand-picked list, so a retuned
+#' hex keeps a readable label without anyone remembering to flip it.
+#' Named colours ("grey", "lightgreen") come back from col2rgb() too, so the
+#' eight base materials can use this as well.
+paintSwatchFg <- function(hex){
+  vapply(hex, function(h){
+    if(is.na(h) || !nzchar(h) || identical(h, "transparent")) return("black")
+    rgb <- try(grDevices::col2rgb(h), silent = TRUE)
+    if(inherits(rgb, "try-error")) return("black")
+    luma <- 0.299 * rgb[1] + 0.587 * rgb[2] + 0.114 * rgb[3]
+    if(luma > 140) "black" else "white"
+  }, character(1), USE.NAMES = FALSE)
+}
+
+#' The height ramps, one entry per material that carries a height.
+#'
+#' What the height bar is built from (newVersions_ui.R) and what armBrush()
+#' resolves a choice against (newVersions_server.R). Steps come back in
+#' ASCENDING height; the bar reverses them so the tallest sits on top.
+#'
+#' `default` is the step whose id IS the base material - the surveyed value, what
+#' the national land cover means and what a version saved before the height bar
+#' replays as. That is what makes this feature additive rather than a migration.
+vftHeightRamps <- function(){
+  rows <- PAINT_CATEGORIES[!is.na(PAINT_CATEGORIES$height), ]
+  lapply(split(rows, rows$base), function(g){
+    g <- g[order(g$height), ]
+    g$fg <- paintSwatchFg(g$hex)
+    base <- g$base[1]
+    list(base    = base,
+         name    = PAINT_CATEGORIES$name[match(base, PAINT_CATEGORIES$id)],
+         level   = g$level[1],
+         default = base,
+         steps   = g[, c("id", "height", "hex", "fg")])
+  })
+}
+
+#' The ramp a class id belongs to, or NULL for a material with no height.
+vftHeightRampOf <- function(id){
+  b <- paintBaseId(id)
+  r <- vftHeightRamps()
+  r[[as.character(b)]]
+}
 
 #' Resolution of the painted grid, in metres of EPSG:2056. Cells are indexed
 #' globally by (col, row) = (floor(E/res), floor(N/res)), so every painted cell

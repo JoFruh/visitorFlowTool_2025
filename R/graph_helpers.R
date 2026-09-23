@@ -75,3 +75,49 @@ vftGraphTibble <- function(graph, what = c("edges", "nodes")){
   class(cols) <- c("tbl_df", "tbl", "data.frame")
   cols
 }
+
+#' The seven per-activity attractiveness columns the edit handlers adjust.
+VFT_DULN_COLS <- c("DULN_WALK_", "DULN_WALK1", "DULN_BIKER", "DULN_EBIKE",
+                   "DULN_JOGGE", "DULN_DOG_N", "DULN_DOG_P")
+
+#' Add `deltas` to one edge's attractiveness, and to both of its end nodes.
+#'
+#' What the newVersions edit handlers (submitting a changed or a new path) do
+#' after the user picks signage, surface and width - written as one pass over a
+#' local graph instead of the ~21 separate statements of the form
+#'
+#'   igraph::E(r$networkList[[pos]]$network)[[.data$edgeID_2 == id]]$X <-
+#'     igraph::E(r$networkList[[pos]]$network)[.data$edgeID_2 == id]$X + d["X"]
+#'
+#' each of which re-scanned every edge for the id and copied the whole graph out
+#' of and back into the reactive list: ~2.7 s of shared main thread per click on
+#' a 47k-edge network. The arithmetic and its order are unchanged - the edge's
+#' seven columns, then the `to_2` node's seven, then the `from_2` node's seven,
+#' each read after the one before was written - so a path whose two ends are the
+#' same node still gets the delta twice, as it did.
+#'
+#' @param graph the scenario's graph.
+#' @param edgeID the edge's `edgeID_2`.
+#' @param deltas a numeric vector named by VFT_DULN_COLS (a missing name adds NA,
+#'   as indexing the named vector did).
+#' @return the updated graph. Write it back ONCE.
+vftShiftAttractivity <- function(graph, edgeID, deltas){
+  #The attribute lists are edited as plain R vectors and handed back in one
+  #assignment each: every igraph::set_*_attr() call copies the whole graph -
+  #geometry included - so doing it per column cost ~0.1 s each on a large
+  #network, most of what this function exists to save.
+  ea <- igraph::edge_attr(graph)
+  ei <- which(ea[["edgeID_2"]] == edgeID)
+  for(a in VFT_DULN_COLS) ea[[a]][ei] <- ea[[a]][ei] + deltas[a]
+
+  #V(g)[k] with a number is the k-th vertex, and to_2/from_2 hold vertex
+  #positions - the same indexing the statements used
+  va <- igraph::vertex_attr(graph)
+  for(vi in list(ea[["to_2"]][ei], ea[["from_2"]][ei])){
+    for(a in VFT_DULN_COLS) va[[a]][vi] <- va[[a]][vi] + deltas[a]
+  }
+
+  igraph::edge_attr(graph)   <- ea
+  igraph::vertex_attr(graph) <- va
+  graph
+}

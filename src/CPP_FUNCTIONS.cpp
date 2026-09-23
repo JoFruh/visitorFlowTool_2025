@@ -6,9 +6,37 @@
 #include <fstream>
 #include <unordered_map>
 #include <unordered_set>
+#include <map>
+#include <tuple>
 
 using namespace Rcpp;
 
+// the ABM's two lookups, built once per run - see buildEdgeMap_cpp()
+typedef std::unordered_map<int64_t, int> EdgeMap;
+typedef std::unordered_map<int, int>     NodeRowMap;
+
+// The adjacency lists generateAdjListAndDistTbl_cpp() returns to R, held once as
+// C++ vectors - see adjListsToPtr_cpp(). w[weighting][agent type]:
+//   weighting 0 = distance, 1 = little_attr ("_attr"), 2 = ATTR ("_ATTR")
+//   type      0 walkNat, 1 walkSoc, 2 dogNat, 3 dogProx, 4 ebikeNat,
+//             5 bikeSport, 6 jogger
+struct AdjLists {
+  int V;
+  std::vector<std::vector<int>> ids;
+  std::vector<std::vector<double>> w[3][7];
+};
+
+// the agent type's slot in AdjLists::w, with the fall-through to jogger that
+// both path finders have always had
+static int agentTypeIndex(const std::string& t){
+  if(t == "walkNat")   return 0;
+  if(t == "walkSoc")   return 1;
+  if(t == "dogNat")    return 2;
+  if(t == "dogProx")   return 3;
+  if(t == "ebikeNat")  return 4;
+  if(t == "bikeSport") return 5;
+  return 6;
+}
 
 
 /*
@@ -104,23 +132,20 @@ List filterRouteChoices_cpp(List neighbours, NumericVector currentVs, NumericVec
  */
 
 // [[Rcpp::export]]
-List chooseBestRoutes_cpp(List viableRoutes, DataFrame DULN_df, List priorVs, StringVector agentTyps, DataFrame V_coords_df, NumericVector currentVs){
+List chooseBestRoutes_cpp(List viableRoutes, DataFrame DULN_df, List priorVs, StringVector agentTyps, DataFrame V_coords_df, NumericVector currentVs, SEXP nodeRow_ptr){
 
   //length of list of agents
   int nbOfAgents = viableRoutes.size();
 
   List outputList = List(nbOfAgents, NA_REAL);
 
-  NumericVector DULN_df_nodeID = DULN_df["nodeID"];
   NumericVector V_coords_df_X = V_coords_df["X"];
   NumericVector V_coords_df_Y = V_coords_df["Y"];
 
-  // Build nodeID -> row-index map ONCE for O(1) lookups in all inner loops
-  std::unordered_map<int, int> nodeID_to_row;
-  nodeID_to_row.reserve(DULN_df_nodeID.size());
-  for(int i = 0; i < DULN_df_nodeID.size(); i++){
-    nodeID_to_row[(int)DULN_df_nodeID[i]] = i;
-  }
+  // nodeID -> row-index map, built once per simulation by buildNodeRowMap_cpp()
+  // from DULN_df$nodeID
+  XPtr<NodeRowMap> nodeRowX(nodeRow_ptr);
+  const NodeRowMap& nodeID_to_row = *nodeRowX;
 
 
   //prepare variables for angle calculations
@@ -354,27 +379,78 @@ List chooseBestRoutes_cpp(List viableRoutes, DataFrame DULN_df, List priorVs, St
  * returns a vector of edgeIDs
  */
 
+/*
+ * The two lookups the ABM's per-timestep functions need, built ONCE per
+ * simulation and handed back to R as external pointers.
+ *
+ * getEdges_cpp() and chooseBestRoutes_cpp() used to build these themselves on
+ * every call - getEdges_cpp two to three times per timestep, over every edge in
+ * both directions - for a graph that does not change during the run. Same
+ * pattern as generateAdjListAndDistTbl_cpp()'s listOfPointers: R builds them
+ * before the loop and passes the pointers in.
+ *
+ * Both keep the exact overwrite order of the loops they replace (a later row
+ * wins for a repeated key), so every lookup returns what it returned before.
+ */
+
 // [[Rcpp::export]]
-List getEdges_cpp(IntegerVector currentVs, IntegerVector nextVs, DataFrame edgeTable, bool usingPathToGoal, List pathToGoal, List oldPriorEs){
-
-  //TO vector
-  IntegerVector To_v = edgeTable["to"];
-
-  //FROM vector
-  IntegerVector From_v = edgeTable["from"];
-
-  //edgeID vector
+SEXP buildEdgeMap_cpp(DataFrame edgeTable){
+  IntegerVector To_v     = edgeTable["to"];
+  IntegerVector From_v   = edgeTable["from"];
   IntegerVector edgeID_v = edgeTable["edgeID"];
 
-  // Build edge lookup map ONCE: encode(from,to) -> edgeID for O(1) lookup
-  // Uses bit-packing: upper 32 bits = one node, lower 32 bits = other node
-  std::unordered_map<int64_t, int> edgeMap;
-  edgeMap.reserve(To_v.size() * 2);
+  // encode(from,to) -> edgeID, both directions. Bit-packing: upper 32 bits = one
+  // node, lower 32 bits = the other
+  EdgeMap* edgeMap = new EdgeMap();
+  edgeMap->reserve(To_v.size() * 2);
   for(int i = 0; i < To_v.size(); i++){
-    edgeMap[((int64_t)To_v[i]   << 32) | (uint32_t)From_v[i]] = edgeID_v[i];
-    edgeMap[((int64_t)From_v[i] << 32) | (uint32_t)To_v[i]]   = edgeID_v[i];
+    (*edgeMap)[((int64_t)To_v[i]   << 32) | (uint32_t)From_v[i]] = edgeID_v[i];
+    (*edgeMap)[((int64_t)From_v[i] << 32) | (uint32_t)To_v[i]]   = edgeID_v[i];
   }
-  // Rcpp::Rcout << "edgeID_v: " << edgeID_v << std::endl;
+  return XPtr<EdgeMap>(edgeMap, true);
+}
+
+// [[Rcpp::export]]
+SEXP buildNodeRowMap_cpp(NumericVector nodeIDs){
+  // nodeID -> 0-based row of the vertex table
+  NodeRowMap* rowMap = new NodeRowMap();
+  rowMap->reserve(nodeIDs.size());
+  for(int i = 0; i < nodeIDs.size(); i++){
+    (*rowMap)[(int)nodeIDs[i]] = i;
+  }
+  return XPtr<NodeRowMap>(rowMap, true);
+}
+
+/*
+ * The whole of generateAdjListAndDistTbl_cpp()'s result - one id list and 21
+ * weight lists, each with one vector per node - converted to C++ vectors ONCE.
+ *
+ * findShortestRoute_cpp() and findClosestAOI_cpp() used to take all of it as
+ * std::vector<std::vector<...>> arguments, and Rcpp converts such an argument by
+ * copying it - so every call rebuilt 22 lists of V vectors. findShortestRoute_cpp
+ * is called from inside the ABM's timestep loop, so that was paid over and over
+ * for a graph that does not change during the run.
+ */
+// [[Rcpp::export]]
+SEXP adjListsToPtr_cpp(List listOfPointers){
+  AdjLists* a = new AdjLists();
+  a->V   = as<int>(listOfPointers[0]);
+  a->ids = as<std::vector<std::vector<int>>>(listOfPointers[1]);
+  for(int j = 0; j < 3; j++){
+    List byType = listOfPointers[2 + j];
+    for(int k = 0; k < 7; k++){
+      a->w[j][k] = as<std::vector<std::vector<double>>>(byType[k]);
+    }
+  }
+  return XPtr<AdjLists>(a, true);
+}
+
+// [[Rcpp::export]]
+List getEdges_cpp(IntegerVector currentVs, IntegerVector nextVs, SEXP edgeMap_ptr, bool usingPathToGoal, List pathToGoal, List oldPriorEs){
+
+  // the lookup built once by buildEdgeMap_cpp()
+  XPtr<EdgeMap> edgeMapX(edgeMap_ptr);
+  const EdgeMap& edgeMap = *edgeMapX;
 
   //prepare output container
   IntegerVector allEdgeIDs = IntegerVector(nextVs.size());
@@ -1362,7 +1438,6 @@ List generateAdjListAndDistTbl_cpp(DataFrame edgeTable, DataFrame vertexTable){
   NumericVector edge_weights_walkNat_attr = edgeTable["SHAPE_Leng_walkNat_attr"];
   NumericVector edge_weights_walkNat_ATTR = edgeTable["SHAPE_Leng_walkNat_ATTR"];
 
-  Rcpp::Rcout<<"edge_weights_walkNat[1]: "<<edge_weights_walkNat[1]<<std::endl;
 
   NumericVector edge_weights_walkSoc = edgeTable["SHAPE_Leng_walkSoc"];
   NumericVector edge_weights_walkSoc_attr = edgeTable["SHAPE_Leng_walkSoc_attr"];
@@ -1604,77 +1679,27 @@ List generateAdjListAndDistTbl_cpp(DataFrame edgeTable, DataFrame vertexTable){
  */
 
 // [[Rcpp::export]]
-List findShortestRoute_cpp( int V_ptr,
-                            std::vector<std::vector<int>> adjList_IDs_ptr,
-                            std::vector<std::vector<double>> adjList_dist_ptr_walkNat,
-                            std::vector<std::vector<double>> adjList_dist_ptr_walkNat_attr,
-                            std::vector<std::vector<double>> adjList_dist_ptr_walkNat_ATTR,
-                            std::vector<std::vector<double>> adjList_dist_ptr_walkSoc,
-                            std::vector<std::vector<double>> adjList_dist_ptr_walkSoc_attr,
-                            std::vector<std::vector<double>> adjList_dist_ptr_walkSoc_ATTR,
-                            std::vector<std::vector<double>> adjList_dist_ptr_dogNat,
-                            std::vector<std::vector<double>> adjList_dist_ptr_dogNat_attr,
-                            std::vector<std::vector<double>> adjList_dist_ptr_dogNat_ATTR,
-                            std::vector<std::vector<double>> adjList_dist_ptr_dogProx,
-                            std::vector<std::vector<double>> adjList_dist_ptr_dogProx_attr,
-                            std::vector<std::vector<double>> adjList_dist_ptr_dogProx_ATTR,
-                            std::vector<std::vector<double>> adjList_dist_ptr_ebikeNat,
-                            std::vector<std::vector<double>> adjList_dist_ptr_ebikeNat_attr,
-                            std::vector<std::vector<double>> adjList_dist_ptr_ebikeNat_ATTR,
-                            std::vector<std::vector<double>> adjList_dist_ptr_bikeSport,
-                            std::vector<std::vector<double>> adjList_dist_ptr_bikeSport_attr,
-                            std::vector<std::vector<double>> adjList_dist_ptr_bikeSport_ATTR,
-                            std::vector<std::vector<double>> adjList_dist_ptr_jogger,
-                            std::vector<std::vector<double>> adjList_dist_ptr_jogger_attr,
-                            std::vector<std::vector<double>> adjList_dist_ptr_jogger_ATTR,
+List findShortestRoute_cpp(SEXP adj_ptr,
                            String weighingMethod,
                            std::vector<int> src_v,
                            std::vector<int> goal_v,
-                           std::vector<std::string> agentTyps){// Rcpp::XPtr< std::vector<std::vector<double>> > allDistTbl_ptr,
+                           std::vector<std::string> agentTyps){
 
-  //removed:
-  //Rcpp::XPtr<  >
+  // the adjacency lists, converted once by adjListsToPtr_cpp()
+  XPtr<AdjLists> adjX(adj_ptr);
+  const AdjLists& adj = *adjX;
+  int V = adj.V;
+  const std::vector<std::vector<int>>& adjList_IDs = adj.ids;
 
-  //retrieve objects from R that were generated in C++ earlier
-  int V = V_ptr;
-
-  // Select per-weighingMethod adjacency lists (one copy per call, not per agent)
-  const std::vector<std::vector<double>>* adj_walkNat;
-  const std::vector<std::vector<double>>* adj_walkSoc;
-  const std::vector<std::vector<double>>* adj_dogNat;
-  const std::vector<std::vector<double>>* adj_dogProx;
-  const std::vector<std::vector<double>>* adj_ebikeNat;
-  const std::vector<std::vector<double>>* adj_bikeSport;
-  const std::vector<std::vector<double>>* adj_jogger;
-
+  //which of the three weightings
+  int weighting;
   if(weighingMethod == "distance"){
-    adj_walkNat   = &adjList_dist_ptr_walkNat;
-    adj_walkSoc   = &adjList_dist_ptr_walkSoc;
-    adj_dogNat    = &adjList_dist_ptr_dogNat;
-    adj_dogProx   = &adjList_dist_ptr_dogProx;
-    adj_ebikeNat  = &adjList_dist_ptr_ebikeNat;
-    adj_bikeSport = &adjList_dist_ptr_bikeSport;
-    adj_jogger    = &adjList_dist_ptr_jogger;
+    weighting = 0;
   }else if(weighingMethod == "little_attr"){
-    adj_walkNat   = &adjList_dist_ptr_walkNat_attr;
-    adj_walkSoc   = &adjList_dist_ptr_walkSoc_attr;
-    adj_dogNat    = &adjList_dist_ptr_dogNat_attr;
-    adj_dogProx   = &adjList_dist_ptr_dogProx_attr;
-    adj_ebikeNat  = &adjList_dist_ptr_ebikeNat_attr;
-    adj_bikeSport = &adjList_dist_ptr_bikeSport_attr;
-    adj_jogger    = &adjList_dist_ptr_jogger_attr;
+    weighting = 1;
   }else{
-    adj_walkNat   = &adjList_dist_ptr_walkNat_ATTR;
-    adj_walkSoc   = &adjList_dist_ptr_walkSoc_ATTR;
-    adj_dogNat    = &adjList_dist_ptr_dogNat_ATTR;
-    adj_dogProx   = &adjList_dist_ptr_dogProx_ATTR;
-    adj_ebikeNat  = &adjList_dist_ptr_ebikeNat_ATTR;
-    adj_bikeSport = &adjList_dist_ptr_bikeSport_ATTR;
-    adj_jogger    = &adjList_dist_ptr_jogger_ATTR;
+    weighting = 2;
   }
-  // Use const ref to avoid copying the ID list
-  const std::vector<std::vector<int>>& adjList_IDs = adjList_IDs_ptr;
-
 
   // create original variables used in pathfinding
   typedef std::pair<double, int> pqPair;
@@ -1686,52 +1711,48 @@ List findShortestRoute_cpp( int V_ptr,
   //this allows to gather all vertices after arriving at goal by stepping backwards
   std::vector<int> pathSteps_o = std::vector<int>(V+1, 100000000);
 
-  //prepare output container for every agent
+  //prepare output containers for every agent
   std::vector<std::vector<int>> outputPath = std::vector<std::vector<int>>(src_v.size());
   std::vector<double> outputDist = std::vector<double>(src_v.size());
+
+  //Agents asking for the same route - same source, goal and agent type - get the
+  //same answer: the search below is deterministic. Many do ask for the same
+  //one (households on one node heading for the same area), so it is searched
+  //once per call and copied.
+  std::map<std::tuple<int, int, int>, int> solvedBy;
 
   // START EVALUATING DISTANCES FOR EVERY SOURCE-GOAL pair
   for(int agentNo = 0; agentNo < src_v.size(); agentNo++){
 
     //get agent type
-    std::string agentType = agentTyps[agentNo];
+    int typeIdx = agentTypeIndex(agentTyps[agentNo]);
+    const std::vector<std::vector<double>>* adjList_dist = &adj.w[weighting][typeIdx];
 
-    // Use pointer to pre-selected adjacency list — no per-agent copy
-    const std::vector<std::vector<double>>* adjList_dist;
+    int src = src_v[agentNo];
+    int goal = goal_v[agentNo];
 
-    if(agentType == "walkNat"){
-      adjList_dist = adj_walkNat;
-    }else if(agentType == "walkSoc"){
-      adjList_dist = adj_walkSoc;
-    }else if(agentType == "dogNat"){
-      adjList_dist = adj_dogNat;
-    }else if(agentType == "dogProx"){
-      adjList_dist = adj_dogProx;
-    }else if(agentType == "ebikeNat"){
-      adjList_dist = adj_ebikeNat;
-    }else if(agentType == "bikeSport"){
-      adjList_dist = adj_bikeSport;
-    }else{
-      adjList_dist = adj_jogger;
+    std::tuple<int, int, int> key = std::make_tuple(src, goal, typeIdx);
+    auto solved = solvedBy.find(key);
+    if(solved != solvedBy.end()){
+      outputPath[agentNo] = outputPath[solved->second];
+      outputDist[agentNo] = outputDist[solved->second];
+      continue;
     }
-
+    solvedBy[key] = agentNo;
 
     //initialize a priority queue
     std::priority_queue<pqPair, std::vector<pqPair>, std::greater<pqPair>> pq;
 
     //refresh variables for each agent
-    int src = src_v[agentNo];
-    int goal = goal_v[agentNo];
     std::vector<double> dist(dist_o);
     std::vector<int> pathSteps(pathSteps_o);
 
-    //if src and goal are the same, make a path with the goal vertex
+    //if source is goal, return goal only
     if(src == goal){
       std::vector<int> goal_v;
       goal_v.insert(goal_v.begin(), goal);
       outputPath[agentNo] = goal_v;
       outputDist[agentNo] = 0;
-
     }else{//otherwise, find shortest path
 
       //start with first node (src)
@@ -1739,23 +1760,26 @@ List findShortestRoute_cpp( int V_ptr,
       pq.push(std::make_pair(0.0, src));
       dist[src] = 0.0;
 
-
       // Find shortest path for all vertices
       while(!pq.empty()) {
-
         //get vertex with shortest total distance from pq (sptv)
+        double sptd = pq.top().first;
         int sptv = pq.top().second;
         pq.pop();
 
-        //IF GOAL IS REACHED
+        //A stale entry: sptv was pushed again with a shorter distance since this
+        //one, and that entry has already been handled. Relaxing from here could
+        //change nothing (the comparison below is strict and every weight is at
+        //least 10, see vftPrepareNetwork()), so skip it rather than walk its
+        //neighbours again.
+        if(sptd > dist[sptv]) continue;
+
+        //if goal is reached
         if(sptv == goal){
-          //create path container
+          //get the path by stepping back from the goal
           std::vector<int> path;
-          //step backwards through pathSteps, and note path
           int vrtx = goal;
           while(vrtx != src){
-            // Rcpp::Rcout<<"vrtx: "<<vrtx<<std::endl;
-            //
             if(vrtx != 100000000){
               path.insert(path.begin(), vrtx);
               vrtx = pathSteps[vrtx];
@@ -1764,48 +1788,28 @@ List findShortestRoute_cpp( int V_ptr,
               break;
             }
           }
-
-          //Save path and distance for this agent
-          // return List::create(Named("path")= wrap(path), Named("distance") = wrap(dist[min_vrt]) );
-          // path.pop_back();
           outputPath[agentNo] =  path;//remove last vertex (startV)
           outputDist[agentNo] = dist[sptv];
-
-          //break out of two loops to start new agentloop
-          goto endAgentLoop;
+          break;
         }
 
         //determine relevant adjacency vertices and distances (const refs — no copy)
         const std::vector<int>&    adjVrts = adjList_IDs[sptv];
         const std::vector<double>& adjDist = (*adjList_dist)[sptv];
 
-
         //CYCLE ALL ADJACENT VERTICES
         //if needed, update their total distances (dist) and prior vertex
         for(int vrt = 0; vrt < adjVrts.size(); vrt++){
           int adjv = adjVrts[vrt];
-
-          //determine distance between adjacent vertices
           double adjd = adjDist[vrt];
-
-
-          //if smaller
-          //distance is distance to prior vertex (sptv) with distance between sptv and this vertex (adjv)
           if(dist[adjv] > dist[sptv] + adjd){
             dist[adjv] = dist[sptv] + adjd;
             //record vertex that had shortest path to adjv
             pathSteps[adjv] = sptv;
-            //return pair into pq
             pq.push(std::make_pair(dist[adjv], adjv));
-
           }
-
         }
-
       }
-      endAgentLoop:
-        ;
-      //end of loop for each agent
     }
   }
 
@@ -1824,78 +1828,28 @@ List findShortestRoute_cpp( int V_ptr,
 // [[Rcpp::export]]
 List findClosestAOI_cpp(std::vector<std::string> AOIList_o,
                         std::vector<std::string> AOI_v,
-                         int V_ptr,
-                        std::vector<std::vector<int>> adjList_IDs_ptr,
-                         std::vector<std::vector<double>> adjList_dist_ptr_walkNat,
-                         std::vector<std::vector<double>> adjList_dist_ptr_walkSoc,
-                         std::vector<std::vector<double>> adjList_dist_ptr_dogNat,
-                         std::vector<std::vector<double>> adjList_dist_ptr_dogProx,
-                         std::vector<std::vector<double>> adjList_dist_ptr_ebikeNat,
-                         std::vector<std::vector<double>> adjList_dist_ptr_bikeSport,
-                         std::vector<std::vector<double>> adjList_dist_ptr_jogger,
+                        SEXP adj_ptr,
                         std::vector<int> src_v,
                         std::vector<double> agentSpeeds,
                         std::vector<double> agentDurations,
                         std::vector<std::string> AOI_aois,
                         std::vector<double> AOI_dulns,
                         std::vector<std::string> agentTyps,
-                        std::vector<double> AOI_areas){// Rcpp::XPtr< std::vector<std::vector<double>> > allDistTbl_ptr,
+                        std::vector<double> AOI_areas){
 
-std::ofstream log_file( "C:/Users/frueh/Documents/visitorFlowTool_LOG/rcpp_log.txt", std::ios_base::app);
-
-
-  //removed things to make it non-pointers
-  //Rcpp::XPtr<
-
-  // Rcpp::XPtr< std::vector<std::vector<double>> > adjList_dist_ptr_walkSoc,
-  // Rcpp::XPtr< std::vector<std::vector<double>> > adjList_dist_ptr_dogNat,
-  // Rcpp::XPtr< std::vector<std::vector<double>> > adjList_dist_ptr_dogProx,
-  // Rcpp::XPtr< std::vector<std::vector<double>> > adjList_dist_ptr_ebikeNat,
-  // Rcpp::XPtr< std::vector<std::vector<double>> > adjList_dist_ptr_bikeSport,
-  // Rcpp::XPtr< std::vector<std::vector<double>> > adjList_dist_ptr_jogger,
-
-  //retrieve objects from R that were generated in C++ earlier
-  int V = V_ptr;
-  ///////*
-  ///////removed ptr assignement (replaced with simple assignement)
-
-  log_file << "step1" << std::endl;
-
-  //unwrap nested list of pointers (only take first of of dist pointers ([4]), others (attr and ATTR aren't used here))
-  // Rcpp::XPtr< std::vector<std::vector<double>> > adjList_dist_ptr_walkNat = adjList_dist_ptrs[1];
-  // Rcpp::XPtr< std::vector<std::vector<double>> > adjList_dist_ptr_walkSoc = adjList_dist_ptrs[2];
-  // Rcpp::XPtr< std::vector<std::vector<double>> > adjList_dist_ptr_dogNat = adjList_dist_ptrs[3];
-  // Rcpp::XPtr< std::vector<std::vector<double>> > adjList_dist_ptr_dogProx = adjList_dist_ptrs[4];
-  // Rcpp::XPtr< std::vector<std::vector<double>> > adjList_dist_ptr_ebikeNat = adjList_dist_ptrs[5];
-  // Rcpp::XPtr< std::vector<std::vector<double>> > adjList_dist_ptr_bikeSport = adjList_dist_ptrs[6];
-  // Rcpp::XPtr< std::vector<std::vector<double>> > adjList_dist_ptr_jogger = adjList_dist_ptrs[7];
-
-
-  // Use const refs to avoid unnecessary deep copies of large adjacency lists
-  const std::vector<std::vector<double>>& adjList_dist_walkNat   = adjList_dist_ptr_walkNat;
-  const std::vector<std::vector<double>>& adjList_dist_walkSoc   = adjList_dist_ptr_walkSoc;
-  const std::vector<std::vector<double>>& adjList_dist_dogNat    = adjList_dist_ptr_dogNat;
-  const std::vector<std::vector<double>>& adjList_dist_dogProx   = adjList_dist_ptr_dogProx;
-  const std::vector<std::vector<double>>& adjList_dist_ebikeNat  = adjList_dist_ptr_ebikeNat;
-  const std::vector<std::vector<double>>& adjList_dist_bikeSport = adjList_dist_ptr_bikeSport;
-  const std::vector<std::vector<double>>& adjList_dist_jogger    = adjList_dist_ptr_jogger;
-
-
-
-  const std::vector<std::vector<int>>& adjList_IDs = adjList_IDs_ptr;
-  // std::vector<std::vector<double>> allDistancesTbl = *allDistTbl_ptr;
-
-  log_file << "step2" << std::endl;
+  // the adjacency lists, converted once by adjListsToPtr_cpp(). This search has
+  // always used the "_attr" weighting (listOfPointers[[4]] on the R side).
+  XPtr<AdjLists> adjX(adj_ptr);
+  const AdjLists& adj = *adjX;
+  int V = adj.V;
+  const std::vector<std::vector<int>>& adjList_IDs = adj.ids;
+  const int weighting = 1;
 
   // create original variables used in pathfinding
   typedef std::pair<double, int> pqPair;
 
   //vector holding total distances to every vertex from source
   std::vector<double> dist_o = std::vector<double>(V+1, 100000000.0);
-
-  //vector holding the prior vertex that lead to each vertex
-  //this allows to gather all vertices after arriving at goal by stepping backwards
-  std::vector<int> pathSteps_o = std::vector<int>(V+1, 100000000);
 
   //prepare output containers for every agent
   //distances to AOI node, nodeID of AOI node, and AOI identifier ("A", "B" etc.)
@@ -1906,149 +1860,153 @@ std::ofstream log_file( "C:/Users/frueh/Documents/visitorFlowTool_LOG/rcpp_log.t
   std::vector<std::vector<double>> outputProb = std::vector<std::vector<double>>(src_v.size());
 
   //prepare vector of AOIs
-  // std::vector<char> AOI_v = vertexTable["AOICol"];
-  // char firstline = '0';
   AOI_v.insert(AOI_v.begin(), "0"); //add element to front so node 1 is on position 1 of vector (rather than pos 0)
 
+  //Every node's AOI as a small integer - its slot among the DISTINCT names in
+  //AOIList_o, or -1 for a name that is not wanted. The search used to copy the
+  //node's AOI string and std::find() it through a list of strings on every pop.
+  //The list is a multiset in effect (find + erase removes one occurrence), so
+  //each distinct name carries the number of times it occurs: the same test,
+  //the same order of discovery, without a string touched.
+  std::vector<std::string> aoiNames;
+  std::vector<int> aoiNeeded;
+  std::vector<int> aoiCode;
+  {
+    std::unordered_map<std::string, int> slot;
+    for(const std::string& a : AOIList_o){
+      auto it = slot.find(a);
+      if(it == slot.end()){
+        slot[a] = aoiNames.size();
+        aoiNames.push_back(a);
+        aoiNeeded.push_back(1);
+      }else{
+        aoiNeeded[it->second]++;
+      }
+    }
+    std::vector<int> code(AOI_v.size(), -1);
+    for(size_t v = 0; v < AOI_v.size(); v++){
+      auto it = slot.find(AOI_v[v]);
+      if(it != slot.end()) code[v] = it->second;
+    }
+    AOI_v.clear();
+    AOI_v.shrink_to_fit();
+    aoiCode.swap(code);
+  }
 
-  log_file << "step3" << std::endl;
+  //THE SEARCH DEPENDS ON THE SOURCE NODE AND THE AGENT TYPE, AND ON NOTHING ELSE.
+  //The agent's speed and duration only enter the probabilities computed after
+  //it. Agents starting on the same node with the same type - every household
+  //of a building, every parking space of a car park - used to repeat the same
+  //Dijkstra over the whole graph, once each. Now it runs once per pair.
+  struct AoiSearch {
+    std::vector<double> dist;
+    std::vector<int> node;
+    std::vector<std::string> type;
+    bool completed;
+  };
+  std::unordered_map<int64_t, AoiSearch> searched;
 
   // START EVALUATING DISTANCES FOR EVERY SOURCE-GOAL pair
   for(int agentNo = 0; agentNo < src_v.size(); agentNo++){
 
-    log_file << "step4: agent: " << agentNo << std::endl;
-
     //get agent type
-    std::string agentType = agentTyps[agentNo];
+    int typeIdx = agentTypeIndex(agentTyps[agentNo]);
+    const std::vector<std::vector<double>>* adjList_dist = &adj.w[weighting][typeIdx];
 
-    // Use pointer to const ref — no per-agent copy of large adjacency list
-    const std::vector<std::vector<double>>* adjList_dist;
-    if(agentType == "walkNat"){
-      adjList_dist = &adjList_dist_walkNat;
-    }else if(agentType == "walkSoc"){
-      adjList_dist = &adjList_dist_walkSoc;
-    }else if(agentType == "dogNat"){
-      adjList_dist = &adjList_dist_dogNat;
-    }else if(agentType == "dogProx"){
-      adjList_dist = &adjList_dist_dogProx;
-    }else if(agentType == "ebikeNat"){
-      adjList_dist = &adjList_dist_ebikeNat;
-    }else if(agentType == "bikeSport"){
-      adjList_dist = &adjList_dist_bikeSport;
-    }else{
-      adjList_dist = &adjList_dist_jogger;
-    }
-
-
-    // Rcpp::Rcout<<"agentNo: "<<agentNo<<std::endl;
-
-    //initialize a priority queue
-    std::priority_queue<pqPair, std::vector<pqPair>, std::greater<pqPair>> pq;
-
-    //refresh variables for each agent
     int src = src_v[agentNo];
-    // int goal = goal_v[agentNo];
-    std::vector<double> dist(dist_o);
-    //copy AOIList_o into new AOIList. (they're emptied for every agent)
-    std::vector<std::string> AOIList(AOIList_o.size());
-    std::copy( AOIList_o.begin(), AOIList_o.end(), AOIList.begin() ) ;
-
-    //start with first node (src)
-    // Distance of source vertex from itself is always 0
-    pq.push(std::make_pair(0.0, src));
-    dist[src] = 0.0;
 
     //prepare vector for agent's information (for each AOI type)
     std::vector<double> aoiDist_v;
     std::vector<int> aoiNode_v;
     std::vector<std::string> aoiType_v;
 
-    //std::vector<double> aoiProb_v;
+    int64_t key = ((int64_t)src << 3) | (int64_t)typeIdx;
+    auto done = searched.find(key);
+    if(done != searched.end()){
+      aoiDist_v = done->second.dist;
+      aoiNode_v = done->second.node;
+      aoiType_v = done->second.type;
+      if(done->second.completed){
+        outputDist[agentNo] = aoiDist_v;
+        outputNode[agentNo] = aoiNode_v;
+        outputAOI[agentNo] = aoiType_v;
+      }
+    }else{
+      bool completed = false;
+      {
+        //initialize a priority queue
+        std::priority_queue<pqPair, std::vector<pqPair>, std::greater<pqPair>> pq;
 
+        std::vector<double> dist(dist_o);
+        //what is still to be found - per distinct AOI name, and in total.
+        //(Refilled for every agent, as the list of names used to be.)
+        std::vector<int> stillNeeded(aoiNeeded);
+        int remaining = AOIList_o.size();
 
-    // Find shortest path for all vertices
-    while(!pq.empty()) {
+        //start with first node (src)
+        // Distance of source vertex from itself is always 0
+        pq.push(std::make_pair(0.0, src));
+        dist[src] = 0.0;
 
-      // Rcpp::Rcout<<"pq.size()"<< pq.size()<<std::endl;
+        // Find shortest path for all vertices
+        while(!pq.empty()) {
 
-      //get vertex with shortest total distance from pq (sptv)
-      int sptv = pq.top().second;
-      pq.pop();
+          //get vertex with shortest total distance from pq (sptv)
+          double sptd = pq.top().first;
+          int sptv = pq.top().second;
+          pq.pop();
 
-      //IF AN AOI IS REACHED
-      std::string AOI = AOI_v[sptv];
-      //determine if AOI is in AOIList (not simple in C++)
-      auto ptr = std::find(AOIList.begin(), AOIList.end(), AOI);
-      //if pointer doesn't point to the end, then AOI was present in AOIList
-      if( ptr != AOIList.end() ){
+          //A stale entry - see findShortestRoute_cpp(). Its fresh twin was
+          //popped first, so its AOI has already been found and its neighbours
+          //relaxed with the same distance: nothing left to do.
+          if(sptd > dist[sptv]) continue;
 
-        // Rcpp::Rcout<<"AOI reached!!"<<std::endl;
+          //IF AN AOI IS REACHED that is still wanted
+          int c = aoiCode[sptv];
+          if( c >= 0 && stillNeeded[c] > 0 ){
 
-        //record the AOI type found
-        aoiType_v.push_back(AOI);
-        //record the associated node
-        aoiNode_v.push_back(sptv);
-        //record the distance to the associated node
-        aoiDist_v.push_back(dist[sptv]);
+            //record the AOI type found
+            aoiType_v.push_back(aoiNames[c]);
+            //record the associated node
+            aoiNode_v.push_back(sptv);
+            //record the distance to the associated node
+            aoiDist_v.push_back(dist[sptv]);
 
-        //remove AOI type from AOIList
-        AOIList.erase(ptr);
+            //this AOI has been found
+            stillNeeded[c]--;
+            remaining--;
 
-        // Rcpp::Rcout<<"AOIList: "<<AOIList<<std::endl;
-        // determine if AOIList is now empty
-        if(AOIList.empty()){
-          // Rcpp::Rcout<<"AOIList is now empty!"<<std::endl;
+            // determine if every AOI has now been found
+            if(remaining == 0){
+              //if so, add results to final output list and stop searching
+              outputDist[agentNo] = aoiDist_v;
+              outputNode[agentNo] = aoiNode_v;
+              outputAOI[agentNo] = aoiType_v;
+              completed = true;
+              break;
+            }
+          }
 
-          //if so, add results to final output list and exit loops
-          outputDist[agentNo] = aoiDist_v;
-          outputNode[agentNo] = aoiNode_v;
-          outputAOI[agentNo] = aoiType_v;
+          //determine relevant adjacency vertices and distances (const refs — no copy)
+          const std::vector<int>&    adjVrts = adjList_IDs[sptv];
+          const std::vector<double>& adjDist = (*adjList_dist)[sptv];
 
-          //break out of two loops to start new agentloop
-          goto endAgentLoop;
-
+          //CYCLE ALL ADJACENT VERTICES
+          //if needed, update their total distances (dist)
+          for(int vrt = 0; vrt < adjVrts.size(); vrt++){
+            int adjv = adjVrts[vrt];
+            double adjd = adjDist[vrt];
+            if(dist[adjv] > dist[sptv] + adjd){
+              dist[adjv] = dist[sptv] + adjd;
+              pq.push(std::make_pair(dist[adjv], adjv));
+            }
+          }
         }
       }
-
-      //determine relevant adjacency vertices and distances (const refs — no copy)
-      const std::vector<int>&    adjVrts = adjList_IDs[sptv];
-      const std::vector<double>& adjDist = (*adjList_dist)[sptv];
-
-
-      //CYCLE ALL ADJACENT VERTICES
-      //if needed, update their total distances (dist) and prior vertex
-      for(int vrt = 0; vrt < adjVrts.size(); vrt++){
-        int adjv = adjVrts[vrt];
-
-        //determine distance between adjacent vertices
-        double adjd = adjDist[vrt];
-
-
-        //if distance is smaller to prior vertex (sptv) with distance between sptv and this vertex (adjv)
-        if(dist[adjv] > dist[sptv] + adjd){
-          dist[adjv] = dist[sptv] + adjd;
-
-          // Rcpp::Rcout<<"adjd: "<<adjd<<std::endl;
-          // Rcpp::Rcout<<"dist[sptv]: "<<dist[sptv]<<std::endl;
-          // Rcpp::Rcout<<"dist[adjv]: "<<dist[adjv]<<std::endl;
-          // Rcpp::Rcout<<"**********"<<std::endl;
-
-
-          //record vertex that had shortest path to adjv
-          // pathSteps[adjv] = sptv;
-          //return pair into pq
-          pq.push(std::make_pair(dist[adjv], adjv));
-
-        }
-
-      }
-
+      searched[key] = AoiSearch{aoiDist_v, aoiNode_v, aoiType_v, completed};
     }
+    //end of the search for this agent
 
-
-    endAgentLoop:
-      ;
-    //end of loop for each agent
 
 
 
@@ -2432,7 +2390,6 @@ std::ofstream log_file( "C:/Users/frueh/Documents/visitorFlowTool_LOG/rcpp_log.t
 
   }
 
-  log_file.close();
 
   return List::create(Named("distances") = wrap(outputDist), Named("nodes") = wrap(outputNode), Named("aoi") = wrap(outputAOI), Named("prob") = wrap(outputProb) );
 }

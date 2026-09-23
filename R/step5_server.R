@@ -99,6 +99,10 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
     #CONSTANT:division of total residents to get number of agents
     CONST_residentDivision <- 50
 
+    #the sensitivity matrix, projected for leaflet once rather than on every
+    #toggle and every map rebuild - see vftLeafletRasterCache()
+    smLeaflet <- vftLeafletRasterCache()
+
     r <- shiny::reactiveValues()
 
     #### the sensitivity matrix is optional ####
@@ -927,7 +931,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
 
 
             if(smOn()){
-              map <- map |> leaflet::addRasterImage(raster::raster(SM_pres),
+              map <- map |> leaflet::addRasterImage(smLeaflet(SM_pres), project = FALSE,
                                            colors = SMcolors,
                                            opacity = 1,
                                            group = "SM")
@@ -1781,7 +1785,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
 
         if(smOn()){
           proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet"
-          )|> leaflet::addRasterImage(raster::raster(SM_pres),
+          )|> leaflet::addRasterImage(smLeaflet(SM_pres), project = FALSE,
                                        colors = SMcolors,
                                           opacity = 1,
                                           group = "SM")

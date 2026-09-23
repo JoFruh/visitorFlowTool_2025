@@ -72,6 +72,51 @@ launchSim <- function(dayPop, network, AOIList, listOfPointers, iter = 1, tracka
   #once here instead of recomputing sf::st_coordinates() on every timestep in the loop below.
   vertexCoords <- sf::st_coordinates(vertexTable$geometry)
 
+  #### everything the loop reads that does not change while it runs ####
+  #The main loop runs up to MAX_TIMESTEPS (1800) times, and each of these used to
+  #be rebuilt inside it on every pass: two column subsets of the edge table, a
+  #nine-column subset of the vertex table, the set of nodes outside the AOIs, the
+  #node id list behind a sanity check, and a match() of the agents' edges against
+  #every edge id. None of them depends on anything the loop changes.
+  edgeEnds    <- as.data.frame(edgeTable[, c("from", "to", "edgeID")])
+  DULN_df     <- as.data.frame(vertexTable[, c("DULN_DOG_P","DULN_BIKER","DULN_DOG_N","DULN_EBIKE",
+                                               "DULN_JOGGE","DULN_WALK_","DULN_WALK1" , "nodeID")])
+  vOutsideAOI <- vertexTable$nodeID[vertexTable$AOI == "0"]
+  #a matrix handed to an Rcpp DataFrame argument goes through as.data.frame()
+  #on every call
+  vertexCoordsDF <- as.data.frame(vertexCoords)
+  nodeIDs     <- igraph::V(network)$nodeID
+
+  #edge id -> row, as a direct index rather than a match() per timestep. Ids are
+  #positive whole numbers; the first row wins for a duplicated id, which is what
+  #match() returned. An id with no row (getEdges_cpp reports a missing edge as 0)
+  #gives NA, as match() did - and keeps its place, which a 0 index would not.
+  edgeLength <- edgeTable$SHAPE_Leng
+  edgeRowIdx <- rep(NA_integer_, max(edgeTable$edgeID, 0L, na.rm = TRUE))
+  okRows     <- which(!is.na(edgeTable$edgeID) & edgeTable$edgeID >= 1)
+  edgeRowIdx[rev(edgeTable$edgeID[okRows])] <- rev(okRows)
+  rowOfEdge <- function(ids){
+    ids <- as.integer(ids)
+    ids[!is.na(ids) & (ids < 1L | ids > length(edgeRowIdx))] <- NA_integer_
+    edgeRowIdx[ids]
+  }
+
+  #the C++ side's two lookups - edge by its two end nodes, node row by id - built
+  #ONCE here instead of inside getEdges_cpp() and chooseBestRoutes_cpp() on every
+  #call, i.e. two to three times per timestep over the whole graph
+  edgeMapPtr <- buildEdgeMap_cpp(edgeEnds)
+  #the adjacency lists on the C++ side - launchMultiSim() builds this; a caller
+  #that did not gets it here. See adjListsToPtr_cpp().
+  if(is.null(listOfPointers$adj)) listOfPointers$adj <- adjListsToPtr_cpp(listOfPointers)
+  nodeRowPtr <- buildNodeRowMap_cpp(DULN_df$nodeID)
+
+  #progress goes to ipc's file-backed queue: every message is a locked file write
+  #here and a handler call on the SHARED main thread, which then forwards it to
+  #the browser. One per timestep was ~1000-1800 of them per run; twice a second
+  #is all a progress bar can show.
+  PROGRESS_EVERY_S <- 0.5
+  lastProgress <- -Inf
+
   #TODO: implement more detailed behaviour based on surveys, questionnaires, cluster analysis etc.
   #FOR NOW:agents walk towards closest AOI vertex using shortest route. Within AOI they maintain "nicest route" tactic.
 
@@ -115,33 +160,11 @@ launchSim <- function(dayPop, network, AOIList, listOfPointers, iter = 1, tracka
 #ignore agents with goals at -1 (these are people too far to any recreation point)
 cannotRecreate <- dayPop$goalV == -1
 
-  shortestPaths <- findShortestRoute_cpp(V_ptr = listOfPointers[[1]],
-                                         adjList_IDs_ptr = listOfPointers[[2]],
-                                         adjList_dist_ptr_walkNat = listOfPointers[[3]][[1]],
-                                         adjList_dist_ptr_walkNat_attr = listOfPointers[[4]][[1]],
-                                         adjList_dist_ptr_walkNat_ATTR = listOfPointers[[5]][[1]],
-                                         adjList_dist_ptr_walkSoc = listOfPointers[[3]][[2]],
-                                         adjList_dist_ptr_walkSoc_attr = listOfPointers[[4]][[2]],
-                                         adjList_dist_ptr_walkSoc_ATTR = listOfPointers[[5]][[2]],
-                                         adjList_dist_ptr_dogNat = listOfPointers[[3]][[3]],
-                                         adjList_dist_ptr_dogNat_attr = listOfPointers[[4]][[3]],
-                                         adjList_dist_ptr_dogNat_ATTR = listOfPointers[[5]][[3]],
-                                         adjList_dist_ptr_dogProx = listOfPointers[[3]][[4]],
-                                         adjList_dist_ptr_dogProx_attr = listOfPointers[[4]][[4]],
-                                         adjList_dist_ptr_dogProx_ATTR = listOfPointers[[5]][[4]],
-                                         adjList_dist_ptr_ebikeNat = listOfPointers[[3]][[5]],
-                                         adjList_dist_ptr_ebikeNat_attr = listOfPointers[[4]][[5]],
-                                         adjList_dist_ptr_ebikeNat_ATTR = listOfPointers[[5]][[5]],
-                                         adjList_dist_ptr_bikeSport = listOfPointers[[3]][[6]],
-                                         adjList_dist_ptr_bikeSport_attr = listOfPointers[[4]][[6]],
-                                         adjList_dist_ptr_bikeSport_ATTR = listOfPointers[[5]][[6]],
-                                         adjList_dist_ptr_jogger = listOfPointers[[3]][[7]],
-                                         adjList_dist_ptr_jogger_attr = listOfPointers[[4]][[7]],
-                                         adjList_dist_ptr_jogger_ATTR = listOfPointers[[5]][[7]],
+  shortestPaths <- findShortestRoute_cpp(adj_ptr = listOfPointers$adj,
                                          weighingMethod = "distance",
                                          src_v = dayPop$startV[!cannotRecreate],
                                          goal_v = dayPop$goalV[!cannotRecreate],
-                                         agentTyps = dayPop$agentTyp[!cannotRecreate]) #allDistTbl_ptr = listOfPointers[[4]],
+                                         agentTyps = dayPop$agentTyp[!cannotRecreate])
 
   progress$set(1/2, message = "ABM initialisieren")
   #pass every path back to agents
@@ -151,7 +174,7 @@ cannotRecreate <- dayPop$goalV == -1
   #get currend edge and record history of edges
   edgesResultsStart <- getEdges_cpp(dayPop$startV[!cannotRecreate],
                                     dayPop$goalV[!cannotRecreate],
-                                    edgeTable[, c("from", "to", "edgeID")],
+                                    edgeMapPtr,
                                     usingPathToGoal = TRUE,
                                     pathToGoal = dayPop$pathToGoal[!cannotRecreate],
                                     oldPriorEs = dayPop$priorE[!cannotRecreate])
@@ -248,16 +271,20 @@ cannotRecreate <- dayPop$goalV == -1
         debugStartTime <- Sys.time()
       }else{
         debugTime <- Sys.time()
-        timeDiff = difftime( debugTime, debugStartTime, units = "min" )
-        #calculate time left: ex: at 25% of time (100/25)-1 = 3. The time already spent has to pass 3 more times.
-        #If it took 1min, then there's 3 more mins to go.
-        timeLeft = round( ((total/timestep) - 1) * timeDiff )
-        #vftMsg, not paste0: the worker has no Translator, so it sends the
-        #TEMPLATE and the number and the main thread translates and fills in.
-        #See the translation section in R/async_helpers.R.
-        progress$set(timestep/(total/1.75), message = "ABM l\u00E4uft (oder f\u00E4hrt Rad...)",
-                     detail = vftMsg("Ungef\u00E4hr %d Minuten \u00FCbrig.",
-                                     round(timeLeft/3)) )
+        #at most every PROGRESS_EVERY_S - see where it is set above
+        if(as.numeric(debugTime) - lastProgress >= PROGRESS_EVERY_S){
+          lastProgress <- as.numeric(debugTime)
+          timeDiff = difftime( debugTime, debugStartTime, units = "min" )
+          #calculate time left: ex: at 25% of time (100/25)-1 = 3. The time already spent has to pass 3 more times.
+          #If it took 1min, then there's 3 more mins to go.
+          timeLeft = round( ((total/timestep) - 1) * timeDiff )
+          #vftMsg, not paste0: the worker has no Translator, so it sends the
+          #TEMPLATE and the number and the main thread translates and fills in.
+          #See the translation section in R/async_helpers.R.
+          progress$set(timestep/(total/1.75), message = "ABM l\u00E4uft (oder f\u00E4hrt Rad...)",
+                       detail = vftMsg("Ungef\u00E4hr %d Minuten \u00FCbrig.",
+                                       round(timeLeft/3)) )
+        }
       }
     }
 
@@ -468,7 +495,7 @@ cannotRecreate <- dayPop$goalV == -1
       #### NEED SPEED IMPROVEMENT (Pr 2)
 
       #if vertex not in network, interrupt
-      if(sum(dayPop$currentV[toDecideNicest] %in% igraph::V(network)$nodeID ) < length(dayPop$currentV[toDecideNicest])){browser()}
+      if(sum(dayPop$currentV[toDecideNicest] %in% nodeIDs ) < length(dayPop$currentV[toDecideNicest])){browser()}
 
       neighborhoodVs <- igraph::ego(network, 1, dayPop$currentV[toDecideNicest])
       igraph::igraph_options(return.vs.es = TRUE)
@@ -482,7 +509,7 @@ cannotRecreate <- dayPop$goalV == -1
                                              currentVs = dayPop$currentV[toDecideNicest],
                                              lastVs = dayPop$lastV[toDecideNicest],
                                              retracedVs = dayPop$retracedV[toDecideNicest],
-                                             V_outside_aoi = vertexTable$nodeID[vertexTable$AOI == "0"])
+                                             V_outside_aoi = vOutsideAOI)
       #, priorVs = dayPop$priorV[toDecideNicest],
 
       #which ones have viable options (at least 1 solution)
@@ -497,12 +524,12 @@ cannotRecreate <- dayPop$goalV == -1
         # print(paste0("areViableChoices: ", areViableChoices))
         routeChoicesProbs <- routeChoices
         routeChoicesProbs[areViableChoices] <- chooseBestRoutes_cpp(viableRoutes = routeChoices[areViableChoices],
-                                                                    DULN_df =  vertexTable[,c("DULN_DOG_P","DULN_BIKER","DULN_DOG_N","DULN_EBIKE",
-                                                                                              "DULN_JOGGE","DULN_WALK_","DULN_WALK1" , "nodeID")],
+                                                                    DULN_df =  DULN_df,
                                                                     priorVs = dayPop$priorV[areViableChoices],
                                                                     agentTyps = dayPop$agentTyp[areViableChoices],
-                                                                    V_coords_df = vertexCoords,
-                                                                    currentVs = dayPop$currentV[areViableChoices])
+                                                                    V_coords_df = vertexCoordsDF,
+                                                                    currentVs = dayPop$currentV[areViableChoices],
+                                                                    nodeRow_ptr = nodeRowPtr)
 
         #TODO: sample using routeChoicesProbs as probabilities
         #for every viable route
@@ -515,40 +542,28 @@ cannotRecreate <- dayPop$goalV == -1
         # print("********")
         # print("********")
 
-        for(routeNo in 1:length(routeChoicesProbs[areViableChoices]) ){
-          if(length(routeChoices[areViableChoices][[routeNo]]) == 1){
-            #select first element
-            routeChoices[areViableChoices][[routeNo]] <- routeChoices[areViableChoices][[routeNo]][1]
-            #this is needed as it seems possible there are multiple elements with a single probability of 1
+        #Taken out of the list ONCE and put back ONCE. The loop used to index
+        #`routeChoices[areViableChoices][[routeNo]]` - a fresh copy of the whole
+        #subset - up to six times per agent, so a timestep with n deciding agents
+        #cost n^2 list copies. Same agents, same order, same sample() calls, so
+        #the random stream and the choices are unchanged.
+        viableRC <- routeChoices[areViableChoices]
+        viablePr <- routeChoicesProbs[areViableChoices]
+        for(routeNo in seq_along(viablePr)){
+          rc <- viableRC[[routeNo]]
+          pr <- viablePr[[routeNo]]
+          if(length(rc) == 1 || length(pr) == 1){
+            #select first element. The second case: there can be several route
+            #choices but only one probability of 1
+            viableRC[[routeNo]] <- rc[1]
           }else{
-            if(length(routeChoicesProbs[areViableChoices][[routeNo]]) == 1){
-              #might be multiple routeChoices, but only one probability of 1
-              routeChoices[areViableChoices][[routeNo]] <- routeChoices[areViableChoices][[routeNo]][1]
-
-            }else{
-              #make a choice based on probabilities
-              # print("routeChoices[areViableChoices][[routeNo]]: ")
-              # print(routeChoices[areViableChoices][[routeNo]])
-              # cat(file = stderr(), (paste0("length: ", length(routeChoices[areViableChoices][[routeNo]])) ))
-              # cat(file = stderr(), (paste0("lengthProbs: ", length(routeChoicesProbs[areViableChoices][[routeNo]])) ))
-
-              if(sum(is.na(routeChoices[areViableChoices][[routeNo]])) > 0){browser()}
-              if(sum(is.na(routeChoicesProbs[areViableChoices][[routeNo]])) > 0){browser()}
-
-
-
-              routeChoices[areViableChoices][[routeNo]] <- sample(routeChoices[areViableChoices][[routeNo]], 1, replace = FALSE, prob = routeChoicesProbs[areViableChoices][[routeNo]])
-
-              #PROXIMITY ONLY
-              # routeProbs <- routeChoicesProbs[areViableChoices][[routeNo]]
-              # routeProbs[routeProbs > 0.00001] <- 1
-              # routeChoices[areViableChoices][[routeNo]] <- sample(routeChoices[areViableChoices][[routeNo]], 1, replace = FALSE, prob = routeProbs)
-              # ##
-
-              # print("SAMPLE DONE")
-            }
+            #make a choice based on probabilities
+            if(anyNA(rc)){browser()}
+            if(anyNA(pr)){browser()}
+            viableRC[[routeNo]] <- sample(rc, 1, replace = FALSE, prob = pr)
           }
         }
+        routeChoices[areViableChoices] <- viableRC
 
 
 
@@ -796,33 +811,11 @@ cannotRecreate <- dayPop$goalV == -1
     if(sum(!haveShortestRoutes) > 0){
 
       #determine a shortest route
-      shortestPaths <- findShortestRoute_cpp(V_ptr = listOfPointers[[1]],
-                                             adjList_IDs_ptr = listOfPointers[[2]],
-                                             adjList_dist_ptr_walkNat = listOfPointers[[3]][[1]],
-                                             adjList_dist_ptr_walkNat_attr = listOfPointers[[4]][[1]],
-                                             adjList_dist_ptr_walkNat_ATTR = listOfPointers[[5]][[1]],
-                                             adjList_dist_ptr_walkSoc = listOfPointers[[3]][[2]],
-                                             adjList_dist_ptr_walkSoc_attr = listOfPointers[[4]][[2]],
-                                             adjList_dist_ptr_walkSoc_ATTR = listOfPointers[[5]][[2]],
-                                             adjList_dist_ptr_dogNat = listOfPointers[[3]][[3]],
-                                             adjList_dist_ptr_dogNat_attr = listOfPointers[[4]][[3]],
-                                             adjList_dist_ptr_dogNat_ATTR = listOfPointers[[5]][[3]],
-                                             adjList_dist_ptr_dogProx = listOfPointers[[3]][[4]],
-                                             adjList_dist_ptr_dogProx_attr = listOfPointers[[4]][[4]],
-                                             adjList_dist_ptr_dogProx_ATTR = listOfPointers[[5]][[4]],
-                                             adjList_dist_ptr_ebikeNat = listOfPointers[[3]][[5]],
-                                             adjList_dist_ptr_ebikeNat_attr = listOfPointers[[4]][[5]],
-                                             adjList_dist_ptr_ebikeNat_ATTR = listOfPointers[[5]][[5]],
-                                             adjList_dist_ptr_bikeSport = listOfPointers[[3]][[6]],
-                                             adjList_dist_ptr_bikeSport_attr = listOfPointers[[4]][[6]],
-                                             adjList_dist_ptr_bikeSport_ATTR = listOfPointers[[5]][[6]],
-                                             adjList_dist_ptr_jogger = listOfPointers[[3]][[7]],
-                                             adjList_dist_ptr_jogger_attr = listOfPointers[[4]][[7]],
-                                             adjList_dist_ptr_jogger_ATTR = listOfPointers[[5]][[7]],
+      shortestPaths <- findShortestRoute_cpp(adj_ptr = listOfPointers$adj,
                                              weighingMethod = "distance",
                                              src_v = dayPop$currentV[toDecideShortest][!haveShortestRoutes],
                                              goal_v = dayPop$goalV[toDecideShortest][!haveShortestRoutes],
-                                             agentTyps = dayPop$agentTyp[toDecideShortest][!haveShortestRoutes]) #allDistTbl_ptr = listOfPointers[[4]],
+                                             agentTyps = dayPop$agentTyp[toDecideShortest][!haveShortestRoutes])
 
       #pass every path back to agents
       dayPop$pathToGoal[toDecideShortest][!haveShortestRoutes] <- shortestPaths$path
@@ -900,33 +893,11 @@ cannotRecreate <- dayPop$goalV == -1
         # * * * INCREASE SPEED (Pr 2)
 
         #determine a shortest route
-        shortestPaths <- findShortestRoute_cpp(V_ptr = listOfPointers[[1]],
-                                               adjList_IDs_ptr = listOfPointers[[2]],
-                                               adjList_dist_ptr_walkNat = listOfPointers[[3]][[1]],
-                                               adjList_dist_ptr_walkNat_attr = listOfPointers[[4]][[1]],
-                                               adjList_dist_ptr_walkNat_ATTR = listOfPointers[[5]][[1]],
-                                               adjList_dist_ptr_walkSoc = listOfPointers[[3]][[2]],
-                                               adjList_dist_ptr_walkSoc_attr = listOfPointers[[4]][[2]],
-                                               adjList_dist_ptr_walkSoc_ATTR = listOfPointers[[5]][[2]],
-                                               adjList_dist_ptr_dogNat = listOfPointers[[3]][[3]],
-                                               adjList_dist_ptr_dogNat_attr = listOfPointers[[4]][[3]],
-                                               adjList_dist_ptr_dogNat_ATTR = listOfPointers[[5]][[3]],
-                                               adjList_dist_ptr_dogProx = listOfPointers[[3]][[4]],
-                                               adjList_dist_ptr_dogProx_attr = listOfPointers[[4]][[4]],
-                                               adjList_dist_ptr_dogProx_ATTR = listOfPointers[[5]][[4]],
-                                               adjList_dist_ptr_ebikeNat = listOfPointers[[3]][[5]],
-                                               adjList_dist_ptr_ebikeNat_attr = listOfPointers[[4]][[5]],
-                                               adjList_dist_ptr_ebikeNat_ATTR = listOfPointers[[5]][[5]],
-                                               adjList_dist_ptr_bikeSport = listOfPointers[[3]][[6]],
-                                               adjList_dist_ptr_bikeSport_attr = listOfPointers[[4]][[6]],
-                                               adjList_dist_ptr_bikeSport_ATTR = listOfPointers[[5]][[6]],
-                                               adjList_dist_ptr_jogger = listOfPointers[[3]][[7]],
-                                               adjList_dist_ptr_jogger_attr = listOfPointers[[4]][[7]],
-                                               adjList_dist_ptr_jogger_ATTR = listOfPointers[[5]][[7]],
+        shortestPaths <- findShortestRoute_cpp(adj_ptr = listOfPointers$adj,
                                                weighingMethod = "little_attr",
                                                src_v = dayPop$currentV[toDecideNicestShortest][!haveShortestRoutes],
                                                goal_v =dayPop$goalV[toDecideNicestShortest][!haveShortestRoutes],
-                                               agentTyps = dayPop$agentTyp[toDecideNicestShortest][!haveShortestRoutes]) #allDistTbl_ptr = listOfPointers[[4]],
+                                               agentTyps = dayPop$agentTyp[toDecideNicestShortest][!haveShortestRoutes])
 
         #pass every path back to agents
         dayPop$pathToGoal[toDecideNicestShortest][!haveShortestRoutes] <- shortestPaths$path
@@ -995,7 +966,7 @@ cannotRecreate <- dayPop$goalV == -1
     if(sum(toDecideRetracing | toDecideNicest) > 0){
       edgesResultsNice <- getEdges_cpp(dayPop$currentV[toDecideRetracing | toDecideNicest],
                                                                           dayPop$nextV[toDecideRetracing | toDecideNicest],
-                                                                          edgeTable[, c("from", "to", "edgeID")],
+                                                                          edgeMapPtr,
                                                                           usingPathToGoal = FALSE,
                                                                           pathToGoal = list(NULL),
                                                                           oldPriorEs = list(NULL))
@@ -1012,7 +983,7 @@ cannotRecreate <- dayPop$goalV == -1
     if( sum(toDecideNicestShortest | toDecideShortest) > 0){
       edgesResultsShort <- getEdges_cpp(dayPop$currentV[toDecideNicestShortest | toDecideShortest],
                                                                                  dayPop$nextV[toDecideNicestShortest | toDecideShortest],
-                                                                                 edgeTable[, c("from", "to", "edgeID")],
+                                                                                 edgeMapPtr,
                                                                                  usingPathToGoal = TRUE,
                                                                                  pathToGoal = dayPop$pathToGoal[toDecideNicestShortest | toDecideShortest],
                                                                                  oldPriorEs = dayPop$priorE[toDecideNicestShortest | toDecideShortest])
@@ -1135,8 +1106,7 @@ cannotRecreate <- dayPop$goalV == -1
 
       toDecideNicest <- toDecide & !toDecideShortest & !toDecideNicestShortest
       #use that id directly in a vectorised fashion
-      dist <- edgeTable$SHAPE_Leng[ match( dayPop$currentE[toDecideNicest], edgeTable$edgeID)  ]
-      pth <-  edgeTable[ dayPop$currentE[toDecideNicest], , drop = TRUE]
+      dist <- edgeLength[ rowOfEdge(dayPop$currentE[toDecideNicest]) ]
 
       if(length(dayPop$moving[toDecideNicest]) != length(dist) ){
         #something went wrong
@@ -1341,52 +1311,26 @@ cannotRecreate <- dayPop$goalV == -1
   vftDbg(paste0(nrow(dayPop), " AGENTS!"))
   vftDbg(paste0(sum(dayPop$active == TRUE), " AGENTS STILL ACTIVE!"))
 
-  #GENERATE LINE STRINGS FOR ANALYSIS
-  ## convert edge history into line strings for each agent's path
-  #make list of lists to contain all agents' paths
-  #each agent element has two elements: going, returning
-  agentNicestPathsList <- sf::st_sfc(crs = 4326)
-  agentPathsList <- sf::st_sfc(crs = 4326)
+  #There used to be a loop here turning every agent's vertex history into a
+  #MULTILINESTRING, returned as `pathGeo` / `pathNicestGeo`. Nothing in the
+  #package ever read either, and it was the most expensive thing in the whole
+  #simulation: it materialised igraph::V(network)$nodeID and $geometry twice PER
+  #AGENT and grew an sfc with c(), so it scaled with agents x nodes and then
+  #quadratically. Measured with data-raw/verify_abm_speed.R on a 35k-node network
+  #with 3300 agents: ~65 s of a ~82 s run. The lines can still be rebuilt from
+  #the passage counts on the edges, which is what every consumer draws.
 
-  #cycle through agents
-  for(agentNo in 1:nrow(dayPop)){
-    #get priorVs while recreating (all but nicestShortest)
-    #append nicest after shortest
-    # priorVGoing_points <- igraph::V(network)$geometry[igraph::V(network)$nodeID %in% dayPop$priorV[[agentNo]]]
+  #THE AGENTS, WITHOUT THEIR HISTORIES. The list columns below are the walk
+  #itself - every vertex and edge each agent passed, per behaviour - and
+  #historyToPassage_cpp() above has already turned them into the passage counts.
+  #Nothing after this point reads them: the app takes `startV` (the starting
+  #points layer) and nothing else. Carried along, they were most of what this job
+  #sends back to the SHARED main thread to be unserialised, most of what each
+  #scenario holds in memory, and most of every save file.
+  historyCols <- c("priorV", "priorE", "priorEAOI", "nicestPriorV", "shortestPriorV",
+                   "nicestShortestPriorV", "pathToGoal", "retracedV")
+  dayPop <- dayPop[, setdiff(names(dayPop), historyCols), drop = FALSE]
 
-    #for nicest areas (aoi)
-    #get vertex points agents went through
-    aoiPriorVMatch <- na.exclude( match(dayPop$nicestPriorV[[agentNo]], igraph::V(network)$nodeID))
-    aoiPriorVGoing_points <- igraph::V(network)$geometry[ aoiPriorVMatch ]
-
-    #use vertex points to create a linestring
-
-    #for within aoi
-    #ignore if there are no points or just 1
-    if(length(aoiPriorVGoing_points) > 1){
-      #verify that linestring is valid
-      agentNicestPathGoing <- sf::st_cast(sf::st_combine( aoiPriorVGoing_points), "MULTILINESTRING")
-
-      #add path to collection
-      agentNicestPathsList <- c(agentNicestPathsList, agentNicestPathGoing)
-    }
-
-    #for all areas
-    #get vertex points agents went through
-    priorVMatch <- na.exclude( match(dayPop$priorV[[agentNo]], igraph::V(network)$nodeID))
-    priorVGoing_points <- igraph::V(network)$geometry[ priorVMatch ]
-
-    #use vertex points to create a linestring
-    agentPathGoing <- sf::st_cast(sf::st_combine( priorVGoing_points), "MULTILINESTRING")
-
-    #add path to collection
-    agentPathsList <- c(agentPathsList, agentPathGoing)
-
-  }
-
-
-  ## convert vertex passage to edge passage
-
-  return(list(pathUsage = network, dayPop = dayPop, pathNicestGeo = agentNicestPathsList,  pathGeo = agentPathsList))
+  return(list(pathUsage = network, dayPop = dayPop))
 
 }

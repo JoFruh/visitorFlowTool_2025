@@ -174,6 +174,35 @@ vftDbg("UI6")
                                       dim is the track and knob it sits on top of. */
                                    .paintLevelCheckbox:disabled ~ .paintLevelTrack { opacity: 0.35; }
                                    .paintLevelCheckbox:disabled { cursor: default; }
+                                   /* HEIGHT BAR (context 4). One swatch per step of the armed
+                                      material's height ramp, tallest on top, and the swatch colour IS
+                                      the height - see PAINT_CATEGORIES in paintbrush_helpers.R. Shown
+                                      only while a material that carries a height is armed: a tree, an
+                                      artificial canopy or a block. Block included in Ground mode too,
+                                      because it is level 'both' and the level switch never disables it.
+                                      104px like everything else in this strip (the two 45px button rows
+                                      plus their 10px gap). That number is not cosmetic: this row is the
+                                      lowest thing in the map column, so a few px of overflow here are a
+                                      few px of page and a scrollbar on the pane - the same trap the
+                                      level switch's `input.` selector above exists to avoid. The
+                                      swatches flex to fill it, so a 5-step ramp and a 3-step ramp are
+                                      the same height with different sized swatches. */
+                                   .paintHeightBar {
+                                            display: flex; flex-direction: column;
+                                            height: 104px; width: 56px; gap: 0;
+                                            }
+                                   .paintHeightGroup {
+                                            display: flex; flex-direction: column;
+                                            height: 100%; gap: 4px;
+                                            }
+                                   /* flex:1 with min-height:0 rather than a fixed px height: the three
+                                      ramps have 5, 3 and 5 steps and all three have to come to 104px. */
+                                   .paintHeightBtn {
+                                            flex: 1 1 0; min-height: 0; width: 100%; padding: 0;
+                                            font-size: 10px; font-weight: bold; line-height: 1;
+                                            display: flex; align-items: center; justify-content: center;
+                                            white-space: nowrap;
+                                            }
                                    /* Eraser and Reset. Circles, so they read as tools rather than as
                                       two more materials in the row of rectangular colour buttons.
                                       47px each + the 10px gap = 104px, matching the level switch
@@ -193,7 +222,39 @@ vftDbg("UI6")
                                    .paintToolActive {
                                             background-color: #069869 !important; color: white;
                                             border-color: #05714e !important;
-                                            }"
+                                            }
+                                   /* WORK IN PROGRESS. The heat model runs in a daemon for seconds, and
+                                      until it answers the map shows either the previous surface or nothing
+                                      at all, so the button that started it has to say that something is
+                                      happening. A ring turning just outside the circle: it is drawn in a
+                                      pseudo-element, so it adds no box of its own and the tool row cannot
+                                      shift while it spins, and the label underneath stays readable.
+                                      pointer-events:none because the button is disabled for the duration
+                                      (heatWorking() in newVersions_server.R) and the ring must not become
+                                      the one part of it that still takes a click.
+                                      The border trick rather than an animated image: one colour stop on an
+                                      otherwise transparent border is a circle with a gap in it, and
+                                      rotating that is the whole animation. Nothing to load, and it follows
+                                      the app green.
+                                      Single quotes on the empty content: this whole block is one
+                                      double-quoted R string. */
+                                   .paintToolBusy { position: relative; }
+                                   .paintToolBusy::after {
+                                            content: ''; position: absolute;
+                                            top: -4px; left: -4px; right: -4px; bottom: -4px;
+                                            border-radius: 50%;
+                                            border: 3px solid transparent;
+                                            border-top-color: #069869;
+                                            animation: paintToolSpin 0.8s linear infinite;
+                                            pointer-events: none;
+                                            }
+                                   /* Bootstrap dims a disabled button, and the ring is the one thing on it
+                                      that has to stay at full strength - dimmed, working reads as off. So
+                                      the dimming moves from the button to its label, which is an element
+                                      and not a bare text node because usei18n() wraps it in a span. */
+                                   .paintToolBusy[disabled] { opacity: 1; }
+                                   .paintToolBusy[disabled] > * { opacity: 0.65; }
+                                   @keyframes paintToolSpin { to { transform: rotate(360deg); } }"
                                  )
 
                                 ),
@@ -220,6 +281,47 @@ vftDbg("UI6")
                                                    style = "display:none;",
                                                    shiny::div(
                                                      style = "display:flex; align-items:center; justify-content:center; gap:15px; margin-top:10px;",
+                                                     #HEIGHT BAR. Leftmost, because the level switch has to stay
+                                                     #immediately right of the two material rows - its knob slides
+                                                     #onto the row it activates, so nothing may come between them.
+                                                     #
+                                                     #Every step of every ramp is built HERE, statically, and shown
+                                                     #or hidden with shinyjs - not rendered per material with
+                                                     #renderUI. That is how the rest of this palette works, and it
+                                                     #keeps the swatches' input ids fixed: a re-rendered
+                                                     #actionButton arrives with its click count reset, and on this
+                                                     #page a control that silently loses its value is the failure
+                                                     #mode that has bitten hardest (see the scenario-card notes in
+                                                     #newVersions_server.R).
+                                                     #
+                                                     #Built by looping PAINT_CATEGORIES instead of writing one
+                                                     #actionButton per step out, so colour and metres both come
+                                                     #from the one table. The eight material buttons below restate
+                                                     #their hexes by hand and are the cautionary example.
+                                                     shiny::div(
+                                                       id = NS(id, "paintHeightBar"),
+                                                       class = "paintHeightBar",
+                                                       style = "display:none;",
+                                                       lapply(vftHeightRamps(), function(ramp){
+                                                         shiny::div(
+                                                           id = NS(id, paste0("paintHeightGroup_", ramp$name)),
+                                                           class = "paintHeightGroup",
+                                                           style = "display:none;",
+                                                           #tallest on top, so the bar reads like the thing it
+                                                           #describes rather than like a table sorted by id
+                                                           lapply(rev(seq_len(nrow(ramp$steps))), function(k){
+                                                             st <- ramp$steps[k, ]
+                                                             shiny::actionButton(
+                                                               inputId = shiny::NS(id, paste0("paintHeight_", st$id)),
+                                                               label   = sprintf("%g m", st$height),
+                                                               class   = "paintHeightBtn colorBtnNotSelected",
+                                                               style   = sprintf("background-color: %s; color: %s;",
+                                                                                 st$hex, st$fg)
+                                                             )
+                                                           })
+                                                         )
+                                                       })
+                                                     ),
                                                      shiny::div(
                                                        style = "display:flex; flex-direction:column; align-items:flex-end; gap:10px;",
                                                        #CANOPY LEVEL
@@ -228,12 +330,12 @@ vftDbg("UI6")
                                                          shiny::actionButton(
                                                            inputId = shiny::NS(id, "paintColor_canopyArtificial"), label = i18n$t("Kuenstlich"),
                                                            class = "colorBtnNotSelected",
-                                                           style = "background-color: #3f3f3f; color: white; width: 90px; height: 45px;"
+                                                           style = "background-color: #e0e0e0; color: black; width: 90px; height: 45px;"
                                                          ),
                                                          shiny::actionButton(
                                                            inputId = shiny::NS(id, "paintColor_canopyTree"), label = i18n$t("Baum"),
                                                            class = "colorBtnNotSelected",
-                                                           style = "background-color: #14532d; color: white; width: 90px; height: 45px;"
+                                                           style = "background-color: #004200; color: white; width: 90px; height: 45px;"
                                                          )
                                                        ),
                                                        #GROUND LEVEL
@@ -275,7 +377,7 @@ vftDbg("UI6")
                                                        class = "colorBtnNotSelected",
                                                        #white-space/flex override Bootstrap's nowrap and top-aligned label, which
                                                        #a two-word caption in a 90px-wide, 100px-tall button would otherwise show up
-                                                       style = paste("background-color: #1f1f1f; color: white; width: 90px; height: 100px;",
+                                                       style = paste("background-color: #3d3d3d; color: white; width: 90px; height: 100px;",
                                                                      "white-space: normal; display: flex; align-items: center;",
                                                                      "justify-content: center; text-align: center;")
                                                      ),

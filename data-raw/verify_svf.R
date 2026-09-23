@@ -10,6 +10,7 @@ terraOptions(progress = 0)
 R <- Sys.getenv("VFT_R", file.path(getwd(), "R"))
 if(!dir.exists(R)) R <- "C:/Users/frueh/VScode_GitClones/visitorFlowTool_2025/R"
 source(file.path(R, "data_paths.R"))
+source(file.path(R, "paintbrush_helpers.R"))   ## PAINT_CATEGORIES: heatHeights() is keyed off it
 source(file.path(R, "shadow_helpers.R"))
 source(file.path(R, "svf_helpers.R"))
 ## The heat model's inner loops are C++ now (src/heat_cpp.cpp), so sourcing R/
@@ -25,6 +26,14 @@ source(file.path(R, "svf_helpers.R"))
   dyn.load(.dll)
   source(file.path(R, "RcppExports.R"))
 }
+
+## heat_helpers.R is here for ONE function: heat_modal_class(), the two-stage
+## modal the app coarsens the land cover with. Nothing below runs the heat model
+## - this file stays what it was - but a fixture built with a plain modal is not
+## the raster the app marches over, and over height ids the two genuinely
+## differ: a 5 m cell that is entirely forest can come out as open sky simply
+## because the crowns in it are two different heights.
+source(file.path(R, "heat_helpers.R"))
 
 fails <- 0
 ok <- function(what, cond, extra = "") {
@@ -76,8 +85,9 @@ cat("\n=== 3. real land cover ===\n")
 CX <- 2593956; CY <- 1119554
 ## non-square on purpose - see the orientation group in verify_shadows.R
 e <- ext(CX - 500, CX + 500, CY - 300, CY + 300)
-gr <- aggregate(crop(rast(file.path(LC, "ground_CH_1m.tif")), e), 5, fun = "modal")
-cn <- aggregate(crop(rast(file.path(LC, "canopy_CH_1m.tif")), e), 5, fun = "modal")
+## the app's two-stage modal - see the note in verify_shadows.R
+gr <- heat_modal_class(crop(rast(file.path(LC, "ground_CH_1m.tif")), e), 5)
+cn <- heat_modal_class(crop(rast(file.path(LC, "canopy_CH_1m.tif")), e), 5)
 ok("window is non-square", nrow(gr) != ncol(gr), sprintf("[%d x %d]", nrow(gr), ncol(gr)))
 
 t0 <- Sys.time()
@@ -95,8 +105,20 @@ hv <- values(H)[, 1]; sv <- values(svf)[, 1]; dv <- values(d)[, 1]
 ## by design. Here that is 35 % of the window, so every ground-level statement
 ## below has to exclude them or it measures the rooftops instead - which is what
 ## made the first draft of this file report SVF as *higher* among the buildings.
-ok(sprintf("obstruction cells see open sky, as intended (%.3f)", mean(sv[hv > 0])),
-   mean(sv[hv > 0]) > 0.95)
+##
+## "near 1" held ABSOLUTELY only while every building was 10 m and every crown
+## 15 m, because then every roof was the skyline. With real heights it is
+## relative: measured over this window a 3 m hedge reads 0.708 because
+## everything around it overtops it, while a 50 m block reads 1.000. The
+## invariant that survives is the one the design actually implies - the taller
+## the cell's own obstruction, the more sky it sees - together with the tallest
+## class present still seeing essentially all of it.
+oh  <- sort(unique(hv[hv > 0]))
+rho <- if (length(oh) > 1) cor(hv[hv > 0], sv[hv > 0]) else NA_real_
+ok(sprintf("a roof's SVF rises with its own height (r = %+.2f over %d heights)",
+           rho, length(oh)), length(oh) > 1 && rho > 0.4)
+ok(sprintf("the tallest obstruction present sees open sky (%.0f m -> %.3f)",
+           max(oh), mean(sv[hv == max(oh)])), mean(sv[hv == max(oh)]) > 0.95)
 g <- hv == 0
 ok(sprintf("ground-level SVF is well below 1 in a town centre (%.3f)", mean(sv[g])),
    mean(sv[g]) < 0.85)
@@ -108,10 +130,20 @@ brk <- c(-0.1, 5, 10, 20, 40, 1e9); lab <- c("0-5", "5-10", "10-20", "20-40", ">
 band <- tapply(sv[g], cut(dv[g], brk, labels = lab), mean)
 cat("   ground SVF by distance to obstruction (m):",
     paste(sprintf("%s=%.3f", lab, band), collapse = "  "), "\n")
-ok("ground SVF rises monotonically with distance to the nearest obstruction",
-   all(diff(as.numeric(band)) > 0))
-ok(sprintf("far from anything, SVF is essentially 1 (%.3f)", band[[length(band)]]),
-   band[[length(band)]] > 0.95)
+## Monotonic out to 40 m, and deliberately NOT beyond it.
+##
+## This file used to assert the last band was "essentially 1", and that held only
+## because nothing in the window was taller than 15 m. These same 130 cells now
+## sit in full view of a 50 m block: the largest horizon angle they see went from
+## 13.6 to 35.0 degrees when real heights arrived, and their mean SVF from 0.985
+## to 0.926. Distance to the NEAREST obstruction stops predicting sky once
+## heights vary, because a tower 200 m off beats a hedge at 45 m. Out to 40 m the
+## nearest thing still dominates, which is what makes this an orientation test.
+ok("ground SVF rises monotonically with distance out to 40 m",
+   all(diff(as.numeric(band[1:4])) > 0))
+ok(sprintf("...and cells far from anything see far more sky than cells beside it (%.3f vs %.3f)",
+           band[[length(band)]], band[[1]]),
+   band[[length(band)]] - band[[1]] > 0.25)
 cr <- cor(sv[g], dv[g], use = "complete.obs")
 ok(sprintf("SVF correlates with distance to obstruction (r = %.2f)", cr), cr > 0.5)
 
@@ -132,6 +164,30 @@ ok("wall cells sit near obstructions",
 ## The geometric signature: the bonus is on the sun-facing side, so it must swap
 ## sides of the buildings between morning and afternoon. Morning sun is ESE
 ## (az 109) and afternoon WSW (az 251), so the morning band sits further east.
+##
+## THIS CHECK IS SENSITIVE TO THE DEFAULT BLOCK HEIGHT, and it is worth knowing
+## why before reading a failure as a broken wall term. A wall cell is the cell
+## DOWNSUN of a taller neighbour, which is also where that neighbour's shadow
+## falls - and the term then discards every shaded cell, because a shaded cell
+## gets no facade bonus. So a building only contributes wall cells at all when it
+## is too SHORT to shade its own neighbour, i.e. when its height is under one
+## march step, res * tan(elevation). At HEAT_RES = 5 m that threshold is 5.1 m
+## at morning and afternoon and 10.4 m at midday.
+##
+## This check FAILED for as long as the land cover had one height per material.
+## Every building was the 10 m default - just under the midday threshold, well
+## over the morning one - so blocks contributed wall cells at midday and none at
+## morning or afternoon, and the whole east-west signature rested on the 5 m
+## artificial canopies. Real heights fixed it by giving the window obstructions
+## on BOTH sides of both thresholds: 3 m crowns and 5 m blocks are under the
+## morning step, 15 m and taller are over the midday one. The numbers printed
+## below say which classes are actually in play, so a failure here points at the
+## grid and the height table rather than at this file.
+.rise <- sapply(HEAT_BINS, function(b) res(H)[1] * tan(heatSunPosition(b)$elevation * pi / 180))
+cat(sprintf("   one march step drops the ray: %s\n",
+            paste(sprintf("%s %.1f m", HEAT_BINS, .rise), collapse = "  ")))
+cat(sprintf("   obstruction heights in play : %s\n",
+            paste(sprintf("%s=%g", names(heatHeights()), unname(heatHeights())), collapse = " ")))
 xy <- crds(w$morning, na.rm = FALSE)
 ex_m <- mean(xy[values(w$morning) == 1, 1]); ex_a <- mean(xy[values(w$afternoon) == 1, 1])
 ok(sprintf("wall band shifts east in the morning vs afternoon (%.1f m)", ex_m - ex_a),

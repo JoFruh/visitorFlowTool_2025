@@ -114,12 +114,30 @@ if (!file.exists(file.path(LC, "ground_CH_1m.tif"))) {
 }
 CX <- 2593956; CY <- 1119554
 e <- ext(CX - 700, CX + 700, CY - 500, CY + 500)     # non-square on purpose
-gr <- aggregate(crop(rast(file.path(LC, "ground_CH_1m.tif")), e), HEAT_RES, fun = "modal")
-cn <- aggregate(crop(rast(file.path(LC, "canopy_CH_1m.tif")), e), HEAT_RES, fun = "modal")
+## Coarsened the way heat_landcover() coarsens it for the app - the two-stage
+## modal, not a plain one. A plain modal over height ids hands a 5 m cell that is
+## entirely forest to whatever single id happens to be commonest, which can be
+## open sky; heat_modal_class() votes on the material first and the height only
+## if the material agrees. The app never does it the other way.
+gr <- heat_modal_class(crop(rast(file.path(LC, "ground_CH_1m.tif")), e), HEAT_RES)
+cn <- heat_modal_class(crop(rast(file.path(LC, "canopy_CH_1m.tif")), e), HEAT_RES)
+
+## RAW ids carry the height and are what the geometry terms march over. BASE ids
+## are the nine materials heat_materials.csv and heat_decay.csv are keyed on, and
+## are what heatRaster() hands to heatLocalTerm() and the advective term - see
+## the comment there. Feeding raw ids to those two fails SILENTLY rather than
+## loudly, which is why this fixture has to make the same distinction the model
+## makes: heatLocalTerm() resolves an unlisted ground class with `others = NA`,
+## so every block variant drops out of the finished map (14.31 % of this window),
+## and heat_source_mask() matches on the id itself, so a forest split across five
+## tree classes falls below min_patch_ha and comes back NULL. Both were invisible
+## while every tree was class 7 and every building class 8.
+mg <- paintBaseRaster(gr)
+mc <- paintBaseRaster(cn)
 
 cat("\n=== 3. the terms, separately ===\n")
 sh <- heatShadeRaster(gr, cn, "midday", geo)
-lo <- heatLocalTerm(gr, cn, sh, "midday", mat)
+lo <- heatLocalTerm(mg, mc, sh, "midday", mat)
 ok("local term returned", !is.null(lo))
 ok("local term is in the range the table spans",
    min(values(lo), na.rm = TRUE) >= -6 && max(values(lo), na.rm = TRUE) <= 12,
@@ -139,7 +157,7 @@ s_sun <- spread(values(sh) == 0); s_shd <- spread(values(sh) == 1)
 ok(sprintf("shade collapses the material spread (%.1f K sunlit -> %.1f K shaded)",
            s_sun, s_shd), s_shd < s_sun)
 
-adv <- heatAdvectiveTerm(gr, cn, dec, res = HEAT_RES)
+adv <- heatAdvectiveTerm(mg, mc, dec, res = HEAT_RES)
 ok("advective term returned and is small next to the local one",
    !is.null(adv) && max(abs(values(adv)), na.rm = TRUE) < 3,
    sprintf("max |adv| = %.2f K", max(abs(values(adv)), na.rm = TRUE)))
@@ -152,7 +170,7 @@ h <- list()
 for (b in HEAT_BINS) {
   t0 <- Sys.time()
   sh_b <- heatShadeRaster(gr, cn, b, geo)
-  lo_b <- heatLocalTerm(gr, cn, sh_b, b, mat)
+  lo_b <- heatLocalTerm(mg, mc, sh_b, b, mat)
   sv_b <- heatSvfRaster(gr, cn, geom = geo)
   wl_b <- heatWallRaster(gr, cn, b, geo, sh_b)
   ge_b <- heatGeometryTerm(sh_b, sv_b, wl_b, geo)
@@ -184,23 +202,49 @@ ok(sprintf("the day warms monotonically in the mean (%.2f -> %.2f -> %.2f K)",
 
 cat("\n=== 6. the model reproduces the tables ===\n")
 ## The strongest check available: on cells where nothing but the material acts -
-## sunlit, fully open sky, no wall nearby, no advective source in range - the
-## output must BE the table value. Anything else means a term is leaking.
+## sunlit, open sky, no wall nearby - the assembled output must BE the table
+## value once the advective term is taken back off. Anything else means a term
+## is leaking.
+##
+## WHY adv IS SUBTRACTED RATHER THAN REQUIRED TO VANISH. This group used to ask
+## for `abs(values(adv)) < 0.02` as well, and in this window that condition is
+## met by 1366 cells of 56 000 - essentially none of which are also sunlit, open
+## and wall-free. Every check below is conditional on finding five such cells, so
+## the group passed for some time while asserting NOTHING AT ALL: measured on the
+## flat rasters it found 0 clean cells for all four classes, and on the height
+## rasters 195 spread over three of them. That is a silent check, which is worse
+## than a failing one, so `n_tab` now counts what was actually tested and fails
+## the group if the answer is nothing. Sion is a town centre and no cell in it is
+## out of reach of every advective source; the term is verified exactly, against
+## terra::focal() and against a windowed rebuild, in group 10.
+##
+## The SVF floor is 0.98 rather than 0.995 for the same reason - at 0.995 grass
+## is the only one of the four materials that clears five cells (12; asphalt gets
+## 3, soil and water none). At 0.98 all four do, with 362, 587, 31 and 91 cells,
+## and the geometry term there is at most 0.04 K, comfortably inside the 0.05 K
+## the comparison allows. That bound is the point: what is left after subtracting
+## adv is the local term PLUS a geometry term small enough that the table value
+## still has to come through it.
+n_tab <- 0
 sv <- heatSvfRaster(gr, cn, geom = geo)
 for (b in HEAT_BINS) {
   sh_b <- heatShadeRaster(gr, cn, b, geo)
   wl_b <- heatWallRaster(gr, cn, b, geo, sh_b)
-  tot  <- heatLocalTerm(gr, cn, sh_b, b, mat) + heatGeometryTerm(sh_b, sv, wl_b, geo) + adv
-  clean <- values(sh_b) == 0 & values(sv) > 0.995 & values(wl_b) == 0 & abs(values(adv)) < 0.02
+  tot  <- heatLocalTerm(mg, mc, sh_b, b, mat) + heatGeometryTerm(sh_b, sv, wl_b, geo) + adv
+  clean <- values(sh_b) == 0 & values(sv) > 0.98 & values(wl_b) == 0
   for (k in c(1, 3, 4, 5)) {
-    m <- clean & values(gr) == k
+    m <- clean & values(mg) == k
     if (sum(m, na.rm = TRUE) < 5) next
-    got  <- median(values(tot)[m], na.rm = TRUE)
+    n_tab <- n_tab + 1
+    got  <- median((values(tot) - values(adv))[m], na.rm = TRUE)
     want <- mat$pet_0m_K[mat$class_id == k & mat$shaded == 0 & mat$time_bin == b]
     ok(sprintf("%-9s class %d reproduces the table (%+.2f vs %+.2f)", b, k, got, want),
        abs(got - want) < 0.05)
   }
 }
+
+ok(sprintf("...and there were clean cells to check it against at all (%d of %d)",
+           n_tab, 4 * length(HEAT_BINS)), n_tab == 4 * length(HEAT_BINS))
 
 cat("\n=== 7. unclassified ground ===\n")
 na_share <- 100 * mean(is.na(values(h$midday)))
@@ -243,11 +287,25 @@ ed <- function(cls, side) {
   values(r) <- as.integer(cls); r
 }
 G <- ed(1, 120); T7 <- ed(7, 80)
+## The same trees at another height. Since the height bar a class id carries the
+## metres, so tree@25 (13) and tree@10 (11) are DIFFERENT IDS over the SAME
+## CELLS - which is the one edit that changes the shadow, the horizon and the
+## wall band while leaving every material in the design exactly where it was.
+##
+## Nothing else in this walk can catch a stale HEAT_OBSTRUCTION_IDS. Every other
+## step also moves a ground class, so the cache is dirtied by the local term
+## whatever the geometry list says; here the ONLY thing that moved is a height.
+## If that list is ever written out as c(6L, 7L, 8L) again, `touched` comes back
+## {11, 13}, geom_dirty is FALSE, the cached shade/svf/wall are reused with the
+## old trees still standing in them, and this is the check that says so.
+T13 <- ed(13, 80); T11 <- ed(11, 80)
 walk <- list(list("cold midday",           "midday",    NULL, NULL),
              list("ground repaint",        "midday",    G,    NULL),
              list("switch bin",            "afternoon", G,    NULL),
              list("plant trees",           "afternoon", G,    T7),
              list("switch back",           "midday",    G,    T7),
+             list("raise them to 25 m",    "midday",    G,    T13),
+             list("drop them to 10 m",     "midday",    G,    T11),
              list("erase the trees",       "midday",    G,    NULL),
              list("repaint another class", "midday",    ed(5, 120), NULL))
 ca <- heatCacheNew()
@@ -287,6 +345,94 @@ w5 <- heatRaster(aoi, stroke(5), NULL, bin = "midday", cache = ca2)
 ok("and repainting that stroke changes the surface",
    max(abs(values(w3) - values(w5)), na.rm = TRUE) > 1)
 
+## A HEIGHT IS NOT A MATERIAL, AND BOTH HALVES OF THAT HAVE TO HOLD.
+##
+## The exactness walk above proves the cache agrees with itself; it cannot tell
+## a working height from a height that reaches nothing at all, because a model
+## that ignored the metres entirely would also be perfectly self-consistent. So:
+## the same trees at 3 m and at 25 m must give DIFFERENT surfaces (the geometry
+## terms read the height), while their local term must be IDENTICAL (the thermal
+## tables are keyed on the base material - a crown is a crown).
+cat("
+")
+lo <- heatRaster(aoi, G, ed(10, 80), bin = "morning")   # tree @ 3 m
+hi <- heatRaster(aoi, G, ed(13, 80), bin = "morning")   # tree @ 25 m
+ok(sprintf("a 25 m tree is not a 3 m tree (max %.2f K)",
+           max(abs(values(lo) - values(hi)), na.rm = TRUE)),
+   max(abs(values(lo) - values(hi)), na.rm = TRUE) > 0.5)
+## ...and taller must mean a LONGER CAST SHADOW, not merely a different surface.
+##
+## Measured off the canopy, deliberately. A crown shades its own footprint at any
+## height, and that footprint is the same 80 m square in both runs, so counting
+## every shaded cell drowns the effect being tested: 22.1% against 22.1%, which
+## would pass just as happily if the height reached nothing at all. What height
+## buys is the shadow OUTSIDE the crown, and that is the only place to look.
+.lcLo <- heat_landcover(aoi, G, ed(10, 80), HEAT_RES, NULL)
+.lcHi <- heat_landcover(aoi, G, ed(13, 80), HEAT_RES, NULL)
+shLo <- heatShadeRaster(.lcLo$ground, .lcLo$canopy, "morning")
+shHi <- heatShadeRaster(.lcHi$ground, .lcHi$canopy, "morning")
+## Stated as CONTAINMENT rather than as a count, because a count over real town
+## land cover is mostly other people's buildings: 12748 against 12697 is the
+## right sign but it is 51 cells of signal in 12700 of noise, and it would stay
+## green if the height were doing almost nothing. On an open cell the ray only
+## has to clear 0, so raising an obstruction can add shade and can never take it
+## away - an exact invariant, and one a broken height field breaks immediately.
+##
+## Open cells only. ON the crown the invariant genuinely does not hold: a cell
+## that is itself 25 m of canopy has to clear 25 m to count as shaded where a
+## 3 m one had to clear 3, which is the roof-in-the-sun rule and is correct.
+.open  <- !is.na(values(.lcHi$canopy)) & values(.lcHi$canopy) == 0
+.loSh  <- values(shLo)[.open] == 1
+.hiSh  <- values(shHi)[.open] == 1
+ok(sprintf("raising a tree never un-shades open ground (%d cells lost)",
+           sum(.loSh & !.hiSh)), sum(.loSh & !.hiSh) == 0)
+ok(sprintf("...and it shades more of it (%d cells gained)",
+           sum(.hiSh & !.loSh)), sum(.hiSh & !.loSh) > 0)
+
+## The thermal half: every step of a ramp must read the same row of
+## heat_materials.csv, which is what paintBaseRaster() in heatRaster() is for.
+## Without it a variant id misses the table and goes quiet - canopy classes
+## resolve with others = 0 ("open sky" under a 25 m crown) and ground classes
+## with others = NA, which drops those cells out of the finished map altogether.
+lcLo <- heat_landcover(aoi, G, ed(10, 80), HEAT_RES, NULL)
+lcHi <- heat_landcover(aoi, G, ed(13, 80), HEAT_RES, NULL)
+flat <- setValues(rast(lcLo$ground), 0L)
+locLo <- heatLocalTerm(paintBaseRaster(lcLo$ground), paintBaseRaster(lcLo$canopy), flat, "morning")
+locHi <- heatLocalTerm(paintBaseRaster(lcHi$ground), paintBaseRaster(lcHi$canopy), flat, "morning")
+ok("...but it is made of the same thing (local term identical)",
+   max(abs(values(locLo) - values(locHi)), na.rm = TRUE) < HEAT_EXACT_K)
+ok("...and no cell of it fell out of the table",
+   sum(is.na(values(locHi))) == sum(is.na(values(locLo))) &&
+   mean(is.na(values(locHi))) < 0.5,
+   sprintf("[%.2f%% NA]", 100 * mean(is.na(values(locHi)))))
+
+## THE INVARIANTS THE PALETTE AND THE MODEL HAVE TO SHARE.
+cat("
+")
+ok("every class maps to a base material in 1:9",
+   all(paintBaseId(PAINT_CATEGORIES$id) %in% 1:9))
+ok("HEAT_OBSTRUCTION_IDS is exactly the ids that carry a height",
+   identical(sort(as.integer(HEAT_OBSTRUCTION_IDS)), sort(as.integer(PAINT_HEIGHT_IDS))))
+.pcH <- PAINT_CATEGORIES[!is.na(PAINT_CATEGORIES$height), ]
+.csvH <- unname(heatHeights()[as.character(.pcH$id)])
+ok("the palette's heights agree with heat_geometry.csv",
+   isTRUE(all.equal(.csvH, .pcH$height)))
+ok("every material button still has a colour of its own",
+   !any(duplicated(PAINT_CATEGORIES$hex[PAINT_CATEGORIES$hex != "transparent"])))
+
+## The two-stage modal. A 5 m cell that is 60% tree but whose commonest single
+## id is grass must coarsen to a TREE - the material wins the vote, and the
+## height follows only if it agrees. A plain modal over the raw ids gives grass
+## here, which is a painted avenue with no crown, no shade and no sky blocking.
+.mv <- c(rep(11, 8), rep(13, 7), rep(1, 10))
+.mr <- rast(ext(0, 5, 0, 5), resolution = 1, crs = "EPSG:2056")
+values(.mr) <- .mv
+ok(sprintf("a split-height patch keeps its material (plain modal says %d)",
+           as.integer(values(aggregate(.mr, 5, "modal")))),
+   paintBaseId(as.integer(values(heat_modal_class(.mr, 5)))) == 7L)
+ok("...and an unsplit one keeps its height too",
+   { values(.mr) <- rep(13, 25); as.integer(values(heat_modal_class(.mr, 5))) == 13L })
+
 ## THE CASE THAT BREAKS A NAIVE DIRTY RECTANGLE.
 ##
 ## min_patch_ha is a property of a whole connected patch, so one cell can change
@@ -318,7 +464,7 @@ ok("...and it really did change the surface far from the cut",
 
 ## the windowed convolution must equal the full one wherever it is defined
 dtr <- dec[dec$class_id == 7, , drop = FALSE]
-mk  <- heat_source_mask(gr, cn, dtr, HEAT_RES)
+mk  <- heat_source_mask(mg, mc, dtr, HEAT_RES)
 if (!is.null(mk)) {
   fullf <- heat_adv_field(mk, dtr, HEAT_RES, HEAT_ADV_RES)
   w     <- ext(CX - 200, CX + 200, CY - 150, CY + 150)
@@ -358,7 +504,7 @@ cat("\n=== 9. run it the way the app runs it: terra NOT on the search path ===\n
 detach("package:terra")
 r9 <- try({
   s9 <- heatShadeRaster(gr, cn, "midday")
-  m9 <- heat_source_mask(gr, cn, dtr, HEAT_RES)
+  m9 <- heat_source_mask(mg, mc, dtr, HEAT_RES)
   h9 <- heatRaster(aoi, bin = "midday")
   list(shade = s9, mask = m9, heat = h9)
 }, silent = TRUE)
@@ -406,8 +552,8 @@ old_source_mask <- function(ground, canopy, row, res) {
 n_mask <- 0; bad_mask <- character(0)
 for (i in seq_len(nrow(dec))) {
   rw <- dec[i, , drop = FALSE]
-  a <- old_source_mask(gr, cn, rw, HEAT_RES)
-  b <- heat_source_mask(gr, cn, rw, HEAT_RES)
+  a <- old_source_mask(mg, mc, rw, HEAT_RES)
+  b <- heat_source_mask(mg, mc, rw, HEAT_RES)
   agree <- if (is.null(a) && is.null(b)) TRUE
            else if (is.null(a) || is.null(b)) FALSE
            else ext(a) == ext(b) && all(values(a) == values(b))
@@ -421,11 +567,11 @@ ok(sprintf("patch masks are bit-identical to terra::patches() (%d classes)", n_m
 ## are identically wrong because nothing was ever excluded
 tiny <- dec[dec$class_id == 7, , drop = FALSE]; tiny$min_patch_ha <- 1e6
 ok("...and an impossible min_patch_ha still excludes everything",
-   is.null(heat_source_mask(gr, cn, tiny, HEAT_RES)))
+   is.null(heat_source_mask(mg, mc, tiny, HEAT_RES)))
 huge <- dec[dec$class_id == 7, , drop = FALSE]; huge$min_patch_ha <- 0
 ok("...and a zero floor keeps strictly more cells than the real one",
-   sum(values(heat_source_mask(gr, cn, huge, HEAT_RES))) >
-     sum(values(heat_source_mask(gr, cn, dec[dec$class_id == 7, , drop = FALSE], HEAT_RES))))
+   sum(values(heat_source_mask(mg, mc, huge, HEAT_RES))) >
+     sum(values(heat_source_mask(mg, mc, dec[dec$class_id == 7, , drop = FALSE], HEAT_RES))))
 
 ## a corner-only join is the case 4-connectivity gets wrong and 8-connectivity
 ## gets right, and it is what `directions = 8` in the original was for
@@ -459,7 +605,7 @@ ok("...and heatSvfRaster() agrees with it cell for cell, untransposed",
 n_conv <- 0; worst <- 0
 for (i in which(!is.na(dec$half_dist_m) & dec$amp_edge_K != 0)) {
   rw <- dec[i, , drop = FALSE]
-  mk0 <- heat_source_mask(gr, cn, rw, HEAT_RES)
+  mk0 <- heat_source_mask(mg, mc, rw, HEAT_RES)
   if (is.null(mk0)) next
   fct <- max(1L, as.integer(round(HEAT_ADV_RES / HEAT_RES)))
   mk1 <- if (fct > 1) aggregate(mk0, fct, fun = "mean", na.rm = TRUE) else mk0
@@ -514,6 +660,56 @@ if (file.exists(bl)) {
 } else {
   cat("  no stored baseline yet - run once with VFT_HEAT_BASELINE=1 to create it\n")
 }
+
+cat("\n=== 11. the progress bar says where the model is, and changes nothing ===\n")
+## The bar is driven from inside heatRaster() (heat_ticker(), one mark per term),
+## which puts a display feature in the middle of the model. Two things have to
+## hold: the marks are the pipeline in order, and the model cannot tell whether
+## anyone is watching. The second is the one worth a check - a $set() that throws
+## is not hypothetical, it is what a closed session leaves behind while the
+## daemon is still working.
+##
+## The marks themselves are spaced by the measured cost of each term; the table
+## behind them is in the comment at the top of heatRaster(). To re-measure, run
+## this file's aoi through heatRaster() with a handle that records Sys.time()
+## instead of a value, and read the gaps.
+anchors <- c(0.02, 0.42, 0.50, 0.53, 0.60, 0.64, 0.66, 0.99)
+rec <- function() {
+  e <- new.env(); e$v <- numeric(0)
+  list(handle = list(set = function(value = NULL, message = NULL, detail = NULL) {
+         e$v <- c(e$v, value); invisible(NULL) }),
+       seen = function() e$v)
+}
+r11 <- rec()
+h11 <- heatRaster(aoi, bin = "midday", progress = r11$handle)
+ok(sprintf("a cold run reports every mark, in order (%d of %d)",
+           length(r11$seen()), length(anchors)),
+   isTRUE(all.equal(r11$seen(), anchors)))
+ok("no mark is outside (0, 1]",
+   length(r11$seen()) > 0 && all(r11$seen() > 0) && all(r11$seen() <= 1))
+
+## A warm run skips terms but not marks: the ticks sit outside the cache
+## lookups, so the bar still walks the whole pipeline - it just gets there
+## faster. If this ever fails, a tick has been moved inside a heat_cached().
+ca11 <- heatCacheNew()
+invisible(heatRaster(aoi, bin = "midday", cache = ca11))
+r11b <- rec()
+invisible(heatRaster(aoi, bin = "midday", cache = ca11, progress = r11b$handle))
+ok("a warm run reports the same marks as a cold one",
+   isTRUE(all.equal(r11b$seen(), anchors)))
+
+## and the model is the model whether or not a bar is attached
+h11p <- heatRaster(aoi, bin = "midday",
+                   progress = list(set = function(...) stop("session has gone")))
+d11 <- abs(values(h11p, mat = FALSE) - values(h11, mat = FALSE))
+d11 <- d11[is.finite(d11)]
+ok("a progress handle that throws costs the bar and not the surface",
+   length(d11) > 0 && max(d11) == 0)
+h11n <- heatRaster(aoi, bin = "midday", progress = NULL)
+d11n <- abs(values(h11n, mat = FALSE) - values(h11, mat = FALSE))
+d11n <- d11n[is.finite(d11n)]
+ok("the surface is identical with and without a bar",
+   length(d11n) > 0 && max(d11n) == 0)
 
 cat(sprintf("\n%d check(s) failed\n", fails))
 quit(status = if (fails == 0) 0 else 1)

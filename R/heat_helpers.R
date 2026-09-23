@@ -438,14 +438,16 @@ heatGeometryTerm <- function(shade, svf, wall, geom = heatGeometry(),
 
 # ------------------------------------------------------- reuse between runs --
 
-#' Class ids that change the obstruction height field.
+#' HEAT_OBSTRUCTION_IDS - the class ids that change the obstruction height field -
+#' is defined in paintbrush_helpers.R, beside the palette column it is derived
+#' from, and NOT here where it is read.
 #'
-#' Only these three make a shadow, occlude sky or present a wall, so a repaint
-#' that touches none of them cannot move the shade, SVF or wall terms - and
-#' those are 0.61 s of a 2.4 s read-out over central Sion. Every other id is a
-#' ground material that reaches the output through the local and advective terms
-#' alone. Kept beside heatHeights(), which is the list this must agree with.
-HEAT_OBSTRUCTION_IDS <- c(6L, 7L, 8L)
+#' Not a stylistic choice. A package's R files are sourced in alphabetical order,
+#' so heat_helpers.R runs before paintbrush_helpers.R: a top-level
+#' `HEAT_OBSTRUCTION_IDS <- as.integer(PAINT_HEIGHT_IDS)` in this file cannot see
+#' the palette yet and the whole package fails to load. Everything else here
+#' reaches the palette from INSIDE a function body, where the lookup happens at
+#' call time and the order no longer matters.
 
 #' The time-of-day choices for the Hitzeminderung control, labelled.
 #'
@@ -541,11 +543,35 @@ heatCacheFor <- function(key){
 #' NULL key means "no cache", which is what a verification script wants.
 heatRasterPacked <- function(aoi, groundEdits = NULL, canopyEdits = NULL,
                              bin = HEAT_BIN_DEFAULT, res = HEAT_RES,
-                             key = NULL, ...){
+                             key = NULL, progress = NULL, ...){
   unpack <- function(x) if(is.null(x)) NULL else terra::unwrap(x)
   out <- heatRaster(aoi, unpack(groundEdits), unpack(canopyEdits),
-                    bin = bin, res = res, cache = heatCacheFor(key), ...)
+                    bin = bin, res = res, cache = heatCacheFor(key),
+                    progress = progress, ...)
   if(is.null(out)) NULL else terra::wrap(out)
+}
+
+#' The stage markers the progress bar is driven from, or a no-op.
+#'
+#' `progress` is a vftProgress() handle - the small $set/$inc/$close triple that
+#' is safe to send to a worker, see R/async_helpers.R. It is optional and NULL
+#' has to cost nothing: the verification scripts in data-raw and every direct
+#' call to heatRaster() run without one.
+#'
+#' Total by construction, and deliberately so. This is called from inside the
+#' model, and a progress bar is a display feature: a handle whose queue has gone
+#' away, or a session that closed while the daemon was still working, must not be
+#' able to take a computation down with it.
+heat_ticker <- function(progress){
+  noop <- function(value) invisible(NULL)
+  if(is.null(progress)) return(noop)
+  #pulled out rather than called through `progress$`, so that this works for
+  #both shapes of bar the app has: the vftProgress() handle, which is a plain
+  #list of closures, and a shiny::Progress or ipc::AsyncProgress, whose $set is
+  #a method. A `$` on anything else raises here, once, instead of on every term.
+  setter <- tryCatch(progress$set, error = function(e) NULL)
+  if(!is.function(setter)) return(noop)
+  function(value) tryCatch(setter(value = value), error = function(e) NULL)
 }
 
 #' What a repaint changed, and whether the geometry has to be redone.
@@ -679,6 +705,33 @@ heat_edit_rast <- function(s){
   terra::setValues(r, s$v)
 }
 
+#' Coarsen a class-id raster to the heat grid, voting on the MATERIAL first.
+#'
+#' A plain modal vote over the raw ids loses a patch whose height the user split.
+#' A 5 m cell holding 8 cells of tree@10 m, 7 of tree@25 m and 10 of grass is
+#' 60 per cent tree, but the raw tally is {11:8, 13:7, 1:10} and grass wins it -
+#' so a painted avenue comes out with no crown, no shade and no sky blocking, and
+#' nothing anywhere says so.
+#'
+#' So it is voted twice. The material decides what the cell is (all five tree
+#' steps counting as one tree), then the height follows only if the winning
+#' variant belongs to the winning material. Where they disagree - a cell that is
+#' mostly tree but whose single commonest id is grass - the material wins and the
+#' height falls back to that material's default step, which is the surveyed
+#' value and the same id the ramp's base carries.
+#'
+#' Both of heat_landcover()'s aggregate sites must use this, the full rebuild and
+#' the windowed one. If only one does, a repaint near a window edge coarsens
+#' differently from a full read of the same paint and the incremental cache stops
+#' being exact - which is what verify_heat_model.R group 8 walks.
+heat_modal_class <- function(r, f){
+  if(f <= 1) return(r)
+  var <- terra::aggregate(r, fact = f, fun = "modal", na.rm = TRUE)
+  if(!length(PAINT_VARIANT_IDS)) return(var)
+  base <- terra::aggregate(paintBaseRaster(r), fact = f, fun = "modal", na.rm = TRUE)
+  terra::ifel(paintBaseRaster(var) == base, var, base)
+}
+
 #' The class rasters a heat run works on: the national baseline at `res`, with
 #' the version's paint laid over it.
 #'
@@ -700,10 +753,8 @@ heat_landcover <- function(aoi, ge, ce, res, cache, ...){
     g <- paintOverlayEdits(seed$ground, ge)
     c_ <- paintOverlayEdits(seed$canopy, ce)
     f <- res / terra::res(g)[1]
-    if(f > 1){
-      g  <- terra::aggregate(g,  fact = f, fun = "modal", na.rm = TRUE)
-      c_ <- terra::aggregate(c_, fact = f, fun = "modal", na.rm = TRUE)
-    }
+    g  <- heat_modal_class(g,  f)
+    c_ <- heat_modal_class(c_, f)
     list(ground = g, canopy = c_)
   }
   if(is.null(cache)) return(full())
@@ -749,10 +800,8 @@ heat_landcover <- function(aoi, ge, ce, res, cache, ...){
   g <- paintOverlayEdits(seed$ground, if(is.null(ge)) NULL else terra::crop(ge, win))
   c_ <- paintOverlayEdits(seed$canopy, if(is.null(ce)) NULL else terra::crop(ce, win))
   f <- res / terra::res(g)[1]
-  if(f > 1){
-    g  <- terra::aggregate(g,  fact = f, fun = "modal", na.rm = TRUE)
-    c_ <- terra::aggregate(c_, fact = f, fun = "modal", na.rm = TRUE)
-  }
+  g  <- heat_modal_class(g,  f)
+  c_ <- heat_modal_class(c_, f)
   idx <- terra::cells(cache$lctpl, terra::ext(g))
   if(length(idx) != terra::ncell(g)) return(store(full()))   #misaligned: refuse
   cache$lcg[idx] <- terra::values(g,  mat = FALSE)
@@ -865,9 +914,41 @@ heat_mask_delta <- function(cache, key, mv, msk, mx){
 #' two will do - and the crop is the expensive part of this function.
 heatRaster <- function(aoi, groundEdits = NULL, canopyEdits = NULL,
                        bin = HEAT_BIN_DEFAULT, res = HEAT_RES,
-                       cache = NULL, ...){
+                       cache = NULL, progress = NULL, ...){
   vftTime("heat:heatRaster", {
   bin  <- match.arg(bin, HEAT_BINS)
+  #WHERE THE BAR HAS GOT TO IS WHERE THE MODEL HAS GOT TO.
+  #
+  #Each tick() fires when that term is actually in hand, so the fraction is a
+  #position in this pipeline and not a guess at a clock. The marks are spaced by
+  #the share of a COLD run the terms up to that point cost, measured 2026-09-21
+  #over 3.6 x 2.6 km at Sion (2.91 s, 621 x 821 at 5 m):
+  #
+  #   land cover  1.21 s  42 %   read, crop, paint and coarsen the two rasters
+  #   shade       0.22 s   8 %
+  #   local       0.08 s   3 %
+  #   sky view    0.20 s   7 %
+  #   wall        0.11 s   4 %
+  #   geometry    0.06 s   2 %
+  #   advective   0.99 s  34 %   the seven convolutions
+  #
+  #Reading the land cover and the advective field are the two halves of it, one
+  #at each end, and everything the 2026-09-21 rewrite made fast is the thin part
+  #in the middle - patches() and the horizon scan were 60 % and 13 % before it.
+  #That shape is why the marks are not evenly spaced.
+  #
+  #They are anchors, not a rate. A WARM run skips whole terms from the cache and
+  #the bar jumps past them, which is the truth about that run rather than a
+  #fault in it: a change of time of day, the commonest recompute, keeps the land
+  #cover, the sky view and the advective field and rebuilds only the shade and
+  #the wall term, so it lands on 42 % at once, spends its half second between
+  #there and 66 %, and then runs out.
+  #
+  #Nothing in the model reads these numbers - they are the spacing of the marks
+  #and nothing else. Group 11 of data-raw/verify_heat_model.R pins the sequence,
+  #and re-measuring is one run of the profile in that group's comment.
+  tick <- heat_ticker(progress)
+  tick(0.02)
   #The baseline is read, painted and coarsened here. Coarsening happens BEFORE
   #the geometry, not after: the shadow march, the horizon scan and three
   #distance transforms all run on this grid, and at 1 m over a 6 km AOI that is
@@ -878,33 +959,68 @@ heatRaster <- function(aoi, groundEdits = NULL, canopyEdits = NULL,
   if(is.null(lc)) return(NULL)
   ground <- lc$ground
   canopy <- lc$canopy
+  tick(0.42)
 
   geom  <- heatGeometry()
   #what this repaint touched, and therefore what has to be rebuilt. With no
   #cache both come back "everything", which is the behaviour without one.
+  #
+  #On the RAW rasters, deliberately: the height variants are what tell a 10 m
+  #tree from a 25 m one, and this is the only place that can notice the
+  #difference. Normalise first and a change of height reads as no change at all.
   st    <- heat_cache_state(cache, ground, canopy)
   gd    <- st$geom_dirty
+
+  #TWO VIEWS OF THE SAME PAINT, AND EACH TERM TAKES THE ONE IT MEANS.
+  #
+  #`ground`/`canopy` keep the height variants: the shadow march, the horizon
+  #scan and the wall test all go through heatObstructionHeight(), which IS the
+  #class-id-to-metres lookup, so taking the height away from them is taking the
+  #feature away.
+  #
+  #`mg`/`mc` have the variants substituted back to their base material, and
+  #every THERMAL lookup reads those. heat_materials.csv and heat_decay.csv are
+  #keyed on the nine original classes - a 3 m crown and a 25 m crown are made of
+  #the same thing - and an unlisted id there does not raise anything. It goes
+  #quiet: heatLocalTerm() resolves ground classes with `others = NA`, so a block
+  #variant would drop its cells out of the finished map, and canopy classes with
+  #`others = 0`, so a tree variant would read as open sky under a 25 m tree.
+  mg <- paintBaseRaster(ground)
+  mc <- paintBaseRaster(canopy)
+
+  #`touched` is measured on the raw ids, but the advective cache is keyed by the
+  #base class of heat_decay.csv. Paint grass over a 10 m tree and touched is
+  #{1, 11}: adv1 rebuilds, adv7 does not, and the tree patch that just shrank is
+  #still in the cached field. Carrying both spellings is what closes that.
+  touched <- st$touched
+  if(!is.null(touched)) touched <- sort(unique(c(touched, paintBaseId(touched))))
 
   #shade and the wall term are per bin; the SVF is not - a horizon angle does
   #not care where the sun is - so it survives a change of time of day
   shade <- heat_cached(cache, paste0("shade_", bin), gd,
                        function() heatShadeRaster(ground, canopy, bin, geom))
   if(is.null(shade)) return(NULL)
+  tick(0.50)
 
   #the local term reads every cell's own class, so any repaint at all moves it.
   #It is also the cheapest term in the model, so it is never cached.
-  local <- heatLocalTerm(ground, canopy, shade, bin)
+  local <- heatLocalTerm(mg, mc, shade, bin)
   if(is.null(local)) return(NULL)
+  tick(0.53)
 
   svf  <- if(HEAT_APPLY_SVF)
     heat_cached(cache, "svf", gd,
                 function() heatSvfRaster(ground, canopy, geom = geom)) else NULL
+  tick(0.60)
   wall <- if(HEAT_APPLY_WALL)
     heat_cached(cache, paste0("wall_", bin), gd,
                 function() heatWallRaster(ground, canopy, bin, geom, shade)) else NULL
+  tick(0.64)
   geo  <- heatGeometryTerm(shade, svf, wall, geom)
+  tick(0.66)
 
-  adv <- heat_advective_cached(ground, canopy, heatDecay(), res, cache, st$touched)
+  adv <- heat_advective_cached(mg, mc, heatDecay(), res, cache, touched)
+  tick(0.99)
 
   out <- local
   if(!is.null(geo)) out <- out + geo

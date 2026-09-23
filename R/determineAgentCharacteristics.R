@@ -205,17 +205,13 @@ determineAgentCharacteristics <- function(dayPop, currentDay, network, finalPoly
   #listOfPointers [[1]] and [[2]] = vertices and IDs
   #listOfPointers [[3]]..., [[4]]... and [[5]]... = distances normal, attr and ATTR
   #listOfPointers ...[[1]] to ...[[7]] = walkNat, walkSoc, dogNat, dogProx ,ebikeNat, bikeSport, jogger
+  #the "_attr" lists ([[4]]) through the pointer launchMultiSim() builds once -
+  #see adjListsToPtr_cpp(). Built here if a caller did not.
+  adjPtr <- listOfPointers$adj
+  if(is.null(adjPtr)) adjPtr <- adjListsToPtr_cpp(listOfPointers)
    AOIInfo <- findClosestAOI_cpp(AOIList,
                                 igraph::V(network)$AOI,
-                                listOfPointers[[1]],
-                                listOfPointers[[2]],
-                                listOfPointers[[4]][[1]],
-                                listOfPointers[[4]][[2]],
-                                listOfPointers[[4]][[3]],
-                                listOfPointers[[4]][[4]],
-                                listOfPointers[[4]][[5]],
-                                listOfPointers[[4]][[6]],
-                                listOfPointers[[4]][[7]],
+                                adjPtr,
                                 dayPop$startV,
                                 dayPop$speed,
                                 dayPop$timeExt,

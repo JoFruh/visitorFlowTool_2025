@@ -45,6 +45,11 @@ launchMultiSim <- function(pop, network, days, finalPolygons, iter = 1,
   #prepare adjacency lists for pathfinding in C++ (get pointers to C++ objects: avoids converting large tables back to R)
   listOfPointers <- generateAdjListAndDistTbl_cpp(edgeTable = edgeTable,
                                                   vertexTable = vertexTable)
+  #...and the same lists held ONCE on the C++ side, which is what the two path
+  #finders read. Handed to them as R lists, they were copied back into C++ on
+  #every call - 22 lists of one vector per node - and findShortestRoute_cpp()
+  #is called from inside the ABM's timestep loop. See adjListsToPtr_cpp().
+  listOfPointers$adj <- adjListsToPtr_cpp(listOfPointers)
 # print(days)
   p(0.5, "Agenten werden erzeugt...")
 
@@ -75,19 +80,9 @@ launchMultiSim <- function(pop, network, days, finalPolygons, iter = 1,
                        debug = FALSE, progress = progressSim,
                        edgeTable = edgeTable, vertexTable = vertexTable)
 
-  #delete listOfPointers
-  for(i in length(listOfPointers):1){
-    if(length(listOfPointers[[i]]) > 1){
-      for(j in length(listOfPointers[[i]]):1){
-        if(!is.null(listOfPointers[[i]][[j]])){
-          listOfPointers[[i]][[j]] <- NULL
-      }
-      }
-    }else{
-      listOfPointers[[i]] <- NULL
-    }
-  }
-
-  # rm(listOfPointers)
+  #There was a loop here "deleting" listOfPointers element by element. It freed
+  #nothing that returning does not free anyway, and removing entries one at a
+  #time from the per-node id list - one vector per node - copies the rest of
+  #the list on every removal: quadratic in the node count, ~4.5 s at 35k nodes.
   return(simData)
 }

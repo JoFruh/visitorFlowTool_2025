@@ -506,6 +506,14 @@ if(is.null(r$updateNetworkPlot)){
       #the one button currently highlighted, which may be a "both" material belonging
       #to neither level. Matches the class the UI ships paintColor_grass with.
       r$selectedPaintButton      <- "paintColor_grass"
+      #the height step chosen for each material that has a ramp, keyed by base id
+      #and remembered per material - so picking a 25 m tree, going to the block and
+      #coming back returns to the 25 m tree rather than to the default.
+      #
+      #Seeded with each ramp's DEFAULT, which is the id of the base material
+      #itself: 6, 7 and 8, the surveyed heights. That is what makes the height bar
+      #additive - touch nothing and the brush arms exactly the ids it always did.
+      r$paintHeightChoice        <- vapply(vftHeightRamps(), function(rp) rp$default, numeric(1))
       #the scenario gate, remembered so that the heat gate can be applied without
       #the caller having to know it - see applyPaintGates(). Starts closed to match
       #r$position: position 1 is the original, which never takes strokes.
@@ -587,11 +595,28 @@ if(is.null(r$updateNetworkPlot)){
         #permanently blank for a user who came straight from step 1.
         if(!paintContext) shiny::req(!is.null(network))
 
+        #Only when they are not already what this would write. Every render used
+        #to redo both mutates - a copy of the whole graph, edge geometry included
+        #- and write the result back into r$networkList, on every card switch and
+        #context switch. The columns are re-derived rather than trusted because
+        #the edit handlers add nodes and edges, so the test is identical() on
+        #every column against its source, type included: anything short of
+        #"already exactly this" still takes the mutate.
         if(!is.null(network)){
-          network <- network %>% tidygraph::activate(nodes) %>% dplyr::mutate(nodeID_2 = .data$nodeID)
-          network <- network %>% tidygraph::activate(edges) %>% dplyr::mutate(edgeID_2 = .data$edgeID, to_2 = .data$to, from_2 = .data$from)
+          el  <- igraph::as_edgelist(network, names = FALSE)
+          va  <- igraph::vertex_attr(network)
+          ea  <- igraph::edge_attr(network)
+          inSync <- identical(va$nodeID_2, va$nodeID) &&
+                    identical(ea$edgeID_2, ea$edgeID) &&
+                    identical(ea$from_2, as.integer(el[, 1])) &&
+                    identical(ea$to_2,   as.integer(el[, 2]))
+          if(!inSync){
+            network <- network %>% tidygraph::activate(nodes) %>% dplyr::mutate(nodeID_2 = .data$nodeID)
+            network <- network %>% tidygraph::activate(edges) %>% dplyr::mutate(edgeID_2 = .data$edgeID, to_2 = .data$to, from_2 = .data$from)
 
-          shiny::isolate(r$networkList[[r$position]]$network <- network )
+            shiny::isolate(r$networkList[[r$position]]$network <- network )
+          }
+          rm(el, va, ea)
         }
 
         #interactive map: mode is set once for the process in global.R
@@ -683,18 +708,15 @@ if(is.null(r$updateNetworkPlot)){
 
             if(r$position != 1){
 
-              #prepare data of current version
-              edgeTbl <- shiny::isolate(r$networkList[[r$position]]$network %>% tidygraph::activate(edges) %>% dplyr::as_tibble())
-              edgeTbl <- edgeTbl %>% dplyr::relocate(.data$edgeID)
+              #(An edge table and a node table used to be materialised here from
+              #the whole graph and handed to nothing but vftDbg(). Gone.)
 
-              # edgesShape <- edgeTbl  %>% sf::st_as_sf()
-
-              vftDbg("NETWORK EDGES:")
-              vftDbg(edgeTbl)
-
-              nodeTbl <- shiny::isolate(r$networkList[[r$position]]$network %>% tidygraph::activate(nodes) %>% dplyr::as_tibble())
               #PLOT INTERACTIVE NETWORK MAP (if not original)
               sfData <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(network %>% tidygraph::activate(edges)) ), drop = T, what = "ZM")
+              #`network` is the scenario's graph, written back above when it was
+              #not already in sync - so this is the same geometry the three
+              #separate reads below used to take, taken once
+              nodeXY  <- sf::st_coordinates(igraph::V(network)$geometry)
               pal <- leaflet::colorNumeric(c("black", "#e8e22e", "#3ddb68", "#35caf0"), domain = 1:4)
               palDash <- plyr::mapvalues(sfData$hardNatur, from = c(1, 2), to = c("1", "4 6") )
 
@@ -712,15 +734,15 @@ if(is.null(r$updateNetworkPlot)){
                                       dashArray = palDash,
                                       highlightOptions = leaflet::highlightOptions(weight = 9),
                                       group = "paths")%>%
-                leaflet::addCircleMarkers(lat = shiny::isolate(sf::st_coordinates(igraph::V(r$networkList[[r$position]]$network)$geometry) [,"Y"] ) ,
-                                          lng = shiny::isolate(sf::st_coordinates(igraph::V(r$networkList[[r$position]]$network)$geometry )[,"X"]) ,
+                leaflet::addCircleMarkers(lat = nodeXY[, "Y"],
+                                          lng = nodeXY[, "X"],
                                           color = "grey",
                                           opacity = 1,
                                           fillOpacity = 1,
                                           radius = 5,
                                           fillColor = "white",
                                           stroke = TRUE,
-                                          layerId = shiny::isolate(as.character(igraph::V(r$networkList[[r$position]]$network)$nodeID_2)),
+                                          layerId = as.character(igraph::V(network)$nodeID_2),
                                           weight = 1,
                                           group = "nodes",
                                           options = leaflet::pathOptions(pane = "layer3")
@@ -775,44 +797,20 @@ if(is.null(r$updateNetworkPlot)){
             }else{
               #PLOT ORIGINAL PATHS ####
 
-              edgeTbl <- shiny::isolate(r$networkList[[r$position]]$network %>% tidygraph::activate(edges) %>% dplyr::as_tibble())
-
-              edgeTbl <- edgeTbl %>% dplyr::relocate(.data$edgeID)
-
-              # edgesShape <- edgeTbl  %>% sf::st_as_sf()
-
-              vftDbg("NETWORK EDGES:")
-              vftDbg(edgeTbl)
-
-              # nodeTbl <- shiny::isolate(r$networkList[[r$position]]$network %>% tidygraph::activate(nodes) %>% dplyr::as_tibble())
-              #PLOT INTERACTIVE NETWORK MAP (if not original)
+              #(the same unused edge table as above used to be built here too)
               sfData <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(network %>% tidygraph::activate(edges)) ), drop = T, what = "ZM")
-              # map <- tmap::tmap_leaflet(
-              #
-              #   tmap::tm_shape(edgeTbl  %>% sf::st_as_sf()) +
-              #     tmap::tm_lines(col = "darkgrey", lwd = 3, style = "fixed", popup.vars = FALSE, group = "edges", zindex = 420, interactive = FALSE) +
-              #
-              #
-              #     tmap::tmap_options(basemaps = 'OpenStreetMap', basemaps.alpha = c(0.5) ),
-              #   options = leaflet::leafletOptions(doubleClickZoom = FALSE, preferCanvas = TRUE),
-              #   in.shiny = TRUE) %>%
-              #   leaflet::addMapPane("layer_SM", zIndex = 405)%>%
-              #   leaflet::addMapPane("layer1", zIndex = 410)%>% leaflet::addMapPane("layer2", zIndex = 420)%>% leaflet::addMapPane("layer3", zIndex = 450)
 
-              map <- leaflet::leaflet(data = sfData, options = leaflet::leafletOptions(doubleClickZoom = FALSE, preferCanvas = TRUE) ) %>%
+              map <- leaflet::leaflet(options = leaflet::leafletOptions(doubleClickZoom = FALSE, preferCanvas = TRUE) ) %>%
                 leaflet::addMapPane("layer_SM", zIndex = 405)%>%
                 leaflet::addMapPane("layer1", zIndex = 410)%>% leaflet::addMapPane("layer2", zIndex = 420)%>% leaflet::addMapPane("layer3", zIndex = 450) %>%
                 leaflet::addProviderTiles("OpenStreetMap.CH", options = leaflet::providerTileOptions(opacity = 0.3, zIndex = 400)) %>%
-                leaflet::addPolylines(stroke = TRUE,
-                                      weight = ~roadWidth,
-                                      color = "#7a7a7a",
-                                      fill = FALSE,
-                                      opacity = 1,
-                                      options = leaflet::pathOptions(pane = "layer1"),
-                                      layerId = as.character(sfData$edgeID_2),
-                                      dashArray = 1,
-                                      highlightOptions = leaflet::highlightOptions(weight = 9),
-                                      group = "paths")%>%
+                #WebGL: the Original is read-only - its click handlers return
+                #early on position 1 - so the per-edge SVG ids, dashes and hover
+                #it used to carry bought nothing, and cost one nested JSON
+                #feature per edge on every render. See vftAddFixedWidthLines().
+                vftAddFixedWidthLines(sfData, width = sfData$roadWidth,
+                                      color = "#7a7a7a", group = "paths",
+                                      pane = "layer1") %>%
                 leaflet::addLayersControl(overlayGroups = c("paths", "nodes"))
             }
           }else if(shiny::isolate(input$contextChoice == 2)){
@@ -1234,8 +1232,69 @@ setPaintColor <- function(session, r, inputId, id, level = "ground", force = FAL
   slot <- lastColorButtonSlot(level)
   if(!is.null(slot)) r[[slot]] <- inputId
 
-  #only the id travels: the browser already has every material's color and level
-  session$sendCustomMessage("set-paint-color", list(id = id))
+  armBrush(session, r, id)
+}
+
+#WHICH MATERIAL IS SELECTED AND WHICH ID IS ARMED ARE NOT THE SAME THING.
+#
+#They used to be: eight buttons, eight class ids, and setPaintColor() sent the
+#one belonging to the button it had just ringed. The height bar breaks that in
+#two. The ringed BUTTON is still the material - a tree - while the armed ID is
+#one of five trees, and which one depends on a second, separately remembered
+#choice. So resolution happens here, in one place, and everything that used to
+#send "set-paint-color" goes through it.
+#
+#`id` is the material the caller means. If it has a ramp, the remembered step of
+#that ramp is armed instead; if not, `id` is armed as it stands. The bar then
+#shows that material's group, rings the armed step, and hides itself entirely
+#for a material with no height - grass, water, the eraser.
+armBrush <- function(session, r, id){
+  ramp <- vftHeightRampOf(id)
+  armed <- if(is.null(ramp)) id else{
+    k <- shiny::isolate(r$paintHeightChoice)[[as.character(ramp$base)]]
+    #a remembered id that is not a step of this ramp - an older session state, a
+    #ramp that lost a step - falls back to the surveyed default rather than
+    #arming something arbitrary
+    if(is.null(k) || !(k %in% ramp$steps$id)) ramp$default else k
+  }
+
+  showHeightBar(r, ramp, armed)
+
+  if(identical(shiny::isolate(r$armedPaintId), armed)) return(invisible(NULL))
+  r$armedPaintId <- armed
+  #only the id travels: the browser already has every material's color and level,
+  #including every ramp step's, straight out of PAINT_CATEGORIES
+  session$sendCustomMessage("set-paint-color", list(id = armed))
+  invisible(NULL)
+}
+
+#Show the ramp belonging to the armed material, and ring the armed step.
+#
+#Every group is in the DOM all the time (newVersions_ui.R builds them all), so
+#this is show/hide and a class swap, never a re-render - a re-rendered
+#actionButton comes back with its click count reset, and on this page that is the
+#failure mode that has cost the most.
+showHeightBar <- function(r, ramp, armed){
+  for(rp in vftHeightRamps()){
+    gid <- paste0("paintHeightGroup_", rp$name)
+    if(!is.null(ramp) && identical(rp$base, ramp$base)) shinyjs::show(gid) else shinyjs::hide(gid)
+  }
+  if(is.null(ramp)){
+    shinyjs::hide("paintHeightBar")
+    return(invisible(NULL))
+  }
+  shinyjs::show("paintHeightBar")
+
+  prev <- shiny::isolate(r$selectedHeightButton)
+  btn  <- paste0("paintHeight_", armed)
+  if(!is.null(prev) && !identical(prev, btn)){
+    shinyjs::removeClass(prev, "colorBtnSelected")
+    shinyjs::addClass(prev, "colorBtnNotSelected")
+  }
+  shinyjs::removeClass(btn, "colorBtnNotSelected")
+  shinyjs::addClass(btn, "colorBtnSelected")
+  r$selectedHeightButton <- btn
+  invisible(NULL)
 }
 
 #select the remembered material of `level` and point the brush at it
@@ -1309,7 +1368,11 @@ applyPaintGates <- function(){
   live    <- canEdit && !heatOn
   session$sendCustomMessage("set-paint-readonly", list(readonly = !canEdit))
   session$sendCustomMessage("set-paint-blocked",  list(blocked  = heatOn))
-  for(btn in c(PAINT_BUTTONS$inputId, "paintLevel", "paintEraser", "paintReset", "paintImport")){
+  #the height swatches gate with everything else, or they stay live on the
+  #read-only Original and while the heat read-out is on - a click that silently
+  #re-arms the brush behind a surface that says painting is refused
+  for(btn in c(PAINT_BUTTONS$inputId, paste0("paintHeight_", PAINT_HEIGHT_IDS),
+               "paintLevel", "paintEraser", "paintReset", "paintImport")){
     shinyjs::toggleState(id = btn, condition = live)
     shinyjs::toggleClass(id = btn, class = "paintBtnDisabled", condition = !live)
   }
@@ -1346,6 +1409,45 @@ shiny::observeEvent(input$paintColor_canopyTree, {
 shiny::observeEvent(input$paintColor_block, {
   setPaintColor(session, r, "paintColor_block", 8, level = "both")
 })
+
+#THE HEIGHT SWATCHES. One observer per step of every ramp, generated from the
+#palette rather than written out, so a step added to PAINT_CATEGORIES gets its
+#button (newVersions_ui.R builds those the same way) and its observer at once.
+#
+#local() is not decoration: without it every observer would close over the same
+#`hid` and every one of them would arm the last step of the last ramp. The classic
+#for-loop-over-observers trap, and it fails quietly - the buttons all work, they
+#just all do the same thing.
+#
+#A swatch does not change which MATERIAL is selected, only how tall it is, so
+#nothing here touches r$selectedPaintButton or either level's memory. It records
+#the choice against the material's base id and re-arms through it; armBrush()
+#resolves that back to this very id.
+for(hid in PAINT_HEIGHT_IDS){
+  local({
+    thisId   <- hid
+    baseId   <- paintBaseId(thisId)
+    shiny::observeEvent(input[[paste0("paintHeight_", thisId)]], {
+      #ONLY THE ARMED MATERIAL'S OWN SWATCHES COUNT.
+      #
+      #The bar shows one group at a time, so a user can never reach the others -
+      #but "cannot be clicked" and "does nothing if clicked" are different
+      #promises, and only the second one is this observer's to keep. A hidden
+      #button still answers a keyboard activation, a script, and the headless
+      #harness that drove this page while it was hidden; without the guard that
+      #click re-points the brush at a material whose button is not even lit, and
+      #the next stroke paints a tree while the palette says grass.
+      cur <- PAINT_BUTTONS$id[match(shiny::isolate(r$selectedPaintButton),
+                                    PAINT_BUTTONS$inputId)]
+      if(length(cur) != 1L || is.na(cur) || paintBaseId(cur) != baseId) return(NULL)
+
+      ch <- shiny::isolate(r$paintHeightChoice)
+      ch[[as.character(baseId)]] <- thisId
+      r$paintHeightChoice <- ch
+      armBrush(session, r, baseId)
+    }, ignoreInit = TRUE)
+  })
+}
 
 # The browser's own view of the paint state, printed in the R console.
 #
@@ -1434,19 +1536,44 @@ shiny::observeEvent(input$paintDebug, {
 # re-rendering: a re-render would rebuild the map and take the paint canvas with
 # it, so toggling heat would cost the user their view and force the browser to
 # replay the whole baseline.
+
+#SENT AT ONCE, NOT AT THE END OF THE FLUSH CYCLE.
+#
+#leafletProxy() sends nothing itself: it appends to a per-session queue that
+#leaflet drains from session$onFlushed(). A session is only flushed when a
+#message arrives from the browser, or when a reactive value that something
+#actually depends on is written. Neither happens when a heat job settles - the
+#click that started it was flushed seconds ago, and r$heatRaster and r$heatOn
+#are read through isolate() everywhere, so writing them invalidates nothing.
+#A deferred draw therefore sat in leaflet's queue until the user next touched
+#the page, which is exactly what "pick another time of day and the surface is
+#computed but never appears" was: the clear went out with the select's own
+#flush, and the redraw waited for a flush that never came.
+#
+#Nothing is lost by sending directly. These two functions are the only writers
+#of the "heat" group and its legend, and no other proxy call on this map runs in
+#the same cycle as either of them, so there is no batch for them to fall out of.
+#the two raster overlays of this map, each projected for leaflet once per raster
+#rather than on every draw - see vftLeafletRasterCache()
+smLeaflet   <- vftLeafletRasterCache()
+heatLeaflet <- vftLeafletRasterCache()
+
+heatProxy <- function()
+  leaflet::leafletProxy("versionMap", session = session, deferUntilFlush = FALSE)
+
 drawHeat <- function(){
   heat <- shiny::isolate(r$heatRaster)
   if(is.null(heat)) return(invisible(NULL))
   pal <- heatPalette(heat)
-  leaflet::leafletProxy("versionMap") %>%
+  heatProxy() %>%
     leaflet::clearGroup("heat") %>%
     leaflet::removeControl("heatLegend") %>%
     #a plain list, not gridOptions(): that helper silently drops `pane` and
     #returns FALSE, and tileOptions() carries pane but bolts on zIndex and
     #detectRetina, which mean nothing to an image overlay. The options list is
     #handed straight to L.imageOverlay, where `pane` is all that is needed.
-    leaflet::addRasterImage(raster::raster(heat), colors = pal, group = "heat",
-                            opacity = HEAT_OPACITY, project = TRUE,
+    leaflet::addRasterImage(heatLeaflet(heat), colors = pal, group = "heat",
+                            opacity = HEAT_OPACITY, project = FALSE,
                             options = list(pane = "heatPane")) %>%
     #the unit is in the title on purpose. Before Phase 4 this surface was
     #unitless and landed in roughly +-0.09; it is now kelvin of PET against
@@ -1460,7 +1587,7 @@ drawHeat <- function(){
 }
 
 clearHeat <- function(){
-  leaflet::leafletProxy("versionMap") %>%
+  heatProxy() %>%
     leaflet::clearGroup("heat") %>%
     leaflet::removeControl("heatLegend")
   invisible(NULL)
@@ -1487,6 +1614,39 @@ clearHeat <- function(){
 #single click away from a second one, so without this a double click dispatches
 #twice and the two settle handlers race to write r$heatRaster.
 heatBusy <- FALSE
+
+#THE JOB IS VISIBLE WHILE IT RUNS, AND ITS TWO CONTROLS ARE NOT.
+#
+#The heat model takes seconds in a daemon, and until it comes back the page has
+#nothing to say for itself: the map either still shows the previous surface or
+#has just been cleared. So the button that started it wears a turning ring (the
+#.paintToolBusy rule in newVersions_ui.R) and both heat controls are shut for
+#the duration.
+#
+#Shutting them is not decoration. computeHeat() refuses a second dispatch while
+#one is in flight, and a click that is refused in silence is worse than a
+#control that says it is unavailable - but the time-of-day select was the real
+#reason: changing it mid-job invalidated the cache, was refused by that same
+#guard, and then the job already running wrote ITS bin's surface into
+#r$heatRaster and drew it under the new label. The select cannot be changed while
+#the model is running any more, so the surface and the label cannot disagree.
+#
+#The switch is a plain enable/disable and deliberately NOT routed through
+#applyPaintGates(): that function speaks for the brush, whose two gates have
+#nothing to do with a job being in flight, and it is called from the settle
+#handlers of this very job.
+heatWorking <- function(busy){
+  if(isTRUE(busy)){
+    shinyjs::addClass("heatSwitch", "paintToolBusy")
+    shinyjs::disable("heatSwitch")
+    shinyjs::disable("heatBin")
+  }else{
+    shinyjs::removeClass("heatSwitch", "paintToolBusy")
+    shinyjs::enable("heatSwitch")
+    shinyjs::enable("heatBin")
+  }
+  invisible(NULL)
+}
 
 #' Recompute from the current version's composite, OFF the main thread.
 #'
@@ -1534,21 +1694,31 @@ computeHeat <- function(done = function(ok) invisible(NULL)){
 
   #German source string as the key, per the convention in R/async_helpers.R: a
   #deployment whose CSVs are behind shows readable German rather than a bare key.
+  #
+  #`millis` is the rate the main thread drains the worker's messages, and it is
+  #250 here rather than the 1000 the long jobs use: this one is seconds end to
+  #end, and the bar would otherwise show two or three of its stages and miss the
+  #rest between two drains.
   progress <- vftProgress(message = "Hitzeberechnung",
                           detail  = vftMsg("Dies sollte weniger als %d Sekunden dauern", 10),
                           queue   = ipc::shinyQueue(),
-                          millis  = 1000)
+                          millis  = 250)
   heatBusy <<- TRUE
   t0 <- Sys.time()
+  heatWorking(TRUE)
 
   settle <- function(ok){
     heatBusy <<- FALSE
+    heatWorking(FALSE)
     done(ok)
   }
 
   vftFuture({
+    #the bar is driven from inside the model, one mark per term - see
+    #heat_ticker() in R/heat_helpers.R. The handle is the small $set/$inc/$close
+    #triple, so this adds nothing to what crosses to the worker.
     out <- heatRasterPacked(aoi, groundEdits = ge, canopyEdits = ce,
-                            bin = bin, key = key)
+                            bin = bin, key = key, progress = progress)
     progress$close()
     out
   }, seed = TRUE, progress = progress) %...>% (function(packed){
@@ -1637,7 +1807,13 @@ shiny::observeEvent(input$heatBin, {
   clearHeat()
   computeHeat(function(ok){
     if(isTRUE(ok)){
-      drawHeat()
+      #Still on? The switch and this select are both shut while the job runs, so
+      #the user cannot have turned it off - but a re-render can, and does: the
+      #context 4 render drops r$heatOn because the surface does not survive a new
+      #map instance. Drawing anyway would put one on screen with the switch up
+      #and the brush live beside it, which is the pair the render exists to keep
+      #apart.
+      if(isTRUE(shiny::isolate(r$heatOn))) drawHeat()
     }else{
       #nothing to show for this bin - drop the read-out rather than leave the
       #switch claiming a surface that is not there
@@ -3445,15 +3621,25 @@ obsEvent_submitPath <- shiny::observeEvent(input$submitPath, {
                         c3 = 3,
                         c4 = 2, 5)
 
-  #get old values
-  oldWalkBike <- igraph::E(r$networkList[[r$position]]$network)[.data$edgeID_2 ==  as.double(r$edgID)]$walkBike
-  oldPathWidth <- igraph::E(r$networkList[[r$position]]$network)[.data$edgeID_2 ==  as.double(r$edgID)]$roadWidth
-  oldHardNatur <- igraph::E(r$networkList[[r$position]]$network)[.data$edgeID_2 ==  as.double(r$edgID)]$hardNatur
+  #ONE LOCAL COPY OF THE GRAPH, WRITTEN BACK ONCE at the end of this handler.
+  #Each `igraph::E(r$networkList[[pos]]$network)[...]$x <- v` statement re-scanned
+  #every edge for the id and copied the whole graph out of and back into the
+  #reactive list - ~2.7 s of shared main thread per submit on a large network.
+  #Nothing between here and the write-back reads r$networkList.
+  g  <- network
+  ea <- igraph::edge_attr(g)
+  ei <- which(ea[["edgeID_2"]] == as.double(r$edgID))
 
-  #update walkBike
-  igraph::E(r$networkList[[r$position]]$network)[.data$edgeID_2 ==  as.double(r$edgID)]$walkBike <- newWalkBike
-  igraph::E(r$networkList[[r$position]]$network)[.data$edgeID_2 ==  as.double(r$edgID)]$roadWidth <- newPathWidth
-  igraph::E(r$networkList[[r$position]]$network)[.data$edgeID_2 ==  as.double(r$edgID)]$hardNatur <- newHardNatur
+  #get old values
+  oldWalkBike  <- ea[["walkBike"]][ei]
+  oldPathWidth <- ea[["roadWidth"]][ei]
+  oldHardNatur <- ea[["hardNatur"]][ei]
+
+  #update walkBike, width and surface
+  ea[["walkBike"]][ei]  <- newWalkBike
+  ea[["roadWidth"]][ei] <- newPathWidth
+  ea[["hardNatur"]][ei] <- newHardNatur
+  igraph::edge_attr(g) <- ea
 
   #adapt pathWidth for next steps (go from 2-5 to 1-4)
   oldPathWidth_corr <- oldPathWidth -1
@@ -3512,40 +3698,10 @@ obsEvent_submitPath <- shiny::observeEvent(input$submitPath, {
 
   )
 
-  #update edges
+  #update the edge's attractiveness and both of its end nodes, then write the
+  #graph back - the one write this handler makes. See vftShiftAttractivity().
   dblEdgeId <- as.double(r$edgID)
-  igraph::E(r$networkList[[r$position]]$network)[[.data$edgeID_2 ==  dblEdgeId]]$DULN_WALK_ <- igraph::E(r$networkList[[r$position]]$network)[.data$edgeID_2 == dblEdgeId]$DULN_WALK_ + combinedAtrrs["DULN_WALK_"]
-  igraph::E(r$networkList[[r$position]]$network)[[.data$edgeID_2 ==  dblEdgeId]]$DULN_WALK1 <- igraph::E(r$networkList[[r$position]]$network)[.data$edgeID_2 ==  dblEdgeId]$DULN_WALK1 + combinedAtrrs["DULN_WALK1"]
-  igraph::E(r$networkList[[r$position]]$network)[[.data$edgeID_2 ==  dblEdgeId]]$DULN_BIKER <- igraph::E(r$networkList[[r$position]]$network)[.data$edgeID_2 ==  dblEdgeId]$DULN_BIKER + combinedAtrrs["DULN_BIKER"]
-  igraph::E(r$networkList[[r$position]]$network)[[.data$edgeID_2 ==  dblEdgeId]]$DULN_EBIKE <- igraph::E(r$networkList[[r$position]]$network)[.data$edgeID_2 ==  dblEdgeId]$DULN_EBIKE + combinedAtrrs["DULN_EBIKE"]
-  # igraph::E(r$networkList[[r$position]]$network)[[.data$edgeID_2 ==  dblEdgeId]]$DULN_ALL <- igraph::E(r$networkList[[r$position]]$network)[.data$edgeID_2 ==  dblEdgeId]$DULN_ALL + combinedAtrrs["DULN_ALL"]
-  igraph::E(r$networkList[[r$position]]$network)[[.data$edgeID_2 ==  dblEdgeId]]$DULN_JOGGE <- igraph::E(r$networkList[[r$position]]$network)[.data$edgeID_2 ==  dblEdgeId]$DULN_JOGGE + combinedAtrrs["DULN_JOGGE"]
-  igraph::E(r$networkList[[r$position]]$network)[[.data$edgeID_2 ==  dblEdgeId]]$DULN_DOG_N <- igraph::E(r$networkList[[r$position]]$network)[.data$edgeID_2 ==  dblEdgeId]$DULN_DOG_N + combinedAtrrs["DULN_DOG_N"]
-  igraph::E(r$networkList[[r$position]]$network)[[.data$edgeID_2 ==  dblEdgeId]]$DULN_DOG_P <- igraph::E(r$networkList[[r$position]]$network)[.data$edgeID_2 ==  dblEdgeId]$DULN_DOG_P + combinedAtrrs["DULN_DOG_P"]
-
-  # ALTER NODES AT EDGE
-  #use from and to as ids
-  node1_id <- igraph::E(r$networkList[[r$position]]$network)[[.data$edgeID_2 ==  dblEdgeId]]$to_2
-  node2_id <- igraph::E(r$networkList[[r$position]]$network)[[.data$edgeID_2 ==  dblEdgeId]]$from_2
-  #update nodes
-  #node1
-  igraph::V(r$networkList[[r$position]]$network)[[node1_id]]$DULN_WALK_ <- igraph::V(r$networkList[[r$position]]$network)[node1_id]$DULN_WALK_ + combinedAtrrs["DULN_WALK_"]
-  igraph::V(r$networkList[[r$position]]$network)[[node1_id]]$DULN_WALK1 <- igraph::V(r$networkList[[r$position]]$network)[node1_id]$DULN_WALK1 + combinedAtrrs["DULN_WALK1"]
-  igraph::V(r$networkList[[r$position]]$network)[[node1_id]]$DULN_BIKER <- igraph::V(r$networkList[[r$position]]$network)[node1_id]$DULN_BIKER + combinedAtrrs["DULN_BIKER"]
-  igraph::V(r$networkList[[r$position]]$network)[[node1_id]]$DULN_EBIKE <- igraph::V(r$networkList[[r$position]]$network)[node1_id]$DULN_EBIKE + combinedAtrrs["DULN_EBIKE"]
-  # igraph::V(r$networkList[[r$position]]$network)[[node1_id]]$DULN_ALL <- igraph::V(r$networkList[[r$position]]$network)[node1_id]$DULN_ALL + combinedAtrrs["DULN_ALL"]
-  igraph::V(r$networkList[[r$position]]$network)[[node1_id]]$DULN_JOGGE <- igraph::V(r$networkList[[r$position]]$network)[node1_id]$DULN_JOGGE + combinedAtrrs["DULN_JOGGE"]
-  igraph::V(r$networkList[[r$position]]$network)[[node1_id]]$DULN_DOG_N <- igraph::V(r$networkList[[r$position]]$network)[node1_id]$DULN_DOG_N + combinedAtrrs["DULN_DOG_N"]
-  igraph::V(r$networkList[[r$position]]$network)[[node1_id]]$DULN_DOG_P <- igraph::V(r$networkList[[r$position]]$network)[node1_id]$DULN_DOG_P+ combinedAtrrs["DULN_DOG_P"]
-  #node2
-  igraph::V(r$networkList[[r$position]]$network)[[node2_id]]$DULN_WALK_ <- igraph::V(r$networkList[[r$position]]$network)[node2_id]$DULN_WALK_ + combinedAtrrs["DULN_WALK_"]
-  igraph::V(r$networkList[[r$position]]$network)[[node2_id]]$DULN_WALK1 <- igraph::V(r$networkList[[r$position]]$network)[node2_id]$DULN_WALK1 + combinedAtrrs["DULN_WALK1"]
-  igraph::V(r$networkList[[r$position]]$network)[[node2_id]]$DULN_BIKER <- igraph::V(r$networkList[[r$position]]$network)[node2_id]$DULN_BIKER + combinedAtrrs["DULN_BIKER"]
-  igraph::V(r$networkList[[r$position]]$network)[[node2_id]]$DULN_EBIKE <- igraph::V(r$networkList[[r$position]]$network)[node2_id]$DULN_EBIKE + combinedAtrrs["DULN_EBIKE"]
-  # igraph::V(r$networkList[[r$position]]$network)[[node2_id]]$DULN_ALL <- igraph::V(r$networkList[[r$position]]$network)[node2_id]$DULN_ALL + combinedAtrrs["DULN_ALL"]
-  igraph::V(r$networkList[[r$position]]$network)[[node2_id]]$DULN_JOGGE <- igraph::V(r$networkList[[r$position]]$network)[node2_id]$DULN_JOGGE + combinedAtrrs["DULN_JOGGE"]
-  igraph::V(r$networkList[[r$position]]$network)[[node2_id]]$DULN_DOG_N <- igraph::V(r$networkList[[r$position]]$network)[node2_id]$DULN_DOG_N + combinedAtrrs["DULN_DOG_N"]
-  igraph::V(r$networkList[[r$position]]$network)[[node2_id]]$DULN_DOG_P <- igraph::V(r$networkList[[r$position]]$network)[node2_id]$DULN_DOG_P+ combinedAtrrs["DULN_DOG_P"]
+  r$networkList[[r$position]]$network <- vftShiftAttractivity(g, dblEdgeId, combinedAtrrs)
 
   #remove pathUsage results, as new results must be simulated
   r$networkList[[r$position]]$pathUsage <- NULL
@@ -3576,10 +3732,17 @@ obsEvent_submitNewPath <- shiny::observeEvent(input$submitNewPath, {
                          c4 = 2, 5)
   areStairs <- input$areStairs
 
-  #update walkBike
-  igraph::E(r$networkList[[r$position]]$network)[.data$edgeID_2 ==  as.double(r$edgID)]$walkBike <- newWalkBike
-  igraph::E(r$networkList[[r$position]]$network)[.data$edgeID_2 ==  as.double(r$edgID)]$roadWidth <- newPathWidth
-  igraph::E(r$networkList[[r$position]]$network)[.data$edgeID_2 ==  as.double(r$edgID)]$hardNatur <- newHardNatur
+  #one local copy of the graph, written back once at the end - see the same
+  #note in obsEvent_submitPath above
+  g  <- network
+  ea <- igraph::edge_attr(g)
+  ei <- which(ea[["edgeID_2"]] == as.double(r$edgID))
+
+  #update walkBike, width and surface
+  ea[["walkBike"]][ei]  <- newWalkBike
+  ea[["roadWidth"]][ei] <- newPathWidth
+  ea[["hardNatur"]][ei] <- newHardNatur
+  igraph::edge_attr(g) <- ea
 
   #adapt pathWidth for next steps (go from 2-5 to 1-4)
   newPathWidth_corr <- newPathWidth -1
@@ -3626,53 +3789,24 @@ obsEvent_submitNewPath <- shiny::observeEvent(input$submitNewPath, {
   #sum removal and addition of element
 
   combinedAtrrs <- newAttrs
-  #update edges
+  #update the edge's attractiveness and both of its end nodes - see
+  #vftShiftAttractivity()
   dblEdgeId <- as.double(r$edgID)
-  igraph::E(r$networkList[[r$position]]$network)[[.data$edgeID_2 ==  dblEdgeId]]$DULN_WALK_ <- igraph::E(r$networkList[[r$position]]$network)[.data$edgeID_2 == dblEdgeId]$DULN_WALK_ + combinedAtrrs["DULN_WALK_"]
-  igraph::E(r$networkList[[r$position]]$network)[[.data$edgeID_2 ==  dblEdgeId]]$DULN_WALK1 <- igraph::E(r$networkList[[r$position]]$network)[.data$edgeID_2 ==  dblEdgeId]$DULN_WALK1 + combinedAtrrs["DULN_WALK1"]
-  igraph::E(r$networkList[[r$position]]$network)[[.data$edgeID_2 ==  dblEdgeId]]$DULN_BIKER <- igraph::E(r$networkList[[r$position]]$network)[.data$edgeID_2 ==  dblEdgeId]$DULN_BIKER + combinedAtrrs["DULN_BIKER"]
-  igraph::E(r$networkList[[r$position]]$network)[[.data$edgeID_2 ==  dblEdgeId]]$DULN_EBIKE <- igraph::E(r$networkList[[r$position]]$network)[.data$edgeID_2 ==  dblEdgeId]$DULN_EBIKE + combinedAtrrs["DULN_EBIKE"]
-  # igraph::E(r$networkList[[r$position]]$network)[[.data$edgeID_2 ==  dblEdgeId]]$DULN_ALL <- igraph::E(r$networkList[[r$position]]$network)[.data$edgeID_2 ==  dblEdgeId]$DULN_ALL + combinedAtrrs["DULN_ALL"]
-  igraph::E(r$networkList[[r$position]]$network)[[.data$edgeID_2 ==  dblEdgeId]]$DULN_JOGGE <- igraph::E(r$networkList[[r$position]]$network)[.data$edgeID_2 ==  dblEdgeId]$DULN_JOGGE + combinedAtrrs["DULN_JOGGE"]
-  igraph::E(r$networkList[[r$position]]$network)[[.data$edgeID_2 ==  dblEdgeId]]$DULN_DOG_N <- igraph::E(r$networkList[[r$position]]$network)[.data$edgeID_2 ==  dblEdgeId]$DULN_DOG_N + combinedAtrrs["DULN_DOG_N"]
-  igraph::E(r$networkList[[r$position]]$network)[[.data$edgeID_2 ==  dblEdgeId]]$DULN_DOG_P <- igraph::E(r$networkList[[r$position]]$network)[.data$edgeID_2 ==  dblEdgeId]$DULN_DOG_P + combinedAtrrs["DULN_DOG_P"]
+  g <- vftShiftAttractivity(g, dblEdgeId, combinedAtrrs)
 
-  #add AOI label
-  AOInb <- sf::st_intersects(igraph::E(r$networkList[[r$position]]$network)[[.data$edgeID_2 ==  dblEdgeId]]$SHAPE, finalPolygons)
+  #add AOI label (set_edge_attr rather than the attribute list: on a network
+  #without an AOI column it creates one, as the statement it replaces did)
+  AOInb <- sf::st_intersects(igraph::edge_attr(g, "SHAPE", ei), finalPolygons)
   if(any("list" %in% class(AOInb))){AOInb <- AOInb[[1]][1]}
 
-  igraph::E(r$networkList[[r$position]]$network)[[.data$edgeID_2 ==  dblEdgeId]]$AOI <- finalPolygons$AOI[as.numeric(AOInb)]
+  g <- igraph::set_edge_attr(g, "AOI", index = ei,
+                             value = finalPolygons$AOI[as.numeric(AOInb)])
 
-  # ALTER NODES AT EDGE
-  #use from and to as ids
-  node1_id <- igraph::E(r$networkList[[r$position]]$network)[[.data$edgeID_2 ==  dblEdgeId]]$to_2
-  node2_id <- igraph::E(r$networkList[[r$position]]$network)[[.data$edgeID_2 ==  dblEdgeId]]$from_2
-
-  #update nodes
-  #node1
-  igraph::V(r$networkList[[r$position]]$network)[[node1_id]]$DULN_WALK_ <- igraph::V(r$networkList[[r$position]]$network)[node1_id]$DULN_WALK_ + combinedAtrrs["DULN_WALK_"]
-  igraph::V(r$networkList[[r$position]]$network)[[node1_id]]$DULN_WALK1 <- igraph::V(r$networkList[[r$position]]$network)[node1_id]$DULN_WALK1 + combinedAtrrs["DULN_WALK1"]
-  igraph::V(r$networkList[[r$position]]$network)[[node1_id]]$DULN_BIKER <- igraph::V(r$networkList[[r$position]]$network)[node1_id]$DULN_BIKER + combinedAtrrs["DULN_BIKER"]
-  igraph::V(r$networkList[[r$position]]$network)[[node1_id]]$DULN_EBIKE <- igraph::V(r$networkList[[r$position]]$network)[node1_id]$DULN_EBIKE + combinedAtrrs["DULN_EBIKE"]
-  # igraph::V(r$networkList[[r$position]]$network)[[node1_id]]$DULN_ALL <- igraph::V(r$networkList[[r$position]]$network)[node1_id]$DULN_ALL + combinedAtrrs["DULN_ALL"]
-  igraph::V(r$networkList[[r$position]]$network)[[node1_id]]$DULN_JOGGE <- igraph::V(r$networkList[[r$position]]$network)[node1_id]$DULN_JOGGE + combinedAtrrs["DULN_JOGGE"]
-  igraph::V(r$networkList[[r$position]]$network)[[node1_id]]$DULN_DOG_N <- igraph::V(r$networkList[[r$position]]$network)[node1_id]$DULN_DOG_N + combinedAtrrs["DULN_DOG_N"]
-  igraph::V(r$networkList[[r$position]]$network)[[node1_id]]$DULN_DOG_P <- igraph::V(r$networkList[[r$position]]$network)[node1_id]$DULN_DOG_P+ combinedAtrrs["DULN_DOG_P"]
-  #node2
-  igraph::V(r$networkList[[r$position]]$network)[[node2_id]]$DULN_WALK_ <- igraph::V(r$networkList[[r$position]]$network)[node2_id]$DULN_WALK_ + combinedAtrrs["DULN_WALK_"]
-  igraph::V(r$networkList[[r$position]]$network)[[node2_id]]$DULN_WALK1 <- igraph::V(r$networkList[[r$position]]$network)[node2_id]$DULN_WALK1 + combinedAtrrs["DULN_WALK1"]
-  igraph::V(r$networkList[[r$position]]$network)[[node2_id]]$DULN_BIKER <- igraph::V(r$networkList[[r$position]]$network)[node2_id]$DULN_BIKER + combinedAtrrs["DULN_BIKER"]
-  igraph::V(r$networkList[[r$position]]$network)[[node2_id]]$DULN_EBIKE <- igraph::V(r$networkList[[r$position]]$network)[node2_id]$DULN_EBIKE + combinedAtrrs["DULN_EBIKE"]
-  # igraph::V(r$networkList[[r$position]]$network)[[node2_id]]$DULN_ALL <- igraph::V(r$networkList[[r$position]]$network)[node2_id]$DULN_ALL + combinedAtrrs["DULN_ALL"]
-  igraph::V(r$networkList[[r$position]]$network)[[node2_id]]$DULN_JOGGE <- igraph::V(r$networkList[[r$position]]$network)[node2_id]$DULN_JOGGE + combinedAtrrs["DULN_JOGGE"]
-  igraph::V(r$networkList[[r$position]]$network)[[node2_id]]$DULN_DOG_N <- igraph::V(r$networkList[[r$position]]$network)[node2_id]$DULN_DOG_N + combinedAtrrs["DULN_DOG_N"]
-  igraph::V(r$networkList[[r$position]]$network)[[node2_id]]$DULN_DOG_P <- igraph::V(r$networkList[[r$position]]$network)[node2_id]$DULN_DOG_P+ combinedAtrrs["DULN_DOG_P"]
+  #the one write this handler makes
+  r$networkList[[r$position]]$network <- g
 
   #remove pathUsage results, as new results must be simulated
   r$networkList[[r$position]]$pathUsage <- NULL
-  #remove new edge from network
-
-  #update proxy
 
 }, ignoreInit = TRUE)
 
@@ -4627,7 +4761,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
             if( !is.null(SM_pres)){
               #show SM
               leaflet::leafletProxy("versionMap" )%>%
-                leaflet::addRasterImage(x = raster::raster(SM_pres), colors = SMcolors, group = "SM", opacity = 0.7)
+                leaflet::addRasterImage(x = smLeaflet(SM_pres), project = FALSE, colors = SMcolors, group = "SM", opacity = 0.7)
             }else{
               #### no matrix: the switch is an OFFER, not a display toggle ####
               #

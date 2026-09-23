@@ -356,3 +356,69 @@ vftClearNetworkLines <- function(map, group = "paths",
   for(g in vftNetworkGroups(group, nClass)) map <- leafgl::clearGlGroup(map, g)
   map
 }
+
+#' A raster ready for leaflet::addRasterImage(project = FALSE), projected once.
+#'
+#' addRasterImage() reprojects its raster to Web Mercator on every call, and the
+#' overlays that use it are toggled and redrawn many times over the same raster:
+#' the sensitivity matrix at step 5 and on the newVersions page, the heat
+#' surface. Wrapped in raster::raster() as they were, each draw also paid the
+#' raster package's own projection - measured 0.85 s of shared main thread per
+#' toggle for a 1,500-cell matrix, against 0.02 s drawing a raster projected once
+#' through terra.
+#'
+#' Returns a function with its own one-entry cache: it re-projects only when
+#' handed a different raster OBJECT (identical() on a SpatRaster compares the
+#' pointer, so a recomputed matrix is always a miss and never a stale hit).
+#' Create one per module instance - it holds that session's raster.
+#'
+#' `method` is what addRasterImage(method = "auto") picks for a numeric raster.
+vftLeafletRasterCache <- function(method = "bilinear"){
+  e <- new.env(parent = emptyenv())
+  function(x){
+    if(inherits(x, "PackedSpatRaster")) x <- terra::unwrap(x)
+    if(!is.null(e$src) && identical(e$src, x)) return(e$out)
+    e$out <- leaflet::projectRasterForLeaflet(x, method)
+    e$src <- x
+    e$out
+  }
+}
+
+#' Draw a network whose width is a per-edge ATTRIBUTE, in one colour.
+#'
+#' The fixed-width sibling of vftAddNetworkLines(), for the newVersions page's
+#' read-only Original scenario: grey lines at each edge's `roadWidth` (2-5 px).
+#' That map used leaflet::addPolylines() with a layerId per edge - the same
+#' per-feature JSON encoding that cost step 5 6-15 s on a large network - and on
+#' every card or context switch. The Original takes no edits and its click
+#' handlers return early on it, so nothing is lost by drawing it through WebGL.
+#' (The editable scenarios stay SVG: they need per-edge dash patterns and hover
+#' highlighting, which leafgl does not have.)
+#'
+#' One GL layer per DISTINCT width, so every width is drawn exactly rather than
+#' binned. All of them go into `group`, so a layers control naming `group` still
+#' toggles the lot, and leafgl::clearGlGroup(group) clears it. Widths come off by
+#' the same 1.3 px as the step-5 network, with the same 1 px floor - leafgl draws
+#' heavier than leaflet at a nominal weight; see vftNetworkWeights().
+#'
+#' `VFT_GL=0` draws the old addPolylines() call instead.
+vftAddFixedWidthLines <- function(map, net, width, color, group = "paths",
+                                  pane = "layer1", opacity = 1){
+  width <- as.numeric(width)
+  if(!vftUseGl()){
+    return(leaflet::addPolylines(map, data = net, stroke = TRUE, weight = width,
+                                 color = color, fill = FALSE, opacity = opacity,
+                                 group = group, dashArray = 1,
+                                 options = leaflet::pathOptions(pane = pane)))
+  }
+  width[!is.finite(width)] <- 1
+  rgb <- t(grDevices::col2rgb(color)) / 255
+  for(w in sort(unique(width))){
+    idx <- which(width == w)
+    map <- leafgl::addGlPolylines(map, data = net[idx, ],
+                                  color = rgb[rep(1L, length(idx)), , drop = FALSE],
+                                  weight = max(w - 1.3, 1), opacity = opacity,
+                                  group = group, pane = pane)
+  }
+  map
+}

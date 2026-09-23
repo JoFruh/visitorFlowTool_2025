@@ -14,12 +14,21 @@
 #' ray when it arrives. It is a handful of whole-matrix shifts, no ray tracing
 #' per cell, and it is exact for the height field it is given.
 #'
-#' WHAT IS DELIBERATELY NOT MODELLED. There is no height raster: every tree is
-#' 15 m, every building 12 m, every artificial canopy 4 m, read from
-#' heat_geometry.csv (see the "no height raster" decision in
-#' HEAT_COEFFICIENTS.md). Real Swiss canopy is 15-25 m and real buildings
-#' 12-15 m, so shadow *lengths* are right on average and wrong per object. The
-#' tables are the place to retune that, not this file.
+#' WHAT IS DELIBERATELY NOT MODELLED. There is still no height raster, but height
+#' is no longer one number per material either. Each of the three obstruction
+#' materials is a RAMP of class ids - a tree at 3/10/15/20/25 m, an artificial
+#' canopy at 5/10/15 m, a block at 5/10/15/25/50 m - and the user picks a step
+#' from the height bar in newVersions. The height of a cell is therefore still
+#' read off its class id, through heatHeights(); what changed is that there is a
+#' ramp of them per material rather than one value, so a design can say "25 m
+#' planes along this avenue, a 3 m pergola over that terrace" instead of
+#' averaging them. Count them from PAINT_CATEGORIES rather than from here.
+#'
+#' The numbers still live in heat_geometry.csv, one height_<name> row per id, and
+#' that file is still the place to retune them rather than this one. What is
+#' surveyed rather than painted keeps the default step of its ramp: the national
+#' land cover only ever writes ids 6, 7 and 8, so a tree nobody has repainted is
+#' 15 m exactly as it was.
 #'
 #' Terrain is not in the height field either - only canopy and buildings. A
 #' valley in its own mountain's shadow is invisible here, which matters in
@@ -74,17 +83,45 @@ heatSunPosition <- function(bin = "midday", geom = heatGeometry()){
   list(elevation = el, azimuth = az)
 }
 
-#' Representative obstruction height per class id, in metres.
+#' Obstruction height per class id, in metres.
 #'
-#' Keyed by the id in the raster the height is read from, which is why buildings
-#' appear twice: artificial_block is `level = "both"` in PAINT_CATEGORIES and
-#' generate_ground_canopy_CH.r burns it into the ground *and* the canopy raster,
-#' so whichever layer is consulted gives the same 12 m.
+#' Keyed by the id in the raster the height is read from, which is why a block
+#' reaches this table from both directions: artificial_block and its height
+#' variants are `level = "both"` in PAINT_CATEGORIES and
+#' generate_ground_canopy_CH.r burns the surveyed one into the ground *and* the
+#' canopy raster, so whichever layer is consulted gives the same answer.
+#'
+#' The ID LIST COMES FROM PAINT_CATEGORIES and the VALUES FROM heat_geometry.csv,
+#' rather than three parameter names written out here. That is what stops the
+#' palette and the model drifting apart when a step is added to a ramp: a new row
+#' in PAINT_CATEGORIES with a height asks for a height_<name> row in the CSV, and
+#' a missing one is reported once instead of silently costing that class its
+#' shadow. HEAT_OBSTRUCTION_IDS is derived from the same list, so the cache
+#' invalidates on exactly the ids that can move a shadow.
 heatHeights <- function(geom = heatGeometry()){
   if(is.null(geom)) return(NULL)
-  c("6" = unname(geom[["height_canopy_artificial"]]),
-    "7" = unname(geom[["height_canopy_tree"]]),
-    "8" = unname(geom[["height_artificial_block"]]))
+  rows <- PAINT_CATEGORIES[!is.na(PAINT_CATEGORIES$height), ]
+  #`geom` is a NAMED NUMERIC VECTOR, so geom[["height_missing"]] is an error
+  #("subscript out of bounds") and not a NULL. Single-bracket indexing by name
+  #gives NA instead, which is what the missing-row branch below is written to
+  #handle - with [[ ]] a table built before a ramp step was added does not warn,
+  #it takes the whole app down on the first heat read-out.
+  h <- unname(geom[paste0("height_", rows$name)])
+  names(h) <- as.character(rows$id)
+
+  #a class with no row in the CSV would otherwise become an NA in the height
+  #field, and NA poisons the running maximum in the shadow march - one missing
+  #row would blank the shadow raster over the whole area rather than over that
+  #class. Drop it to 0 and say which, once.
+  bad <- is.na(h)
+  if(any(bad)){
+    warning("heat_geometry.csv has no height for: ",
+            paste(rows$name[bad], collapse = ", "),
+            " - treated as open sky. Rebuild it with data-raw/build_heat_tables.py")
+    h <- h[!bad]
+  }
+  if(!length(h)) return(NULL)
+  h
 }
 
 
@@ -103,8 +140,13 @@ heatObstructionHeight <- function(ground, canopy, geom = heatGeometry()){
 
   hc <- terra::subst(canopy, from = ids, to = unname(h), others = 0)
   #a building is in the ground raster too, and only there when a plan import has
-  #cleared the canopy above it
-  hg <- terra::subst(ground, from = 8L, to = unname(h[["8"]]), others = 0)
+  #cleared the canopy above it. Every step of the block ramp, not just id 8:
+  #a 50 m block under a cleared canopy is 50 m from the ground raster or it is
+  #nothing at all.
+  gid <- ids[paintBaseId(ids) == 8L]
+  hg  <- if(length(gid))
+    terra::subst(ground, from = gid, to = unname(h[as.character(gid)]), others = 0)
+  else ground * 0
   out <- max(hc, hg, na.rm = TRUE)
   terra::ifel(is.na(out), 0, out)
 }
@@ -206,13 +248,26 @@ heatShadeRaster <- function(ground, canopy, bin = "midday", geom = heatGeometry(
   #transpose the shade raster comes back transposed - which on a square window
   #still looks like a plausible map of shadows, and is silently wrong everywhere.
   out <- terra::setValues(terra::rast(H), as.integer(t(cast)))
-  #NOT `canopy %in% c(6L, 7L)`: terra defines an S4 `%in%` for SpatRaster, but
-  #this package reaches terra through `terra::` and imports nothing from it, so
+  #A crown shades its own footprint whatever the sun is doing, so the march's
+  #result is unioned with the cells that ARE canopy. Every step of both canopy
+  #ramps, which is why this is a subst() over a derived id list rather than the
+  #two-term `canopy == 6L | canopy == 7L` it used to be - eight terms would be
+  #eight chances to forget one when a ramp grows.
+  #
+  #NOT `canopy %in% cid`: terra defines an S4 `%in%` for SpatRaster, but this
+  #package reaches terra through `terra::` and imports nothing from it, so
   #inside the namespace `%in%` is base's - which calls match() on the raster
   #and dies with "'match' requires vector arguments". It works in any script
   #that has library(terra) on the search path, which is why it passed every
   #check and still killed the app.
-  own <- terra::ifel(canopy == 6L | canopy == 7L, 1L, 0L)
+  #
+  #Blocks are deliberately absent: artificial_block is level "both", and a roof
+  #presents itself to the sun rather than shading itself. The march's `run > H`
+  #comparison is what gets that right, and adding 16:18 here would undo it.
+  cid <- PAINT_CATEGORIES$id[PAINT_CATEGORIES$level == "canopy" &
+                             !is.na(PAINT_CATEGORIES$height)]
+  own <- terra::subst(canopy, from = as.integer(cid),
+                      to = rep(1L, length(cid)), others = 0L)
   own <- terra::ifel(is.na(own), 0L, own)
   out <- terra::ifel((out + own) > 0, 1L, 0L)
   names(out) <- "shade"
