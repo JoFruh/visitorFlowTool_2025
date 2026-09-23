@@ -185,6 +185,16 @@ for(f in saves){
 
   fp  <- fingerprint(res$out)
   ref <- file.path(refDir, paste0(tag, ".rds"))
+
+  #VFT_ABM_SAVE_TO: ALSO record this run as the reference in another directory.
+  #For a --diff run of a model change, so the changed model becomes the baseline
+  #for whatever comes after it without a second run.
+  saveTo <- Sys.getenv("VFT_ABM_SAVE_TO", "")
+  if(nzchar(saveTo)){
+    dir.create(saveTo, recursive = TRUE, showWarnings = FALSE)
+    saveRDS(list(fp = fp, secs = res$secs, msgs = res$msgs),
+            file.path(saveTo, paste0(tag, ".rds")))
+  }
   if(saveRef){
     saveRDS(list(fp = fp, secs = res$secs, msgs = res$msgs), ref)
     cat("   reference written:", ref, "\n")

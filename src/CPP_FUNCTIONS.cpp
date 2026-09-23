@@ -277,9 +277,21 @@ List chooseBestRoutes_cpp(List viableRoutes, DataFrame DULN_df, List priorVs, St
 
 
         //calculate angle
-        float angle = abs(atan2(cv_y - pv_y, cv_x - pv_x) - atan2(cv_y - nv_y, cv_x - nv_x) * (180/3.14159265359));
+        //THE TURN: how far the heading changes at cv, from the way the agent
+        //arrived (pv -> cv) to the way it would leave (cv -> nv). 0 = straight
+        //on, 180 = straight back. That is what the thresholds below score:
+        //a gentle turn earns +1, anything past a right angle costs -2.
+        //
+        //This line used to be
+        //  abs(atan2(cv - pv) - atan2(cv - nv) * (180/pi))
+        //which was wrong twice. The precedence converted only the second
+        //heading to degrees and subtracted it from the first in radians, so
+        //the result was noise. And the second heading ran nv -> cv, the reverse
+        //of travel - with the precedence fixed, that would have scored going
+        //straight on as 180 (-2) and doubling back as 0 (+1).
+        float angle = std::fabs(atan2(nv_y - cv_y, nv_x - cv_x) - atan2(cv_y - pv_y, cv_x - pv_x)) * (180/3.14159265359);
 
-        //translate angle to 0-180
+        //translate angle to 0-180 (the heading difference spans -360..360)
         if(angle > 180){
           angle = 180 - (angle - 180);
           }
@@ -1893,117 +1905,113 @@ List findClosestAOI_cpp(std::vector<std::string> AOIList_o,
     aoiCode.swap(code);
   }
 
-  //THE SEARCH DEPENDS ON THE SOURCE NODE AND THE AGENT TYPE, AND ON NOTHING ELSE.
-  //The agent's speed and duration only enter the probabilities computed after
-  //it. Agents starting on the same node with the same type - every household
-  //of a building, every parking space of a car park - used to repeat the same
-  //Dijkstra over the whole graph, once each. Now it runs once per pair.
-  struct AoiSearch {
-    std::vector<double> dist;
-    std::vector<int> node;
-    std::vector<std::string> type;
-    bool completed;
-  };
-  std::unordered_map<int64_t, AoiSearch> searched;
+  //ONE SEARCH PER AREA OF INTEREST AND AGENT TYPE, NOT ONE PER AGENT.
+  //
+  //What each agent needs is, for every AOI, its nearest node of that AOI and the
+  //distance to it. That used to be a Dijkstra from the agent's start node,
+  //running until every AOI had been reached - one full-graph search per
+  //distinct start node, 3000+ of them on a large network (~28 s of the ~64 s
+  //simulation at 35k nodes).
+  //
+  //The graph is undirected - generateAdjListAndDistTbl_cpp() adds every edge in
+  //both directions with the same weight - so the distance from a start node to
+  //its nearest node of AOI "A" is the distance from AOI "A", searched outward
+  //from ALL of its nodes at once, to the start node. One multi-source search per
+  //(AOI, agent type) therefore answers every agent. Each node keeps the source
+  //it was reached from; equal distances go to the smaller node id, which is the
+  //node the per-agent search popped first ((distance, node) order).
+  //
+  //Not GUARANTEED bit-identical to the per-agent search: the path lengths are
+  //now summed from the AOI end rather than from the start, so the last bits of
+  //a distance can differ, and with them a near-tie. In practice the passage
+  //counts came out identical on all four test scenarios of
+  //data-raw/verify_abm_speed.R (up to 35k nodes, 3300 agents), at ~10x less
+  //time for this step. Duplicate names in AOIList_o (the R caller passes
+  //unique()) would each have asked for another occurrence; they count once.
+  const double UNREACHED = 100000000.0;
+  int nA = aoiNames.size();
+  std::vector<char> typeUsed(7, 0);
+  for(size_t i = 0; i < agentTyps.size(); i++) typeUsed[agentTypeIndex(agentTyps[i])] = 1;
 
-  // START EVALUATING DISTANCES FOR EVERY SOURCE-GOAL pair
+  //nearest AOI node and distance to it, per (type, AOI), for every node
+  std::vector<std::vector<double>> nearDist(7 * nA);
+  std::vector<std::vector<int>>    nearNode(7 * nA);
+
+  typedef std::pair<double, std::pair<int, int>> msEntry; //(dist, (source, node))
+  for(int t = 0; t < 7; t++){
+    if(!typeUsed[t]) continue;
+    const std::vector<std::vector<double>>& adjDistT = adj.w[weighting][t];
+    for(int a = 0; a < nA; a++){
+      std::vector<double> D(aoiCode.size(), UNREACHED);
+      std::vector<int>    L(aoiCode.size(), INT_MAX);
+      std::priority_queue<msEntry, std::vector<msEntry>, std::greater<msEntry>> pq;
+      for(size_t v = 0; v < aoiCode.size(); v++){
+        if(aoiCode[v] == a){
+          D[v] = 0.0;
+          L[v] = (int)v;
+          pq.push(std::make_pair(0.0, std::make_pair((int)v, (int)v)));
+        }
+      }
+      while(!pq.empty()){
+        double d = pq.top().first;
+        int    l = pq.top().second.first;
+        int    u = pq.top().second.second;
+        pq.pop();
+        //stale: u has since been reached shorter, or as short from a smaller source
+        if(d > D[u] || (d == D[u] && l > L[u])) continue;
+        const std::vector<int>&    adjVrts = adjList_IDs[u];
+        const std::vector<double>& adjDist = adjDistT[u];
+        for(size_t k = 0; k < adjVrts.size(); k++){
+          int w = adjVrts[k];
+          double nd = D[u] + adjDist[k];
+          if(nd < D[w] || (nd == D[w] && L[u] < L[w])){
+            D[w] = nd;
+            L[w] = L[u];
+            pq.push(std::make_pair(nd, std::make_pair(L[w], w)));
+          }
+        }
+      }
+      nearDist[t * nA + a].swap(D);
+      nearNode[t * nA + a].swap(L);
+    }
+  }
+
+  // EVERY AGENT: read its start node's row of each table
   for(int agentNo = 0; agentNo < src_v.size(); agentNo++){
 
-    //get agent type
     int typeIdx = agentTypeIndex(agentTyps[agentNo]);
-    const std::vector<std::vector<double>>* adjList_dist = &adj.w[weighting][typeIdx];
-
     int src = src_v[agentNo];
+
+    //the AOIs this agent can reach, in the order the per-agent search found
+    //them: by distance, then by node
+    std::vector<std::pair<std::pair<double, int>, int>> found; //((dist, node), aoi)
+    if(src >= 0 && src < (int)aoiCode.size()){
+      for(int a = 0; a < nA; a++){
+        double d = nearDist[typeIdx * nA + a][src];
+        if(d < UNREACHED){
+          found.push_back(std::make_pair(std::make_pair(d, nearNode[typeIdx * nA + a][src]), a));
+        }
+      }
+    }
+    std::sort(found.begin(), found.end());
 
     //prepare vector for agent's information (for each AOI type)
     std::vector<double> aoiDist_v;
     std::vector<int> aoiNode_v;
     std::vector<std::string> aoiType_v;
+    for(size_t k = 0; k < found.size(); k++){
+      aoiDist_v.push_back(found[k].first.first);
+      aoiNode_v.push_back(found[k].first.second);
+      aoiType_v.push_back(aoiNames[found[k].second]);
+    }
 
-    int64_t key = ((int64_t)src << 3) | (int64_t)typeIdx;
-    auto done = searched.find(key);
-    if(done != searched.end()){
-      aoiDist_v = done->second.dist;
-      aoiNode_v = done->second.node;
-      aoiType_v = done->second.type;
-      if(done->second.completed){
-        outputDist[agentNo] = aoiDist_v;
-        outputNode[agentNo] = aoiNode_v;
-        outputAOI[agentNo] = aoiType_v;
-      }
-    }else{
-      bool completed = false;
-      {
-        //initialize a priority queue
-        std::priority_queue<pqPair, std::vector<pqPair>, std::greater<pqPair>> pq;
-
-        std::vector<double> dist(dist_o);
-        //what is still to be found - per distinct AOI name, and in total.
-        //(Refilled for every agent, as the list of names used to be.)
-        std::vector<int> stillNeeded(aoiNeeded);
-        int remaining = AOIList_o.size();
-
-        //start with first node (src)
-        // Distance of source vertex from itself is always 0
-        pq.push(std::make_pair(0.0, src));
-        dist[src] = 0.0;
-
-        // Find shortest path for all vertices
-        while(!pq.empty()) {
-
-          //get vertex with shortest total distance from pq (sptv)
-          double sptd = pq.top().first;
-          int sptv = pq.top().second;
-          pq.pop();
-
-          //A stale entry - see findShortestRoute_cpp(). Its fresh twin was
-          //popped first, so its AOI has already been found and its neighbours
-          //relaxed with the same distance: nothing left to do.
-          if(sptd > dist[sptv]) continue;
-
-          //IF AN AOI IS REACHED that is still wanted
-          int c = aoiCode[sptv];
-          if( c >= 0 && stillNeeded[c] > 0 ){
-
-            //record the AOI type found
-            aoiType_v.push_back(aoiNames[c]);
-            //record the associated node
-            aoiNode_v.push_back(sptv);
-            //record the distance to the associated node
-            aoiDist_v.push_back(dist[sptv]);
-
-            //this AOI has been found
-            stillNeeded[c]--;
-            remaining--;
-
-            // determine if every AOI has now been found
-            if(remaining == 0){
-              //if so, add results to final output list and stop searching
-              outputDist[agentNo] = aoiDist_v;
-              outputNode[agentNo] = aoiNode_v;
-              outputAOI[agentNo] = aoiType_v;
-              completed = true;
-              break;
-            }
-          }
-
-          //determine relevant adjacency vertices and distances (const refs — no copy)
-          const std::vector<int>&    adjVrts = adjList_IDs[sptv];
-          const std::vector<double>& adjDist = (*adjList_dist)[sptv];
-
-          //CYCLE ALL ADJACENT VERTICES
-          //if needed, update their total distances (dist)
-          for(int vrt = 0; vrt < adjVrts.size(); vrt++){
-            int adjv = adjVrts[vrt];
-            double adjd = adjDist[vrt];
-            if(dist[adjv] > dist[sptv] + adjd){
-              dist[adjv] = dist[sptv] + adjd;
-              pq.push(std::make_pair(dist[adjv], adjv));
-            }
-          }
-        }
-      }
-      searched[key] = AoiSearch{aoiDist_v, aoiNode_v, aoiType_v, completed};
+    //every AOI reached: the lists go to the output, as they did when the search
+    //ran out of AOIs to find. An agent that cannot reach them all gets empty
+    //output rows but still its partial list below, as before.
+    if((int)found.size() == nA && nA > 0){
+      outputDist[agentNo] = aoiDist_v;
+      outputNode[agentNo] = aoiNode_v;
+      outputAOI[agentNo] = aoiType_v;
     }
     //end of the search for this agent
 

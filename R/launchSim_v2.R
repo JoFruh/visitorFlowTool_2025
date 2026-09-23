@@ -525,10 +525,18 @@ cannotRecreate <- dayPop$goalV == -1
         routeChoicesProbs <- routeChoices
         routeChoicesProbs[areViableChoices] <- chooseBestRoutes_cpp(viableRoutes = routeChoices[areViableChoices],
                                                                     DULN_df =  DULN_df,
-                                                                    priorVs = dayPop$priorV[areViableChoices],
-                                                                    agentTyps = dayPop$agentTyp[areViableChoices],
+                                                                    #[toDecideNicest] FIRST. areViableChoices is
+                                                                    #a mask over the DECIDING agents, not over all
+                                                                    #of them; applied straight to a dayPop column,
+                                                                    #R recycled it over every agent, so agents were
+                                                                    #scored with somebody else's type, history and
+                                                                    #position - and the lists handed to C++ could
+                                                                    #be shorter than viableRoutes, which it indexes
+                                                                    #unchecked. Same indexing as routeChoices above.
+                                                                    priorVs = dayPop$priorV[toDecideNicest][areViableChoices],
+                                                                    agentTyps = dayPop$agentTyp[toDecideNicest][areViableChoices],
                                                                     V_coords_df = vertexCoordsDF,
-                                                                    currentVs = dayPop$currentV[areViableChoices],
+                                                                    currentVs = dayPop$currentV[toDecideNicest][areViableChoices],
                                                                     nodeRow_ptr = nodeRowPtr)
 
         #TODO: sample using routeChoicesProbs as probabilities
