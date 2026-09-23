@@ -492,17 +492,21 @@ heatCacheNew <- function() new.env(parent = emptyenv())
 
 #' How many sessions' heat caches one process keeps.
 #'
-#' A cache holds every computed layer as a value vector - about 28 MB over a
+#' A cache holds every computed layer as a value vector - about 80 MB over a
 #' 3.6 x 2.6 km area, more over a larger one - so these cannot accumulate for
 #' the life of a daemon. The cap is small because the thing being protected is a
 #' single user's repaint loop, not a history.
 HEAT_CACHE_SESSIONS <- 4L
 
+#' The per-session heat caches of this process - see heatCacheFor() for why this
+#' is a namespace object and not a binding in `.GlobalEnv`.
+.vft_heatCaches <- new.env(parent = emptyenv())
+
 #' One session's heat cache, inside whichever process is doing the work.
 #'
 #' heatRaster()'s cache is an environment, and an environment cannot cross the
 #' mirai boundary - nor would we want it to. It holds every layer as a value
-#' vector, and serialising 28 MB on the main thread at both ends of every call
+#' vector, and serialising 80 MB on the main thread at both ends of every call
 #' is precisely the cost that moving this job off the thread exists to remove.
 #' So the cache stays in the process that builds it, keyed by session, exactly
 #' as the national raster caches in R/providers.R do.
@@ -515,15 +519,49 @@ HEAT_CACHE_SESSIONS <- 4L
 #' miss costs the user who asked for it; the synchronous version charged it to
 #' everybody.
 #'
-#' `.GlobalEnv` and not this namespace, for the reason given at .vftP() in
-#' R/perf_helpers.R: a reinstall or load_all() builds a fresh namespace, and a
-#' registry living in one would be silently abandoned along with its contents.
-heatCacheFor <- function(key){
+#' THE REGISTRY LIVES IN THIS NAMESPACE, NOT IN `.GlobalEnv` - which is where it
+#' was until 2026-09-24, and where it never survived a single job. mirai daemons
+#' run with `cleanup = TRUE` by default (mirai 2.7.1), which removes every
+#' binding a task adds to the global environment before the next task starts. So
+#' the registry was created, filled and thrown away inside each heat job: every
+#' job in production was a cold build, including a change of time of day, and
+#' nothing failed, because a cold cache is a valid cache. Checked on a real
+#' daemon: a task-created global binding is gone by the next task, while an
+#' environment held elsewhere keeps what tasks put in it. A namespace object is
+#' elsewhere; data-raw/verify_heat_async.R now times a warm repeat to prove it.
+#'
+#' What .GlobalEnv bought - surviving a load_all() in a dev session, see .vftP()
+#' in R/perf_helpers.R - does not matter here: a lost heat cache is a cold build,
+#' not a wrong answer. (Sourced by a verification script, this binding lands in
+#' the global environment like everything else, which is why those scripts
+#' still find it there.)
+#'
+#' `dir` SHARES A SESSION'S CACHE BETWEEN DAEMONS through disk. With two daemons
+#' the miss above was not an edge case but a coin toss: a change of time of day,
+#' which should cost 0.85 s off a warm cache, cost a 4.2 s cold build whenever it
+#' landed on the other daemon. Every job now saves the session's cache to
+#' `dir` (heat_cache_save(), called from heatRasterPacked()), and a process that
+#' has no entry for the session - or holds one older than the file - restores
+#' from it. The file is the latest state whoever wrote it; an entry in memory is
+#' only this daemon's last word.
+#'
+#' Restoring is exact for the same reason the cache is: every entry is checked
+#' against the stored class rasters it was built from (heat_cache_state()), so
+#' a file from another area or an older design causes rebuilds, not wrong
+#' answers. A file that will not read is a cold cache, never an error.
+heatCacheFor <- function(key, dir = NULL){
   if(is.null(key) || !nzchar(key)) return(heatCacheNew())
-  if(!exists(".vft_heatCaches", envir = .GlobalEnv))
-    assign(".vft_heatCaches", new.env(parent = emptyenv()), envir = .GlobalEnv)
-  reg <- get(".vft_heatCaches", envir = .GlobalEnv)
+  reg <- .vft_heatCaches
 
+  if(!is.null(dir)){
+    f  <- heatCacheFile(dir, key)
+    mt <- suppressWarnings(as.numeric(file.info(f)$mtime))
+    held <- reg[[key]]
+    if(is.finite(mt) && (is.null(held) || !isTRUE(held$.mtime >= mt))){
+      restored <- heat_cache_restore(f)
+      if(!is.null(restored)) reg[[key]] <- restored
+    }
+  }
   if(is.null(reg[[key]])) reg[[key]] <- heatCacheNew()
   #touch order, so the eviction below drops the session that has been idle
   #longest rather than an arbitrary one
@@ -534,6 +572,69 @@ heatCacheFor <- function(key){
   reg[[key]]
 }
 
+#' Where a session's heat cache is kept on disk. The key is a session token, but
+#' it becomes a file name, so anything that is not plainly safe is replaced.
+heatCacheFile <- function(dir, key){
+  file.path(dir, paste0("heat_", gsub("[^A-Za-z0-9_-]", "_", key), ".rds"))
+}
+
+#' Write a heat cache for another process to pick up.
+#'
+#' The cache is value vectors plus two template SpatRasters, and a SpatRaster is
+#' an external pointer. The templates carry no values - they are geometry - so
+#' they are saved as geometry (heat_tpl_pack()) rather than wrap()ped, which
+#' would try to read values they do not have. Everything else goes as it is.
+#' Uncompressed, because the file lives for one session on local disk and the
+#' whole point is speed: 80 MB over 3.6 x 2.6 km (the layers plus the class
+#' rasters and source masks they are checked against), written in 0.12 s and
+#' read back in 0.16 s - against a 4.2 s cold build.
+#'
+#' Written under a temporary name and renamed into place, so a daemon reading
+#' while another writes sees the old file or the new one, never half of one.
+heat_cache_save <- function(cache, file){
+  if(is.null(cache) || is.null(file)) return(invisible(FALSE))
+  tryCatch({
+    nms <- setdiff(ls(cache, all.names = TRUE), ".mtime")
+    lst <- mget(nms, envir = cache)
+    lst <- lapply(lst, function(x) if(inherits(x, "SpatRaster")) heat_tpl_pack(x) else x)
+    dir.create(dirname(file), recursive = TRUE, showWarnings = FALSE)
+    tmp <- paste0(file, ".", Sys.getpid(), ".tmp")
+    saveRDS(lst, tmp, compress = FALSE)
+    if(!file.rename(tmp, file)){
+      unlink(file); if(!file.rename(tmp, file)){ unlink(tmp); return(invisible(FALSE)) }
+    }
+    cache$.mtime <- as.numeric(file.info(file)$mtime)
+    invisible(TRUE)
+  }, error = function(e) invisible(FALSE))
+}
+
+#' Read a heat cache heat_cache_save() wrote, or NULL if it cannot be read.
+heat_cache_restore <- function(file){
+  tryCatch({
+    lst <- readRDS(file)
+    if(!is.list(lst)) return(NULL)
+    env <- heatCacheNew()
+    for(n in names(lst)){
+      x <- lst[[n]]
+      assign(n, if(inherits(x, "vft_heat_tpl")) heat_tpl_unpack(x) else x, envir = env)
+    }
+    env$.mtime <- as.numeric(file.info(file)$mtime)
+    env
+  }, error = function(e) NULL)
+}
+
+#' A cache template reduced to its grid, and back. A layer with values would
+#' lose them here, so one is refused rather than silently emptied.
+heat_tpl_pack <- function(x){
+  if(terra::hasValues(x)) stop("heat_tpl_pack: a template must not carry values")
+  structure(list(ext = as.vector(terra::ext(x)), nrow = terra::nrow(x),
+                 ncol = terra::ncol(x), crs = terra::crs(x)),
+            class = "vft_heat_tpl")
+}
+heat_tpl_unpack <- function(p){
+  terra::rast(terra::ext(p$ext), nrows = p$nrow, ncols = p$ncol, crs = p$crs)
+}
+
 #' heatRaster() across a process boundary: plain arguments in, a packed raster out.
 #'
 #' The entry point the worker runs. Everything terra touches is an external
@@ -541,13 +642,17 @@ heatCacheFor <- function(key){
 #' the surface goes back wrapped - the same contract R/providers.R states at the
 #' top of the file. `key` is the session token that selects the cache above; a
 #' NULL key means "no cache", which is what a verification script wants.
+#' `cacheDir` shares the cache between daemons through disk - see heatCacheFor().
 heatRasterPacked <- function(aoi, groundEdits = NULL, canopyEdits = NULL,
                              bin = HEAT_BIN_DEFAULT, res = HEAT_RES,
-                             key = NULL, progress = NULL, ...){
+                             key = NULL, progress = NULL, cacheDir = NULL, ...){
   unpack <- function(x) if(is.null(x)) NULL else terra::unwrap(x)
+  cache <- heatCacheFor(key, cacheDir)
   out <- heatRaster(aoi, unpack(groundEdits), unpack(canopyEdits),
-                    bin = bin, res = res, cache = heatCacheFor(key),
+                    bin = bin, res = res, cache = cache,
                     progress = progress, ...)
+  if(!is.null(key) && nzchar(key) && !is.null(cacheDir))
+    heat_cache_save(cache, heatCacheFile(cacheDir, key))
   if(is.null(out)) NULL else terra::wrap(out)
 }
 
@@ -724,6 +829,10 @@ heat_edit_rast <- function(s){
 #' the windowed one. If only one does, a repaint near a window edge coarsens
 #' differently from a full read of the same paint and the incremental cache stops
 #' being exact - which is what verify_heat_model.R group 8 walks.
+#'
+#' Stays in terra on purpose. A one-pass C++ vote was tried (2026-09-24) and
+#' lost, 0.56-0.69 s against 0.36-0.41 s over 3.6 x 2.6 km: copying 12.7 M cells
+#' out of terra into R alone costs more than terra's whole two-stage vote.
 heat_modal_class <- function(r, f){
   if(f <= 1) return(r)
   var <- terra::aggregate(r, fact = f, fun = "modal", na.rm = TRUE)

@@ -373,10 +373,20 @@ vftClearNetworkLines <- function(map, group = "paths",
 #' Create one per module instance - it holds that session's raster.
 #'
 #' `method` is what addRasterImage(method = "auto") picks for a numeric raster.
+#'
+#' `projected` seeds the cache with a projection made elsewhere - the heat job
+#' projects its surface in the daemon, where the 0.25-0.5 s it costs blocks
+#' nobody - so the next draw of `x` is a hit. It must be
+#' projectRasterForLeaflet(x, method), or the map shows something else.
 vftLeafletRasterCache <- function(method = "bilinear"){
   e <- new.env(parent = emptyenv())
-  function(x){
+  function(x, projected = NULL){
     if(inherits(x, "PackedSpatRaster")) x <- terra::unwrap(x)
+    if(!is.null(projected)){
+      e$src <- x
+      e$out <- projected
+      return(e$out)
+    }
     if(!is.null(e$src) && identical(e$src, x)) return(e$out)
     e$out <- leaflet::projectRasterForLeaflet(x, method)
     e$src <- x

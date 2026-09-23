@@ -1061,28 +1061,28 @@ if(is.null(r$updateNetworkPlot)){
             #NULL (rasters not built, or an area past paintLandcoverSeed()'s
             #ceiling) sends NULL images, which clears the baseline rather than
             #leaving the previous version's on screen.
-            baseMsg <- if(paintOK) tryCatch(paintLandcoverBaselinePNG(paintAOI),
-                                            error = function(e){
-                                              message("paint: baseline encode failed - ",
-                                                      conditionMessage(e))
-                                              NULL
-                                            }) else NULL
-            if(is.null(baseMsg)){
-              #print the whole diagnosis here rather than inviting the user to run
-              #it: the app owns the console while it is running, so "call this
-              #function to find out why" is advice that cannot be taken. A blank
-              #canvas looks identical whether the rasters are missing, the area is
-              #too big, or step 1 left no outline, so the reason has to arrive
-              #unasked. Wrapped because a diagnostic must never break the render.
-              message("paint: no land cover baseline for this area -")
-              try(paintLandcoverDiagnose(paintAOI), silent = FALSE)
-              baseMsg <- list(ground = NULL, canopy = NULL)
+            #
+            #A CACHED BASELINE IS SENT AT ONCE; A NEW ONE IS BUILT OFF THE MAIN
+            #THREAD. Building it is 1.5-3.7 s of crop, mask and PNG encode
+            #(before 2026-09-24; about a third of that since), and this render
+            #runs on the thread every connected user shares. The cache is
+            #process-wide, so only the first visit to an area pays - but that
+            #visit froze everyone. See sendBaseline() below for how a reply that
+            #arrives after the user has moved on is dropped.
+            baseReq <<- baseReq + 1L
+            if(paintOK){
+              baseKey <- tryCatch(paintBaselineKey(paintAOI), error = function(e) NULL)
+              baseHit <- paintBaselineCached(baseKey)
+              if(!is.null(baseHit)){
+                sendBaseline(baseHit, paintAOI)
+              }else{
+                #clear whatever an earlier area left on screen while this one builds
+                session$sendCustomMessage("paint-base-load", list(ground = NULL, canopy = NULL))
+                buildBaseline(paintAOI, baseKey, baseReq)
+              }
             }else{
-              message(sprintf("paint: land cover baseline %d x %d, %.0f KB",
-                              baseMsg$w, baseMsg$h,
-                              (nchar(baseMsg$ground) + nchar(baseMsg$canopy)) / 1e3))
+              sendBaseline(NULL, paintAOI)
             }
-            session$sendCustomMessage("paint-base-load", baseMsg)
 
             #this scenario's own strokes, if it has any. Read through the same
             #guard as everything else that indexes the list: enter() guarantees a
@@ -1523,8 +1523,14 @@ shiny::observeEvent(input$paintDebug, {
     message("  => no coordinate fit: paint-grid-init never arrived. Brush and drawing are both inert.")
   }else if(identical(s$panes$paintPaneGround, "MISSING")){
     message("  => panes missing: attach() did not complete.")
-  }else if(isTRUE(s$active) && s$chunks$baseGround == 0 && !is.null(s$lastBase)){
+  }else if(isTRUE(s$active) && s$chunks$baseGround == 0 && isTRUE(s$lastBase$ground)){
     message("  => baseline was sent but decoded to 0 chunks: the PNG is empty or failed to decode.")
+  }else if(isTRUE(s$active) && s$chunks$baseGround == 0 && !is.null(s$lastBase)){
+    #the render clears the baseline and builds a new one off the main thread, so
+    #an attach report often lands between the two - that is not a fault
+    message("  => no baseline image yet: either still being built off the main thread ",
+            "(a 'paint: baseline built' line follows) or none exists for this area ",
+            "(a 'paint: no land cover baseline' diagnosis follows).")
   }else if(isTRUE(s$active) && s$chunks$baseGround > 0){
     message("  => browser state looks healthy; if the map is blank the issue is in drawing/transform.")
   }
@@ -1560,6 +1566,59 @@ heatLeaflet <- vftLeafletRasterCache()
 
 heatProxy <- function()
   leaflet::leafletProxy("versionMap", session = session, deferUntilFlush = FALSE)
+
+#THE LAND COVER BASELINE, SENT OR BUILT.
+#
+#`baseReq` numbers every baseline the context 4 render asks for, whether it was
+#answered from the cache, built in a daemon or is absent. A daemon's reply is
+#only sent if it is still the newest request and the page is still on context 4:
+#a version switch or a trip to another context in the meantime has already sent
+#(or asked for) something newer, and the stale PNG must not land on top of it.
+#The reply is cached either way, so coming back is a hit.
+#
+#session$sendCustomMessage() writes to the socket at once rather than waiting
+#for a flush, so - unlike the leafletProxy calls below - it needs no special
+#handling when called from a promise callback.
+baseReq <- 0L
+
+sendBaseline <- function(msg, aoi){
+  if(is.null(msg)){
+    #print the whole diagnosis here rather than inviting the user to run
+    #it: the app owns the console while it is running, so "call this
+    #function to find out why" is advice that cannot be taken. A blank
+    #canvas looks identical whether the rasters are missing, the area is
+    #too big, or step 1 left no outline, so the reason has to arrive
+    #unasked. Wrapped because a diagnostic must never break the render.
+    message("paint: no land cover baseline for this area -")
+    try(paintLandcoverDiagnose(aoi), silent = FALSE)
+    msg <- list(ground = NULL, canopy = NULL)
+  }else{
+    message(sprintf("paint: land cover baseline %d x %d, %.0f KB",
+                    msg$w, msg$h, (nchar(msg$ground) + nchar(msg$canopy)) / 1e3))
+  }
+  session$sendCustomMessage("paint-base-load", msg)
+  invisible(NULL)
+}
+
+buildBaseline <- function(aoi, key, req){
+  t0 <- Sys.time()
+  current <- function() identical(req, baseReq) &&
+    isTRUE(shiny::isolate(input$contextChoice) == 4)
+  vftFuture({
+    paintLandcoverBaselinePNG(aoi, cache = FALSE)
+  }) %...>% (function(msg){
+    paintBaselineStore(key, msg)
+    if(!current()) return(invisible(NULL))
+    if(!is.null(msg))
+      message(sprintf("paint: baseline built off the main thread in %.1f s",
+                      as.numeric(difftime(Sys.time(), t0, units = "secs"))))
+    sendBaseline(msg, aoi)
+  }) %...!% (function(e){
+    message("paint: baseline encode failed - ", conditionMessage(e))
+    if(current()) sendBaseline(NULL, aoi)
+  })
+  invisible(NULL)
+}
 
 drawHeat <- function(){
   heat <- shiny::isolate(r$heatRaster)
@@ -1602,13 +1661,26 @@ clearHeat <- function(){
 #
 #It now lives in the PROCESS THAT DOES THE WORK, because that is no longer this
 #one - see heatCacheFor() in R/heat_helpers.R. An environment cannot cross the
-#mirai boundary, and the 28 MB of value vectors it holds must not be serialised
+#mirai boundary, and the 80 MB of value vectors it holds must not be serialised
 #onto this thread twice per call. The session token is the key.
 #
 #What has not changed is what decides when a surface is stale: the existing
 #`r$heatRaster <- NULL` points are still the only such decision, and the cache
 #still takes no part in reactive invalidation - it holds no answer, only work
 #already done.
+
+#...and where the daemons SHARE it. Each job leaves the session's cache in this
+#directory, and a daemon that has not seen the session (or saw an older state
+#of it) picks it up from there - otherwise a change of time of day that landed
+#on the other daemon rebuilt everything cold, 4.2 s instead of 0.85 s over
+#3.6 x 2.6 km. See heatCacheFor(). The main process's tempdir, because the
+#daemons run on the same host and it goes away with the app; the session's file
+#goes when the session does.
+heatCacheDir <- file.path(tempdir(), "vft_heat")
+session$onSessionEnded(function(){
+  key <- tryCatch(session$token, error = function(e) NULL)
+  if(!is.null(key)) unlink(heatCacheFile(heatCacheDir, key))
+})
 
 #A heat job already in flight. The recompute is seconds long and the switch is a
 #single click away from a second one, so without this a double click dispatches
@@ -1713,20 +1785,28 @@ computeHeat <- function(done = function(ok) invisible(NULL)){
     done(ok)
   }
 
+  cacheDir <- heatCacheDir
+
   vftFuture({
     #the bar is driven from inside the model, one mark per term - see
     #heat_ticker() in R/heat_helpers.R. The handle is the small $set/$inc/$close
     #triple, so this adds nothing to what crosses to the worker.
     out <- heatRasterPacked(aoi, groundEdits = ge, canopyEdits = ce,
-                            bin = bin, key = key, progress = progress)
+                            bin = bin, key = key, progress = progress,
+                            cacheDir = cacheDir)
+    #projected for the map HERE rather than in drawHeat(): 0.25-0.5 s that
+    #would otherwise block every user's thread on each new surface
+    proj <- if(is.null(out)) NULL else terra::wrap(
+      leaflet::projectRasterForLeaflet(terra::unwrap(out), "bilinear"))
     progress$close()
-    out
+    if(is.null(out)) NULL else list(heat = out, proj = proj)
   }, seed = TRUE, progress = progress) %...>% (function(packed){
     if(is.null(packed)){
       message("heat: no land cover for this area - nothing to compute from")
       settle(FALSE)
     }else{
-      h <- terra::unwrap(packed)
+      h <- terra::unwrap(packed$heat)
+      heatLeaflet(h, projected = terra::unwrap(packed$proj))
       r$heatRaster <- h
       message(sprintf("heat: computed %d x %d at %g m for %s in %.1f s",
                       terra::nrow(h), terra::ncol(h), HEAT_RES, bin,

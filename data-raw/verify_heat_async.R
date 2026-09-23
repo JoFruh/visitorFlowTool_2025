@@ -88,10 +88,11 @@ values(stroke) <- 7L
 ge <- terra::wrap(stroke)
 
 m <- mirai::mirai({
+  t0 <- Sys.time()
   out <- heatRasterPacked(aoi, groundEdits = NULL, canopyEdits = ce,
                           bin = "midday", key = "remote")
   list(surface = out, pid = Sys.getpid(),
-       cached = exists(".vft_heatCaches", envir = .GlobalEnv))
+       secs = as.numeric(difftime(Sys.time(), t0, units="secs")))
 }, aoi = aoi, ce = ge)
 res <- mirai::call_mirai(m)$data
 
@@ -106,7 +107,12 @@ if (!inherits(res, "miraiError")) {
   d <- abs(values(remote, mat=FALSE) - values(local, mat=FALSE)); d <- d[is.finite(d)]
   ok(sprintf("...and equals the same job computed here (max %.3g K)", max(d)),
      length(d) > 0 && max(d) < 1e-9)
-  ok("the daemon kept a cache for the session", isTRUE(res$cached))
+  ## asked in a SEPARATE task. Asked inside the job, as this check used to be,
+  ## it passed while mirai's cleanup = TRUE was deleting the registry between
+  ## every pair of jobs - see heatCacheFor().
+  kept <- mirai::call_mirai(mirai::mirai(
+    exists(".vft_heatCaches") && "remote" %in% ls(.vft_heatCaches)))$data
+  ok("the daemon still holds the session's cache in the NEXT task", isTRUE(kept))
 
   ## second call, same key: the cache must be reused and the answer unchanged
   m2 <- mirai::mirai({
@@ -118,9 +124,84 @@ if (!inherits(res, "miraiError")) {
   r2 <- mirai::call_mirai(m2)$data
   d2 <- abs(values(terra::unwrap(r2$surface), mat=FALSE) - values(remote, mat=FALSE))
   d2 <- d2[is.finite(d2)]
-  ok(sprintf("a warm repeat in the daemon is unchanged and fast (%.2f s)", r2$secs),
-     length(d2) > 0 && max(d2) < 1e-9)
+  ok("a warm repeat in the daemon is unchanged", length(d2) > 0 && max(d2) < 1e-9)
+  ## a repeat of the same job rebuilds nothing but the local term - 0.15 s
+  ## against ~2 s here - so a quarter of the cold time is a generous bound.
+  ## This is the check that would have caught the registry dying between jobs:
+  ## the old one printed 1.52 s and passed.
+  ok(sprintf("...and genuinely warm (%.2f s vs %.2f s cold)", r2$secs, res$secs),
+     r2$secs < 0.25 * res$secs)
 }
 mirai::daemons(0)
+
+cat("\n=== 4. two daemons share a session's cache through disk ===\n")
+## The production pool has two daemons and a job lands on whichever is free, so
+## the second job of a session is often on the daemon that has never seen it.
+## Two compute profiles of one daemon each let this test choose: the first job
+## on A, the next on B, which must pick A's cache up from `dir` rather than
+## building cold - and must still give the surface a cold build would.
+dir <- file.path(tempdir(), "vft_heat_async"); unlink(dir, recursive = TRUE)
+setup <- function(prof) {
+  mirai::daemons(1, .compute = prof)
+  w <- mirai::everywhere({
+    .libPaths(..libs..)
+    suppressPackageStartupMessages(library(terra))
+    for (f in c("perf_helpers.R","data_paths.R","paintbrush_helpers.R",
+                "heat_helpers.R","shadow_helpers.R","svf_helpers.R"))
+      suppressWarnings(try(source(file.path(..R.., f)), silent = TRUE))
+    dyn.load(file.path(dirname(..R..), "src",
+                       paste0("visitorFlowTool", .Platform$dynlib.ext)))
+    source(file.path(..R.., "RcppExports.R"))
+    Sys.getpid()
+  }, ..libs.. = .libPaths(), ..R.. = RD, .compute = prof)
+  mirai::call_mirai(w)
+  w[[1]]$data
+}
+pa <- setup("A"); pb <- setup("B")
+ok(sprintf("two distinct daemons (%s, %s)", pa, pb), pa != pb)
+
+job <- function(prof, bin) mirai::call_mirai(mirai::mirai({
+  t0 <- Sys.time()
+  out <- heatRasterPacked(aoi, bin = bin, key = "shared", cacheDir = dir)
+  ## what computeHeat() now does in the daemon: project for the map there
+  proj <- terra::wrap(leaflet::projectRasterForLeaflet(terra::unwrap(out), "bilinear"))
+  list(surface = out, proj = proj, pid = Sys.getpid(),
+       secs = as.numeric(difftime(Sys.time(), t0, units = "secs")))
+}, aoi = aoi, bin = bin, dir = dir, .compute = prof))$data
+
+ja <- job("A", "midday")
+ok("job 1 ran on daemon A", !inherits(ja, "miraiError") && ja$pid == pa,
+   if (inherits(ja, "miraiError")) as.character(ja) else sprintf("(%.2f s cold)", ja$secs))
+ok("...and left the session's cache on disk", file.exists(heatCacheFile(dir, "shared")))
+jb <- job("B", "afternoon")
+ok("job 2 ran on daemon B", !inherits(jb, "miraiError") && jb$pid == pb,
+   if (inherits(jb, "miraiError")) as.character(jb) else "")
+if (!inherits(jb, "miraiError")) {
+  cold <- heatRaster(aoi, bin = "afternoon")
+  d <- abs(values(terra::unwrap(jb$surface), mat=FALSE) - values(cold, mat=FALSE))
+  d <- d[is.finite(d)]
+  ok(sprintf("B's surface equals a cold build (max %.3g K)", max(d)),
+     length(d) > 0 && max(d) < 1e-9)
+  ok(sprintf("B was warm off A's cache (%.2f s vs %.2f s cold on A)", jb$secs, ja$secs),
+     jb$secs < 0.6 * ja$secs)
+  ## the projection made in the daemon is the one drawHeat() would have made
+  pl <- leaflet::projectRasterForLeaflet(cold, "bilinear")
+  pr <- terra::unwrap(jb$proj)
+  dp <- abs(values(pr, mat=FALSE) - values(pl, mat=FALSE)); dp <- dp[is.finite(dp)]
+  ok("the daemon's leaflet projection equals one made here",
+     ext(pr) == ext(pl) && all(dim(pr) == dim(pl)) && length(dp) > 0 && max(dp) < 1e-9)
+}
+## back on A: its in-memory entry is older than B's file, so the file must win
+ja2 <- job("A", "midday")
+if (!inherits(ja2, "miraiError")) {
+  back <- heatRaster(aoi, bin = "midday")
+  d <- abs(values(terra::unwrap(ja2$surface), mat=FALSE) - values(back, mat=FALSE))
+  d <- d[is.finite(d)]
+  ok(sprintf("A again, after B wrote: still exact (%.2f s)", ja2$secs),
+     length(d) > 0 && max(d) < 1e-9)
+}
+mirai::daemons(0, .compute = "A"); mirai::daemons(0, .compute = "B")
+unlink(dir, recursive = TRUE)
+
 cat(sprintf("\n%d check(s) failed\n", fails))
 quit(status = if (fails == 0) 0 else 1)

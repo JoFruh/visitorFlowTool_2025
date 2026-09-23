@@ -462,8 +462,13 @@ paintLandcoverSeed <- function(aoi, buffer_m = 250, max_cells = 40e6,
   out <- list(ground = terra::crop(g, e),
               canopy = terra::crop(terra::rast(f_canopy), e))
   if(mask){
-    mv  <- terra::vect(shp)
-    out <- lapply(out, function(r) terra::mask(r, mv))
+    #the polygon is rasterised ONCE and both layers masked by that raster, rather
+    #than handing each mask() the polygon to rasterise again. touches = TRUE is
+    #mask()'s own default for a SpatVector, so the result is cell-identical -
+    #measured on a rectangle and a lobed outline - at 0.59 s against 0.96 s over
+    #3.6 x 2.6 km.
+    mr  <- terra::rasterize(terra::vect(shp), out$ground, touches = TRUE)
+    out <- lapply(out, function(r) terra::mask(r, mr))
   }
   out
   })
@@ -502,56 +507,87 @@ paintLandcoverSeed <- function(aoi, buffer_m = 250, max_cells = 40e6,
 .paintBaseCache <- new.env(parent = emptyenv())
 .PAINT_BASE_CACHE_MAX <- 8
 
+#' The cache key for an area's baseline, or NULL if the area cannot be keyed.
+#'
+#' The whole outline, not just its bounding box: the result is masked to the
+#' shape, so two different outlines sharing a bbox are different baselines and
+#' must not share an entry.
+#'
+#' Built from rounded coordinates rather than WKT. st_as_text(digits = ) is not
+#' a rounding knob - format() rejects digits = 0 outright - and the failure mode
+#' is silent: the error lands in try(), the key stays NULL, and caching turns
+#' itself off without a word. Rounding the coordinates to the metre is both the
+#' snapping we actually want (float noise in the last decimal is the same
+#' outline) and something that cannot throw.
+#'
+#' Split out so the newVersions render can ask "is this one cached?" without
+#' encoding anything: a hit is sent at once, a miss is built off the main thread.
+paintBaselineKey <- function(aoi){
+  if(is.null(aoi)) return(NULL)
+  crd <- try(sf::st_coordinates(
+               sf::st_transform(sf::st_union(sf::st_geometry(aoi)), 2056)),
+             silent = TRUE)
+  if(inherits(crd, "try-error") || !length(crd)) return(NULL)
+  paste(c(round(crd[, 1]), round(crd[, 2]), PAINT_RES, paintLandcoverDir()),
+        collapse = ",")
+}
+
+#' A cached baseline, or NULL.
+paintBaselineCached <- function(key){
+  if(is.null(key)) return(NULL)
+  hit <- .paintBaseCache[[key]]
+  if(is.null(hit)) NULL else hit$value
+}
+
+#' Keep a baseline. Plain FIFO on insertion time: entries are ~0.5-1.5 MB, and
+#' the access pattern is a handful of study areas, so there is nothing an LRU
+#' would buy here.
+paintBaselineStore <- function(key, value){
+  if(is.null(key) || is.null(value)) return(invisible(NULL))
+  ks <- ls(.paintBaseCache)
+  if(length(ks) >= .PAINT_BASE_CACHE_MAX && !key %in% ks){
+    stamps <- vapply(ks, function(k) .paintBaseCache[[k]]$t, numeric(1))
+    rm(list = ks[which.min(stamps)], envir = .paintBaseCache)
+  }
+  assign(key, list(value = value, t = as.numeric(Sys.time())), envir = .paintBaseCache)
+  invisible(NULL)
+}
+
 paintLandcoverBaselinePNG <- function(aoi, ..., cache = TRUE){
   vftTime("paint:baselinePNG", {
-  key <- NULL
-  if(cache && !is.null(aoi)){
-    #the whole outline, not just its bounding box: the result is masked to the
-    #shape now, so two different outlines sharing a bbox are different baselines
-    #and must not share an entry.
-    #
-    #Built from rounded coordinates rather than WKT. st_as_text(digits = ) is not
-    #a rounding knob - format() rejects digits = 0 outright - and the failure
-    #mode is silent: the error lands in try(), the key stays NULL, and caching
-    #turns itself off without a word. Rounding the coordinates to the metre is
-    #both the snapping we actually want (float noise in the last decimal is the
-    #same outline) and something that cannot throw.
-    crd <- try(sf::st_coordinates(
-                 sf::st_transform(sf::st_union(sf::st_geometry(aoi)), 2056)),
-               silent = TRUE)
-    if(!inherits(crd, "try-error") && length(crd)){
-      key <- paste(c(round(crd[, 1]), round(crd[, 2]),
-                     PAINT_RES, paintLandcoverDir()), collapse = ",")
-      hit <- .paintBaseCache[[key]]
-      if(!is.null(hit)) return(hit$value)
-    }
-  }
+  key <- if(cache) paintBaselineKey(aoi) else NULL
+  hit <- paintBaselineCached(key)
+  if(!is.null(hit)) return(hit)
 
   seed <- paintLandcoverSeed(aoi, ...)
   if(is.null(seed)) return(NULL)
 
   valid <- c(0L, PAINT_CATEGORIES$id)
+  #Anything that is not a category id becomes 0 (unclassified). The national
+  #build produced 776 such cells in 166 billion - always a valid class with a
+  #high bit set (3 -> 67, 4 -> 68, 0 -> 128), which is the signature of memory
+  #bit-flips during a long saturating run rather than of a crosswalk fault.
+  #Too rare to matter statistically, but a stray 128 would miss the palette
+  #and draw nothing while still counting as painted, so it is squashed at the
+  #edge rather than left to surface as an unexplained hole. NA (outside the
+  #outline) becomes 0 as well, in the same table.
+  lut <- rep(0L, 256L); lut[valid + 1L] <- valid
+  rcl <- rbind(cbind(0:255, lut), c(NA, 0))
 
+  #GDAL writes the PNG, not R. Pulling 12.7 M cells into an R vector, squashing
+  #them there and handing a double matrix to png::writePNG was 1.0-1.3 s a layer
+  #over 3.6 x 2.6 km, on the thread every user shares; classify() and the GDAL
+  #PNG driver do the same in 0.35 s and decode to the identical ids (file sizes
+  #identical too). GDAL writes rows from the north-west, which is terra's order
+  #and PNG's, so nothing is flipped. No NAflag is set because NA is gone by then,
+  #so the file carries no tRNS chunk, and the browser reads only the red channel
+  #anyway.
   encode <- function(r){
-    v <- terra::values(r)
-    v[is.na(v)] <- 0
-    #Anything that is not a category id becomes 0 (unclassified). The national
-    #build produced 776 such cells in 166 billion - always a valid class with a
-    #high bit set (3 -> 67, 4 -> 68, 0 -> 128), which is the signature of memory
-    #bit-flips during a long saturating run rather than of a crosswalk fault.
-    #Too rare to matter statistically, but a stray 128 would miss the palette
-    #and draw nothing while still counting as painted, so it is squashed at the
-    #edge rather than left to surface as an unexplained hole.
-    bad <- !v %in% valid
-    if(any(bad)) v[bad] <- 0
-    #byrow: terra hands back cells row-major from the north-west, which is also
-    #PNG's row order, so the image needs no flip
-    m <- matrix(as.numeric(v), nrow = terra::nrow(r), byrow = TRUE)
+    r <- terra::classify(r, rcl, others = 0)
     f <- tempfile(fileext = ".png")
-    on.exit(unlink(f), add = TRUE)
-    #writePNG wants [0,1] and quantises back with round(v * 255), so dividing by
-    #255 round-trips the class id exactly
-    png::writePNG(m / 255, f)
+    #GDAL leaves an .aux.xml beside the image with the georeferencing in it
+    on.exit(unlink(c(f, paste0(f, ".aux.xml"))), add = TRUE)
+    terra::writeRaster(r, f, datatype = "INT1U", NAflag = NA, overwrite = TRUE)
     paste0("data:image/png;base64,",
            jsonlite::base64_enc(readBin(f, "raw", file.info(f)$size)))
   }
@@ -564,16 +600,7 @@ paintLandcoverBaselinePNG <- function(aoi, ..., cache = TRUE){
               w      = terra::ncol(seed$ground),
               h      = terra::nrow(seed$ground))
 
-  if(!is.null(key)){
-    #plain FIFO on insertion time: entries are ~0.5 MB, and the access pattern is
-    #a handful of study areas, so there is nothing an LRU would buy here
-    ks <- ls(.paintBaseCache)
-    if(length(ks) >= .PAINT_BASE_CACHE_MAX){
-      stamps <- vapply(ks, function(k) .paintBaseCache[[k]]$t, numeric(1))
-      rm(list = ks[which.min(stamps)], envir = .paintBaseCache)
-    }
-    assign(key, list(value = out, t = as.numeric(Sys.time())), envir = .paintBaseCache)
-  }
+  paintBaselineStore(key, out)
   out
   })
 }

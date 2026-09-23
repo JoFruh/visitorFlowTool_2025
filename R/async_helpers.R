@@ -923,6 +923,14 @@ vftPayloadReport <- function(file = NULL, dir = Sys.getenv("VFT_PERF_DIR", "")){
 #' tasks to whichever daemon is idle, so n calls can all land on the same one and
 #' leave the rest cold. .libPaths() is carried across explicitly because daemons
 #' launch as bare Rscript and under Shiny Server frequently do not inherit it.
+#'
+#' Warming means more than library(). A fresh daemon's FIRST terra call costs
+#' 1.9 s of GDAL/PROJ start-up, and its first sf transform and leaflet projection
+#' another ~0.8 s - measured 2026-09-24, and all of it was being charged to
+#' whichever user's job reached that daemon first: a 3.6 x 2.6 km heat run took
+#' 7.3 s there against 3.6 s on a daemon that had done anything before. One tiny
+#' call of each here pays it once per daemon, at startup, before anyone is
+#' waiting. Wrapped: warming is an optimisation and must never stop the pool.
 .vftStartDaemons <- function(n = .vftWorkerCount()){
   #record that a pool was started ON PURPOSE. .vftEnsureDaemons() must be able to
   #tell "the pool died" from "there was never meant to be a pool": in dev the app
@@ -933,6 +941,13 @@ vftPayloadReport <- function(file = NULL, dir = Sys.getenv("VFT_PERF_DIR", "")){
   w <- mirai::everywhere({
     .libPaths(..vftLibs..)
     library(visitorFlowTool)
+    try({
+      r <- terra::rast(nrows = 4, ncols = 4, xmin = 2600000, xmax = 2600040,
+                       ymin = 1200000, ymax = 1200040, crs = "EPSG:2056",
+                       vals = 1:16)
+      invisible(leaflet::projectRasterForLeaflet(r, "bilinear"))
+      invisible(sf::st_transform(sf::st_sfc(sf::st_point(c(8, 47)), crs = 4326), 2056))
+    }, silent = TRUE)
     Sys.getpid()
   }, ..vftLibs.. = .libPaths())
   mirai::call_mirai(w)
