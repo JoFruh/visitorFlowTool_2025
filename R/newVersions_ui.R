@@ -544,6 +544,34 @@ vftDbg("UI6")
                                   "  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4;",
                                   "  overflow: hidden; max-width: 100%; overflow-wrap: anywhere; text-align: center;",
                                   "}")),
+                                #THE HEAT ICONS at a card's foot, one per stored heat map
+                                #that still applies (heatIconsTag() in R/heat_helpers.R).
+                                #Shown on the Hitzeminderung context only - the server
+                                #puts .vftHeatCtx on the column there. .vftHeatStale is
+                                #paintbrush.js hiding them the moment a stroke starts,
+                                #ahead of the flush that makes it true on the server.
+                                #The card of the map on screen goes red, over the green
+                                #of the selection, since that may be another card.
+                                shinyjs::inlineCSS(paste(
+                                  ".vftCard { position: relative; display: inline-block; vertical-align: middle; }",
+                                  ".vftHeatIcons { position: absolute; left: 4px; bottom: 4px; display: none; gap: 2px; z-index: 2; }",
+                                  "#topPlaceHolder_newVersion.vftHeatCtx .vftHeatIcons { display: flex; }",
+                                  "#topPlaceHolder_newVersion .vftHeatIcons.vftHeatStale { display: none; }",
+                                  ".vftHeatIcon { width: 24px; height: 24px; box-sizing: border-box; padding: 0;",
+                                  "  border-radius: 50%; border: 1px solid #888; background: #ffffff; opacity: 0.75;",
+                                  "  display: flex; align-items: center; justify-content: center; cursor: pointer; }",
+                                  ".vftHeatIcon:hover { opacity: 1; }",
+                                  ".vftHeatIcon.vftHeatShown { opacity: 1; border: 3px solid red; }",
+                                  ".vftCard button:disabled ~ .vftHeatIcons { pointer-events: none; opacity: 0.4; }",
+                                  "#topPlaceHolder_newVersion button.vftHeatCard { border-width: thick !important; border-color: red !important; }")),
+                                #...and the server's replacement for one card's strip,
+                                #as markup, so the strip has one generator and it is R's
+                                shiny::tags$script(shiny::HTML(paste(
+                                  "if(!window.__vftHeatIcons){ window.__vftHeatIcons = true;",
+                                  "Shiny.addCustomMessageHandler('vft-heat-icons', function(m){",
+                                  "  var el = document.querySelector('.vftHeatIcons[data-card=\"' + m.card + '\"]');",
+                                  "  if(el) el.outerHTML = m.html;",
+                                  "}); }"))),
 
 
 

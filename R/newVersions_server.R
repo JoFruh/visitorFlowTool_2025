@@ -493,6 +493,10 @@ if(is.null(r$updateNetworkPlot)){
       #a new version set: seedNewVersion() may offer its default copy again
       r$newSeeded <- FALSE
 
+      #and none of the stored heat maps can be trusted to describe it: a
+      #restored or rebuilt set may reuse card ids with different paint
+      heatStoreDrop(heatStore)
+
       #select original network at start
       r$position <- 1
 
@@ -692,6 +696,12 @@ if(is.null(r$updateNetworkPlot)){
           session$sendCustomMessage(type = "set-paint-active", message = paintContext)
           if(paintContext) shinyjs::show(id = "paintColorButtonsDiv")
           else             shinyjs::hide(id = "paintColorButtonsDiv")
+          #the cards' heat icons belong to this context alone. By selector: the
+          #card column's ids are not namespaced. Leaving it takes a shown map's
+          #red border and lit switch with it - the layer went with the old map.
+          shinyjs::toggleClass(selector = "#topPlaceHolder_newVersion", class = "vftHeatCtx",
+                               condition = paintContext)
+          if(!paintContext && !is.null(heatShown)) hideHeat(clear = FALSE)
         }
 
         #Every branch below is `input$contextChoice == n`, and on an unknown
@@ -984,11 +994,11 @@ if(is.null(r$updateNetworkPlot)){
             #the layer does not come with it. Leaving r$heatOn set would leave a
             #switch held down over nothing - and, since the mode is what shuts the
             #brush, would leave every paint button disabled with no visible reason
-            #why. The cached raster goes with it: a version switch also arrives here,
-            #and a heat surface belongs to the design it was computed from.
-            r$heatOn     <- FALSE
-            r$heatRaster <- NULL
-            shinyjs::removeClass("heatSwitch", "paintToolActive")
+            #why. The stored maps are untouched - they belong to their scenarios,
+            #not to this map instance - and their icons are the way back.
+            #clear = FALSE: the layer went with the old instance, and a proxy call
+            #now would address the new one.
+            hideHeat(clear = FALSE)
 
             #...and then take the brush away again on the original, which is the
             #baseline every version is compared against rather than a canvas -
@@ -1549,8 +1559,8 @@ shiny::observeEvent(input$paintDebug, {
 #leaflet drains from session$onFlushed(). A session is only flushed when a
 #message arrives from the browser, or when a reactive value that something
 #actually depends on is written. Neither happens when a heat job settles - the
-#click that started it was flushed seconds ago, and r$heatRaster and r$heatOn
-#are read through isolate() everywhere, so writing them invalidates nothing.
+#click that started it was flushed seconds ago, and r$heatOn is
+#read through isolate() everywhere, so writing it invalidates nothing.
 #A deferred draw therefore sat in leaflet's queue until the user next touched
 #the page, which is exactly what "pick another time of day and the surface is
 #computed but never appears" was: the clear went out with the select's own
@@ -1620,10 +1630,13 @@ buildBaseline <- function(aoi, key, req){
   invisible(NULL)
 }
 
-drawHeat <- function(){
-  heat <- shiny::isolate(r$heatRaster)
-  if(is.null(heat)) return(invisible(NULL))
-  pal <- heatPalette(heat)
+#`entry` is one of heatStore's maps: the surface and its projection for the
+#map, which the daemon made. Seeding heatLeaflet() with it is what makes going
+#from one stored map to another a draw and not a re-projection.
+drawHeat <- function(entry){
+  if(is.null(entry)) return(invisible(NULL))
+  heat <- entry$heat
+  pal  <- heatPalette(heat)
   heatProxy() %>%
     leaflet::clearGroup("heat") %>%
     leaflet::removeControl("heatLegend") %>%
@@ -1631,8 +1644,8 @@ drawHeat <- function(){
     #returns FALSE, and tileOptions() carries pane but bolts on zIndex and
     #detectRetina, which mean nothing to an image overlay. The options list is
     #handed straight to L.imageOverlay, where `pane` is all that is needed.
-    leaflet::addRasterImage(heatLeaflet(heat), colors = pal, group = "heat",
-                            opacity = HEAT_OPACITY, project = FALSE,
+    leaflet::addRasterImage(heatLeaflet(heat, projected = entry$proj), colors = pal,
+                            group = "heat", opacity = HEAT_OPACITY, project = FALSE,
                             options = list(pane = "heatPane")) %>%
     #the unit is in the title on purpose. Before Phase 4 this surface was
     #unitless and landed in roughly +-0.09; it is now kelvin of PET against
@@ -1651,6 +1664,111 @@ clearHeat <- function(){
     leaflet::removeControl("heatLegend")
   invisible(NULL)
 }
+
+#HEAT MAPS KEPT PER SCENARIO, AND THE ICONS ON THE CARDS.
+#
+#Every map computed here is kept for its scenario and time of day - see
+#heatStoreNew() in R/heat_helpers.R for the rules. Each card shows a round icon
+#per map that still applies, and clicking one draws it at once, over whatever
+#card is selected: painting is refused while heat is on, so the selection does
+#not matter while a map is up, and switching cards would cost a re-render for
+#nothing. The card whose map is shown wears a red border instead.
+#
+#`heatShown` is list(card, bin) of the map on screen, or NULL. It is the only
+#record of whose map that is, which may not be the selected card's.
+heatStore <- heatStoreNew()
+heatShown <- NULL
+
+heatCardKey <- function(pos){
+  vu <- shiny::isolate(r$versionsUI)
+  if(is.null(pos) || !length(pos) || is.na(pos) || pos < 1 || pos > length(vu)) return(NULL)
+  vu[[pos]]$inputId_select
+}
+
+heatCardPos <- function(card){
+  vu <- shiny::isolate(r$versionsUI)
+  x  <- which(vapply(vu, function(v) identical(v$inputId_select, card), logical(1)))
+  if(length(x) == 1) x else NULL
+}
+
+#the area heat is computed over - the same resolution computeHeat() makes
+heatAOI <- function(){
+  aoi <- shape
+  if(is.null(aoi) || length(sf::st_geometry(aoi)) == 0){
+    aoi <- shiny::isolate(r$parkingPolygons)
+  }
+  aoi
+}
+
+#its key, remembered per `shape` object: asked on every icon refresh, and
+#`shape` only changes when enter() hands in a new one
+heatAoiMemo <- new.env(parent = emptyenv())
+heatAoiKey <- function(){
+  aoi <- heatAOI()
+  if(!is.null(heatAoiMemo$src) && identical(heatAoiMemo$src, aoi)) return(heatAoiMemo$key)
+  heatAoiMemo$key <- tryCatch(paintBaselineKey(aoi), error = function(e) NULL)
+  heatAoiMemo$src <- aoi
+  heatAoiMemo$key
+}
+
+heatIconsFor <- function(card){
+  shown <- if(identical(heatShown$card, card)) heatShown$bin else NULL
+  heatIconsTag(card, heatStoreValidBins(heatStore, card, heatAoiKey()),
+               shown = shown, i18n = i18n(), ns = session$ns)
+}
+
+#Replaces each card's strip in the browser. Sent at once, like every custom
+#message, so it is safe from a promise callback. Isolated because the context
+#4 render calls it, and i18n() is reactive.
+sendHeatIcons <- function(cards = NULL) shiny::isolate({
+  if(is.null(cards)){
+    cards <- vapply(r$versionsUI, function(v) v$inputId_select, character(1))
+  }
+  for(card in unique(cards)){
+    if(is.null(card)) next
+    session$sendCustomMessage("vft-heat-icons",
+                              list(card = card, html = as.character(heatIconsFor(card))))
+  }
+  invisible(NULL)
+})
+
+#Put `entry` - card `card`'s map at `bin` - on the map, and say so everywhere:
+#the switch, the brush gates, the red border and the icons. The draw goes
+#LAST: leaflet's PNG encode of the surface is ~0.35 s on this thread, and the
+#controls should answer the click before it rather than after.
+showHeat <- function(card, bin, entry){
+  prev <- heatShown$card
+  if(!is.null(prev) && !identical(prev, card)) shinyjs::removeClass(prev, "vftHeatCard")
+  heatShown <<- list(card = card, bin = bin)
+  r$heatOn <- TRUE
+  shinyjs::addClass("heatSwitch", "paintToolActive")
+  shinyjs::addClass(card, "vftHeatCard")
+  applyPaintGates()
+  sendHeatIcons(c(prev, card))
+  drawHeat(entry)
+  invisible(NULL)
+}
+
+#Take the map off. `clear = FALSE` when the map instance it was drawn on is
+#already gone (the context 4 render): the proxy would address the new one.
+hideHeat <- function(clear = TRUE){
+  prev <- heatShown$card
+  heatShown <<- NULL
+  r$heatOn <- FALSE
+  shinyjs::removeClass("heatSwitch", "paintToolActive")
+  if(!is.null(prev)) shinyjs::removeClass(prev, "vftHeatCard")
+  if(isTRUE(clear)) clearHeat()
+  applyPaintGates()
+  if(!is.null(prev)) sendHeatIcons(prev)
+  invisible(NULL)
+}
+
+#The time of day the read-out is at, falling back to the model's default: a
+#restored session can reach here before the select has reported.
+heatCurrentBin <- function(){
+  bin <- shiny::isolate(r$heatBin)
+  if(is.null(bin) || !nzchar(bin)) HEAT_BIN_DEFAULT else bin
+}
 #ONE CACHE PER SESSION, not per version - and it no longer lives here.
 #
 #Terms are keyed on what they actually depend on, so a cache shared across
@@ -1664,10 +1782,9 @@ clearHeat <- function(){
 #mirai boundary, and the 80 MB of value vectors it holds must not be serialised
 #onto this thread twice per call. The session token is the key.
 #
-#What has not changed is what decides when a surface is stale: the existing
-#`r$heatRaster <- NULL` points are still the only such decision, and the cache
-#still takes no part in reactive invalidation - it holds no answer, only work
-#already done.
+#What decides when a surface is stale is heatStore's paint revision, not this
+#cache: the cache takes no part in it - it holds no answer, only work already
+#done.
 
 #...and where the daemons SHARE it. Each job leaves the session's cache in this
 #directory, and a daemon that has not seen the session (or saw an older state
@@ -1684,7 +1801,7 @@ session$onSessionEnded(function(){
 
 #A heat job already in flight. The recompute is seconds long and the switch is a
 #single click away from a second one, so without this a double click dispatches
-#twice and the two settle handlers race to write r$heatRaster.
+#twice and the two settle handlers race to draw.
 heatBusy <- FALSE
 
 #THE JOB IS VISIBLE WHILE IT RUNS, AND ITS TWO CONTROLS ARE NOT.
@@ -1720,11 +1837,11 @@ heatWorking <- function(busy){
   invisible(NULL)
 }
 
-#' Recompute from the current version's composite, OFF the main thread.
+#' Compute one scenario's heat map, OFF the main thread.
 #'
-#' `done(ok)` runs on the main thread once the surface is in `r$heatRaster`
-#' (ok = TRUE), or once it is known there is nothing to show (FALSE). Nothing is
-#' returned: the answer arrives through the callback, which is the whole change.
+#' `done(entry)` runs on the main thread once the map is in heatStore, or once
+#' it is known there is nothing to show (NULL). Nothing is returned: the answer
+#' arrives through the callback.
 #'
 #' This used to be synchronous, and on this deployment - one R process serving
 #' every user, see R/perf_helpers.R - a 12 second heat computation froze every
@@ -1735,14 +1852,18 @@ heatWorking <- function(busy){
 #' Wrapped, and deliberately not fatal: the heat model is a read-out of the
 #' design, so a failure here must cost the read-out and nothing else - never the
 #' map or the paint the user has already done.
-computeHeat <- function(done = function(ok) invisible(NULL)){
+#'
+#' `card` is the scenario to compute, which is not always the selected one: the
+#' time of day recomputes the map ON SCREEN, and that may be another card's (see
+#' the heat icons). The result is kept in heatStore under `card` whatever
+#' happens meanwhile, and `done()` gets it only if it may still be shown - its
+#' scenario not painted since dispatch, its bin still the chosen one, context 4
+#' still up. Otherwise `done(NULL)`.
+computeHeat <- function(card, done = function(entry) invisible(NULL)){
   if(isTRUE(heatBusy)) return(invisible(NULL))
 
-  pos <- shiny::isolate(r$position)
-  aoi <- shape
-  if(is.null(aoi) || length(sf::st_geometry(aoi)) == 0){
-    aoi <- shiny::isolate(r$parkingPolygons)
-  }
+  pos <- heatCardPos(card)
+  aoi <- heatAOI()
   #the scenario's edits, through the same guard every other read of the list
   #uses - see the note in the context 4 render. No slot means no edits, which is
   #a baseline-only heat surface rather than an error.
@@ -1751,11 +1872,13 @@ computeHeat <- function(done = function(ok) invisible(NULL)){
     if(is.null(nl) || is.null(pos) || !length(pos) || pos > length(nl))
       list(paintedRaster = NULL, canopyRaster = NULL) else nl[[pos]]
   })
-  #the chosen time of day, falling back to the model's own default rather than
-  #erroring: the control is in the same panel as the switch, but a restored
-  #session can reach this before the input has reported for the first time
-  bin <- shiny::isolate(r$heatBin)
-  if(is.null(bin) || !nzchar(bin)) bin <- HEAT_BIN_DEFAULT
+  bin <- heatCurrentBin()
+
+  #what the result will be kept against: the paint revision it describes, and
+  #whether that is the unpainted scenario Reset returns to
+  rev    <- heatStoreRev(heatStore, card)
+  base   <- is.null(edits$paintedRaster) && is.null(edits$canopyRaster)
+  aoiKey <- heatAoiKey()
 
   #terra objects are external pointers and cannot be serialised - wrap() out,
   #unwrap() in the worker. Same contract as the providers in R/providers.R.
@@ -1779,10 +1902,10 @@ computeHeat <- function(done = function(ok) invisible(NULL)){
   t0 <- Sys.time()
   heatWorking(TRUE)
 
-  settle <- function(ok){
+  settle <- function(entry){
     heatBusy <<- FALSE
     heatWorking(FALSE)
-    done(ok)
+    done(entry)
   }
 
   cacheDir <- heatCacheDir
@@ -1803,19 +1926,27 @@ computeHeat <- function(done = function(ok) invisible(NULL)){
   }, seed = TRUE, progress = progress) %...>% (function(packed){
     if(is.null(packed)){
       message("heat: no land cover for this area - nothing to compute from")
-      settle(FALSE)
+      settle(NULL)
     }else{
       h <- terra::unwrap(packed$heat)
-      heatLeaflet(h, projected = terra::unwrap(packed$proj))
-      r$heatRaster <- h
-      message(sprintf("heat: computed %d x %d at %g m for %s in %.1f s",
-                      terra::nrow(h), terra::ncol(h), HEAT_RES, bin,
+      heatStorePut(heatStore, card, bin,
+                   list(heat = h, proj = terra::unwrap(packed$proj),
+                        rev = rev, base = base, aoi = aoiKey))
+      message(sprintf("heat: computed %d x %d at %g m for %s (%s) in %.1f s",
+                      terra::nrow(h), terra::ncol(h), HEAT_RES, bin, card,
                       as.numeric(difftime(Sys.time(), t0, units = "secs"))))
-      settle(TRUE)
+      sendHeatIcons(card)
+      #still showable? A stroke during the job bumped the revision, so the map
+      #is kept as stale; a new bin or a trip off context 4 means nobody is
+      #waiting for it on screen
+      entry <- heatStoreGet(heatStore, card, bin, heatAoiKey())
+      if(!identical(bin, heatCurrentBin()) ||
+         !isTRUE(shiny::isolate(input$contextChoice) == 4)) entry <- NULL
+      settle(entry)
     }
   }) %...!% (function(e){
     vftAsyncError(progress, "Hitzeberechnung")(e)
-    settle(FALSE)
+    settle(NULL)
   })
 
   invisible(NULL)
@@ -1824,11 +1955,14 @@ computeHeat <- function(done = function(ok) invisible(NULL)){
 # The switch, and the only thing that computes heat.
 #
 # There is no Refresh button any more, because there is nothing left for one to
-# do: every edit drops the cached raster (see the paintCells and reset observers),
-# so a NULL cache here means "the design has changed since the last read-out" and
-# this IS the refresh. A cache that survived means nothing has been painted since,
-# and the surface is redrawn from it instantly - which is what keeps toggling heat
-# off and back on free.
+# do: every edit makes the scenario's stored maps stale (see heatStoreBump() in
+# the paintCells and reset observers), so a miss here means "the design has
+# changed since the last read-out" and this IS the refresh. A hit means nothing
+# has been painted since, and the map is redrawn from the store instantly -
+# which is what keeps toggling heat off and back on free.
+#
+# ON reads the SELECTED card. OFF takes down whatever map is up, which may be
+# another card's, put there through its icon.
 #
 # The recompute still happens on a deliberate click and never on a stroke. What
 # keeps that from going stale is the gate rather than a button - painting is
@@ -1844,64 +1978,96 @@ computeHeat <- function(done = function(ok) invisible(NULL)){
 shiny::observeEvent(input$heatSwitch, {
   on <- !isTRUE(shiny::isolate(r$heatOn))
   if(on){
-    show <- function(){
-      r$heatOn <- TRUE
-      shinyjs::addClass("heatSwitch", "paintToolActive")
-      drawHeat()
-      applyPaintGates()
-    }
-    if(is.null(shiny::isolate(r$heatRaster))){
+    card  <- heatCardKey(shiny::isolate(r$position))
+    bin   <- heatCurrentBin()
+    entry <- heatStoreGet(heatStore, card, bin, heatAoiKey())
+    if(is.null(entry)){
       #nothing to show on failure - leave the switch off rather than lying
-      computeHeat(function(ok) if(isTRUE(ok)) show())
+      computeHeat(card, function(entry) if(!is.null(entry)) showHeat(card, bin, entry))
       return(NULL)
     }
-    show()
+    showHeat(card, bin, entry)
   }else{
-    r$heatOn <- FALSE
-    shinyjs::removeClass("heatSwitch", "paintToolActive")
-    clearHeat()
-    applyPaintGates()
+    hideHeat()
   }
 }, ignoreInit = TRUE)
 
 # TIME OF DAY.
 #
-# A heat surface belongs to one time of day as surely as it belongs to one
-# design, so changing this invalidates the cache on exactly the same terms as a
-# brush stroke does. The difference is that painting is refused while heat is on,
-# whereas this control is meant to be used with it on - so when the surface is
-# currently displayed it is recomputed and redrawn immediately rather than
-# waiting for the next toggle, which would otherwise leave the map showing
-# midday under a label that says afternoon.
+# A heat map belongs to one time of day as surely as it belongs to one design,
+# and each bin has its own slot in heatStore - so changing this drops nothing.
+# When a map is on screen it is swapped for the same scenario's map at the new
+# bin: drawn at once if that is stored, computed otherwise, rather than waiting
+# for the next toggle and leaving midday on the map under a label that says
+# afternoon. "The same scenario" is the one SHOWN, which an icon may have put
+# there over another selected card.
 shiny::observeEvent(input$heatBin, {
   bin <- input$heatBin
   if(is.null(bin) || !nzchar(bin)) return(NULL)
   if(identical(bin, shiny::isolate(r$heatBin))) return(NULL)
-  r$heatBin    <- bin
-  r$heatRaster <- NULL
-  if(!isTRUE(shiny::isolate(r$heatOn))) return(NULL)
-  #The surface on screen belongs to the previous bin and is now mislabelled, so
-  #it goes at once rather than at the end of the job - the alternative is to
-  #leave midday on the map under a label that says afternoon for as long as the
+  r$heatBin <- bin
+  if(!isTRUE(shiny::isolate(r$heatOn)) || is.null(heatShown)) return(NULL)
+  card  <- heatShown$card
+  entry <- heatStoreGet(heatStore, card, bin, heatAoiKey())
+  if(!is.null(entry)){
+    showHeat(card, bin, entry)
+    return(NULL)
+  }
+  #The map on screen belongs to the previous bin and is now mislabelled, so it
+  #goes at once rather than at the end of the job - the alternative is to leave
+  #midday on the map under a label that says afternoon for as long as the
   #recompute takes, which is the exact confusion this observer exists to avoid.
+  #The card keeps its red border; no icon is lit until the new map exists.
   clearHeat()
-  computeHeat(function(ok){
-    if(isTRUE(ok)){
-      #Still on? The switch and this select are both shut while the job runs, so
-      #the user cannot have turned it off - but a re-render can, and does: the
-      #context 4 render drops r$heatOn because the surface does not survive a new
-      #map instance. Drawing anyway would put one on screen with the switch up
-      #and the brush live beside it, which is the pair the render exists to keep
-      #apart.
-      if(isTRUE(shiny::isolate(r$heatOn))) drawHeat()
+  heatShown <<- list(card = card, bin = bin)
+  sendHeatIcons(card)
+  computeHeat(card, function(entry){
+    #Still on? The switch and this select are both shut while the job runs, so
+    #the user cannot have turned it off - but a re-render can, and does: the
+    #context 4 render drops r$heatOn because the surface does not survive a new
+    #map instance. Drawing anyway would put one on screen with the switch up
+    #and the brush live beside it, which is the pair the render exists to keep
+    #apart.
+    if(!isTRUE(shiny::isolate(r$heatOn))) return(invisible(NULL))
+    if(!is.null(entry)){
+      showHeat(card, bin, entry)
     }else{
       #nothing to show for this bin - drop the read-out rather than leave the
       #switch claiming a surface that is not there
-      r$heatOn <- FALSE
-      shinyjs::removeClass("heatSwitch", "paintToolActive")
-      applyPaintGates()
+      hideHeat()
     }
   })
+}, ignoreInit = TRUE)
+
+# A HEAT ICON ON A CARD: draw that card's map at that time of day, or take it
+# down if it is the one already up.
+#
+# The selected card does not change. Painting is refused while heat is on, so
+# nothing on the page acts on the selection while a map is up, and selecting
+# would re-render the map for nothing. The select is moved to the icon's bin
+# first, through r$heatBin, so that its observer finds the value unchanged when
+# the update comes back and leaves the map alone.
+shiny::observeEvent(input$heatIconClick, {
+  msg  <- input$heatIconClick
+  card <- msg$card
+  bin  <- msg$bin
+  if(!is.character(card) || length(card) != 1 || !isTRUE(bin %in% HEAT_BINS)) return(NULL)
+  if(!isTRUE(shiny::isolate(input$contextChoice) == 4) || isTRUE(heatBusy)) return(NULL)
+  if(is.null(heatCardPos(card))) return(NULL)
+
+  if(identical(heatShown, list(card = card, bin = bin))){
+    hideHeat()
+    return(NULL)
+  }
+  entry <- heatStoreGet(heatStore, card, bin, heatAoiKey())
+  if(is.null(entry)){
+    #went stale since the strip was drawn - redraw it without this icon
+    sendHeatIcons(card)
+    return(NULL)
+  }
+  r$heatBin <- bin
+  shiny::updateSelectInput(inputId = "heatBin", selected = bin)
+  showHeat(card, bin, entry)
 }, ignoreInit = TRUE)
 
 
@@ -1944,10 +2110,12 @@ shiny::observeEvent(input$paintReset, {
   if(is.null(pos) || pos < 1 || pos > length(shiny::isolate(r$networkList))) return(NULL)
   r$networkList[[pos]]$paintedRaster <- NULL
   r$networkList[[pos]]$canopyRaster  <- NULL
-  #the cached heat describes a design that no longer exists; drop it so the next
-  #switch-on recomputes rather than showing the erased scenario back to the user
-  r$heatRaster <- NULL
-  if(isTRUE(shiny::isolate(r$heatOn))) clearHeat()
+  #back to the unpainted scenario: the maps computed on it apply again, and the
+  #ones computed on paint that is now gone stay stale. (Reset is shut while heat
+  #is on, so there is no map on screen to take down.)
+  card <- heatCardKey(pos)
+  heatStoreReset(heatStore, card)
+  sendHeatIcons(card)
   session$sendCustomMessage("paint-reset", list(version = pos))
   message("paint: reset version ", pos, " to the land cover baseline")
 }, ignoreInit = TRUE)
@@ -1994,16 +2162,22 @@ observeEvent(input$paintCells, {
     #owns the data, since a custom message can be fired from a console.
     if(pos == 1) return(NULL)
 
+    wrote <- FALSE
     for(fld in c("paintedRaster", "canopyRaster")){
       runs <- if(fld == "canopyRaster") delta$canopy else delta$ground
       if(is.null(runs) || length(runs) == 0) next
       r$networkList[[pos]][[fld]] <- applyPaintRuns(
         shiny::isolate(r$networkList[[pos]][[fld]]), runs
       )
-      #the cached heat now describes a design that no longer exists - the same
-      #invalidation the reset does, and what the Heat switch reads to decide
-      #whether it has to recompute
-      r$heatRaster <- NULL
+      wrote <- TRUE
+    }
+    #this scenario's stored heat maps now describe a design that no longer
+    #exists: stale, their icons gone, and what the Heat switch reads to decide
+    #whether it has to recompute. Kept rather than dropped - see heatStoreReset().
+    if(wrote){
+      card <- heatCardKey(pos)
+      heatStoreBump(heatStore, card)
+      sendHeatIcons(card)
     }
 
     session$sendCustomMessage("paint-cells-ack", list(seq = delta$seq))
@@ -2043,6 +2217,7 @@ observeEvent(input$paintImport, {
       return(NULL)
     }
 
+    wrote <- FALSE
     for(fld in c("paintedRaster", "canopyRaster")){
       uri   <- if(fld == "canopyRaster") msg$canopy else msg$ground
       patch <- paintDecodeClassPNG(uri, col0, rowTop, w, h)
@@ -2050,7 +2225,13 @@ observeEvent(input$paintImport, {
       r$networkList[[pos]][[fld]] <- paintApplyPatch(
         shiny::isolate(r$networkList[[pos]][[fld]]), patch
       )
-      r$heatRaster <- NULL
+      wrote <- TRUE
+    }
+    #stale heat, exactly as a stroke makes it
+    if(wrote){
+      card <- heatCardKey(pos)
+      heatStoreBump(heatStore, card)
+      sendHeatIcons(card)
     }
     message(sprintf("paint: plan import on version %d, %g x %g cells", pos, w, h))
     session$sendCustomMessage("paint-import-ack", list(seq = msg$seq))
@@ -2164,6 +2345,8 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
   if(is.null(sel) || !nzchar(sel)) sel <- HEAT_BIN_DEFAULT
   shiny::updateSelectInput(inputId = "heatBin",
                            choices = heatBinChoices(i18n()), selected = sel)
+  #the heat icons' tooltips are the same labels, in markup built on the server
+  sendHeatIcons()
 })
 ##Observe end of render ####
       #observe event when map finishes rendering
@@ -2328,8 +2511,11 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
       #or not it happens to be the one selected.
       #`provisional`: the default name seedNewVersion() gave the card, which the
       #user may still replace - see versionLabel() and the rename observer.
+      #`heatBins`: the time-of-day bins this scenario holds a valid heat map for,
+      #drawn as icons at the card's foot - baked in, for the same reason as the
+      #border. The strip goes in even when empty; sendHeatIcons() replaces it.
       appendVersion <- function(name, inputId_removal, inputId_select, id_ui_name, isStart = TRUE,
-                                selected = FALSE, provisional = FALSE){
+                                selected = FALSE, provisional = FALSE, heatBins = character(0)){
 
         label <- versionLabel(name, inputId_select, provisional)
 
@@ -2339,6 +2525,7 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
           ui = shiny::tags$div(id = id_ui_name,
                         shiny::div(style = "height: 5px"),
 
+                        shiny::tags$div(class = "vftCard",
                         if(isTRUE(selected)){
                           if(isStart == TRUE){
                             shinyjs::disabled(
@@ -2358,6 +2545,9 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
                           }
 
                         },
+                        heatIconsTag(inputId_select, heatBins, i18n = shiny::isolate(i18n()),
+                                     ns = session$ns)
+                        ),
                         if(name != "Original"){
                           if(isStart == TRUE){
                             shinyjs::disabled(
@@ -2410,6 +2600,10 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
 
             #keep track of removed UI
             r$versionsUI[[name]] <- NULL
+
+            #its heat maps go with it - taken off the map first if one is up
+            if(identical(heatShown$card, inputId_select)) hideHeat()
+            heatStoreDrop(heatStore, inputId_select)
 
             #the card that was just deleted cannot be the one either page opens
             #on. vftVersionPosition() would fall back to the first card anyway,
@@ -2636,7 +2830,9 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
                          inputId_removal = r$versionsUI[[i]]$inputId_removal,
                          id_ui_name = r$versionsUI[[i]]$id_ui_name,
                          selected = (i == pos),
-                         provisional = isTRUE(r$versionsUI[[i]]$provisional))
+                         provisional = isTRUE(r$versionsUI[[i]]$provisional),
+                         heatBins = heatStoreValidBins(heatStore, r$versionsUI[[i]]$inputId_select,
+                                                       heatAoiKey()))
         }
 
         #the button the select observer un-greens when another card is clicked.
@@ -5192,6 +5388,12 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
       #button numbering, and it names the card generateVersionButtons() selects.
       applyFirstRun()
       seeded <- seedNewVersion()
+      #heat maps of cards that no longer exist, and the record of a map on a map
+      #instance this visit is about to replace
+      heatStoreDrop(heatStore, setdiff(ls(heatStore, all.names = TRUE),
+                                       vapply(r$versionsUI, function(v) v$inputId_select,
+                                              character(1))))
+      heatShown <<- NULL
       generateVersionButtons()
 
       #--- 6. redraw. output$versionMap reads r$updateRender and

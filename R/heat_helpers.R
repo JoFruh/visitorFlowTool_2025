@@ -466,6 +466,139 @@ heatBinChoices <- function(i18n = NULL){
                          character(1)))
 }
 
+#' HEAT MAPS KEPT PER SCENARIO.
+#'
+#' A heat map costs seconds in a daemon, so every one computed on the
+#' newVersions page is kept for the scenario it describes, one slot per time of
+#' day, and the scenario's card shows an icon for each one that still applies.
+#'
+#' `store[[card]] = list(rev = <int>, maps = list(<bin> = entry))`, keyed by the
+#' card's `inputId_select`: it survives a rename, where a position does not
+#' survive a deletion. An entry is `list(heat, proj, rev, base, aoi)`:
+#'
+#'   - `rev`  the scenario's paint revision when the job was dispatched. Every
+#'            stroke or import bumps the scenario's revision, so a map is valid
+#'            only while the two agree. It is NOT removed when it goes stale.
+#'   - `base` TRUE when the scenario was unpainted at dispatch. Reset returns a
+#'            scenario to exactly that state, so heatStoreReset() revives these
+#'            entries and only these - a map computed on painted cells describes
+#'            a design Reset does not bring back.
+#'   - `aoi`  paintBaselineKey() of the study area, so a changed perimeter never
+#'            validates a map of the old one.
+#'
+#' A plain environment, outside `r` and outside the scenario list: it holds work
+#' already done and never takes part in reactive invalidation, and the scenario
+#' list is saved, mirrored and shipped to daemons, none of which a SpatRaster
+#' survives. The revision is what decides staleness, not the presence of a map.
+heatStoreNew <- function() new.env(parent = emptyenv())
+
+heatStoreSlot <- function(s, key){
+  x <- if(is.null(key)) NULL else s[[key]]
+  if(is.null(x)) list(rev = 0L, maps = list()) else x
+}
+
+#' Keep `entry` for `key`'s `bin`, replacing whatever was there - stale or not.
+heatStorePut <- function(s, key, bin, entry){
+  if(is.null(key)) return(invisible(NULL))
+  x <- heatStoreSlot(s, key)
+  x$maps[[bin]] <- entry
+  s[[key]] <- x
+  invisible(NULL)
+}
+
+#' The scenario's current paint revision, which a job records at dispatch.
+heatStoreRev <- function(s, key) heatStoreSlot(s, key)$rev
+
+#' The scenario was painted on: every map it holds is now stale.
+#'
+#' Bumped whether or not anything is stored yet, so that a job already in
+#' flight comes back stale rather than valid.
+heatStoreBump <- function(s, key){
+  if(is.null(key)) return(invisible(NULL))
+  x <- heatStoreSlot(s, key)
+  x$rev <- x$rev + 1L
+  s[[key]] <- x
+  invisible(NULL)
+}
+
+#' The scenario went back to the unpainted land cover: a new revision, in which
+#' the maps that were computed unpainted are valid again.
+heatStoreReset <- function(s, key){
+  if(is.null(key)) return(invisible(NULL))
+  heatStoreBump(s, key)
+  x <- s[[key]]
+  for(b in names(x$maps)){
+    if(isTRUE(x$maps[[b]]$base)) x$maps[[b]]$rev <- x$rev
+  }
+  s[[key]] <- x
+  invisible(NULL)
+}
+
+#' The map for `key` at `bin`, or NULL when there is none or it is stale.
+heatStoreGet <- function(s, key, bin, aoi){
+  if(is.null(key) || is.null(bin)) return(NULL)
+  x <- heatStoreSlot(s, key)
+  e <- x$maps[[bin]]
+  if(is.null(e) || !identical(e$rev, x$rev) || !identical(e$aoi, aoi)) return(NULL)
+  e
+}
+
+#' The time-of-day bins `key` holds a valid map for, in HEAT_BINS order.
+heatStoreValidBins <- function(s, key, aoi){
+  HEAT_BINS[vapply(HEAT_BINS, function(b) !is.null(heatStoreGet(s, key, b, aoi)),
+                   logical(1))]
+}
+
+#' Forget `keys` altogether (a deleted card), or everything when `keys` is NULL.
+heatStoreDrop <- function(s, keys = NULL){
+  if(is.null(keys)) keys <- ls(s, all.names = TRUE)
+  keys <- intersect(keys, ls(s, all.names = TRUE))
+  if(length(keys)) rm(list = keys, envir = s)
+  invisible(NULL)
+}
+
+#' Colours of the three time-of-day icons: the sun warms through the day.
+HEAT_BIN_ICON_COLORS <- c(morning = "#FFF08A", midday = "#FFD000", afternoon = "#FF9500")
+
+#' A sun over a horizon, placed where it stands at `bin`: low in the east for
+#' morning, high for midday, low in the west for afternoon. Drawing rather than a
+#' stock icon because morning and afternoon differ only in azimuth - which is
+#' also all that tells the two bins apart in the model.
+heatBinIconSVG <- function(bin){
+  pos <- switch(bin, morning = c(7, 13), midday = c(12, 7), afternoon = c(17, 13))
+  sprintf(paste0('<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">',
+                 '<circle cx="%g" cy="%g" r="5.2" fill="%s" stroke="#8a6d00" stroke-width="1.2"/>',
+                 '<line x1="1.5" y1="19" x2="22.5" y2="19" stroke="#555" stroke-width="2.2" stroke-linecap="round"/>',
+                 '</svg>'),
+          pos[1], pos[2], HEAT_BIN_ICON_COLORS[[bin]])
+}
+
+#' The strip of heat icons at the foot of a scenario card.
+#'
+#' One round button per bin in `bins`; `shown` is the bin on the map, if it is
+#' this card's. All the clicks go to ONE input, `ns("heatIconClick")`, carrying
+#' the card and the bin - a per-card input would bring back the trap where
+#' removeUI() leaves a card's input value behind for the next visit's observer.
+#' The strip is always emitted, empty or not, so the browser has something to
+#' replace when a map arrives or goes stale.
+heatIconsTag <- function(card, bins, shown = NULL, i18n = NULL, ns = identity){
+  labels <- stats::setNames(names(heatBinChoices(i18n)), HEAT_BINS)
+  input  <- ns("heatIconClick")
+  shiny::tags$div(
+    class = "vftHeatIcons", `data-card` = card,
+    lapply(bins, function(b){
+      shiny::tags$button(
+        type  = "button",
+        class = paste(c("vftHeatIcon", if(identical(b, shown)) "vftHeatShown"), collapse = " "),
+        title = labels[[b]],
+        `data-bin` = b,
+        onclick = sprintf(paste0("event.stopPropagation(); Shiny.setInputValue('%s', ",
+                                 "{card: '%s', bin: '%s', n: Date.now()}, {priority: 'event'});"),
+                          input, card, b),
+        shiny::HTML(heatBinIconSVG(b)))
+    }))
+}
+
 #' A cache for repeated heatRaster() calls over one area.
 #'
 #' Hand the same environment back on every call and each term is recomputed only

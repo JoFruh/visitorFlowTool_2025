@@ -745,7 +745,22 @@
 
   function scheduleFlush() {
     if (state.flushTimer) clearTimeout(state.flushTimer);
+    else markHeatStale();
     state.flushTimer = setTimeout(flush, FLUSH_IDLE);
+  }
+
+  /* The first cell since the last flush makes the painted card's stored heat
+   * maps stale, and the server will say so - but only once this flush lands,
+   * up to FLUSH_IDLE after the stroke ends. So the card's heat icons go now.
+   * The server's reply replaces the strip and is the one that counts.
+   * The card is found by position, which is what state.version is: the cards
+   * are in scenario order, while `.selected` is never taken off a card that
+   * loses the selection and so can match more than one. */
+  function markHeatStale() {
+    var cards = document.querySelectorAll("#placeholder .vftCard");
+    var card  = cards[state.version - 1];
+    var strip = card && card.querySelector(".vftHeatIcons");
+    if (strip) strip.classList.add("vftHeatStale");
   }
 
   /* Send everything painted since the last flush.
