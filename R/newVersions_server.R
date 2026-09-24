@@ -1153,6 +1153,10 @@ if(is.null(r$updateNetworkPlot)){
         #button's own observers own the reactions to both reads.
         conflictsNow <- shiny::isolate(if(isTRUE(r$conflictsOn)) conflictsHere() else NULL)
         if(!is.null(conflictsNow)) map <- addConflictCircles(map, conflictsNow)
+        #and the Original's, likewise (see "SHOW THE ORIGINAL'S CONFLICTS")
+        conflictsOrigNow <- shiny::isolate(if(isTRUE(r$conflictsOrigOn))
+          vftScenarioConflicts(originalScenario(), conflictKey()) else NULL)
+        if(!is.null(conflictsOrigNow)) map <- addConflictOrigCircles(map, conflictsOrigNow)
 
         #add or remove dummy group (this is to trigger an observer that determines when the map finished rendering)
         #in isolation to avoid linking input$versionMap_groups
@@ -5198,6 +5202,138 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
           if(on) addConflictCircles(proxy, h)
         }, ignoreInit = TRUE)
 
+        # SHOW THE ORIGINAL'S CONFLICTS ####
+        #
+        #The same question asked of the Original's simulation, whichever card is
+        #selected - so an edited scenario can be read against the conflicts the
+        #unchanged network produces. Its own toggle (r$conflictsOrigOn), group
+        #("conflictOrig") and colour, so both sets can be up at once.
+        #
+        #The Original is networkList[[1]] and is read-only on this page, so its
+        #pathUsage only ever changes in step 5, whose re-simulation clears its
+        #`conflicts` - the validity rules are vftScenarioConflicts()' own.
+        #
+        #Unlike the button above, this one COMPUTES when there is nothing stored:
+        #step 5's search runs on the selected scenario only, and asking the user
+        #to go back, select the Original and search there just to enable this
+        #would be a detour for a question the page can answer itself. The result
+        #goes onto the Original like step 5's does, so it is only paid once per
+        #simulation and matrix, and step 5 benefits too.
+
+        #the Original, or NULL
+        originalScenario <- function(){
+          nl <- r$networkList
+          if(is.null(nl) || !length(nl)) NULL else nl[[1]]
+        }
+
+        #a search is in flight. `conflictVisit` counts visits: the matrix and the
+        #Original's simulation can only change off this page, so a result from
+        #an earlier visit may describe neither and is dropped.
+        conflictOrigBusy <- shiny::reactiveVal(FALSE)
+        conflictVisit    <- 0L
+
+        addConflictOrigCircles <- function(map, h){
+          leaflet::addCircles(map, lng = h$lng, lat = h$lat, radius = h$radius_m,
+                              group = "conflictOrig", color = "#6a1b9a", weight = 3,
+                              opacity = 1, dashArray = "8,6",
+                              fill = TRUE, fillColor = "#6a1b9a", fillOpacity = 0.12,
+                              label = vftTrText(i18n(), "Konflikt Biodiversität–Erholung (Original)"),
+                              options = leaflet::pathOptions(pane = "layer3"))
+        }
+
+        setConflictsOrigOn <- function(on){
+          r$conflictsOrigOn <- on
+          shinyjs::toggleClass(id = "showConflictsOrig", class = "vftConflictOn", condition = on)
+        }
+
+        #Live when there is something to show, or something to compute it from:
+        #a matrix, a simulated Original, and no search already known to have
+        #found nothing. Dead while a search runs.
+        obsConflictOrigState <- shiny::observe({
+          orig   <- originalScenario()
+          key    <- conflictKey()
+          stored <- vftStoredConflicts(orig, key)
+          canRun <- !is.null(key) && !is.null(orig$pathUsage) &&
+                      (is.null(stored) || nrow(stored) > 0)
+          shinyjs::toggleState(id = "showConflictsOrig",
+                               condition = canRun && !conflictOrigBusy())
+          if(!canRun && isTRUE(shiny::isolate(r$conflictsOrigOn))){
+            setConflictsOrigOn(FALSE)
+            leaflet::leafletProxy("versionMap") %>% leaflet::clearGroup("conflictOrig")
+          }
+        })
+
+        obsShowConflictsOrig <- shiny::observeEvent(input$showConflictsOrig, {
+          if(conflictOrigBusy()) return(invisible(NULL))
+
+          if(isTRUE(r$conflictsOrigOn)){
+            setConflictsOrigOn(FALSE)
+            leaflet::leafletProxy("versionMap") %>% leaflet::clearGroup("conflictOrig")
+            return(invisible(NULL))
+          }
+
+          orig  <- originalScenario()
+          smKey <- conflictKey()
+          #greyed out otherwise; this is the console-fired click
+          if(is.null(smKey) || is.null(orig$pathUsage) || is.null(SM_pres)) return(invisible(NULL))
+
+          h <- vftStoredConflicts(orig, smKey)
+          if(!is.null(h)){
+            if(!nrow(h)) return(invisible(NULL))
+            setConflictsOrigOn(TRUE)
+            leaflet::leafletProxy("versionMap") %>% leaflet::clearGroup("conflictOrig") %>%
+              addConflictOrigCircles(h)
+            return(invisible(NULL))
+          }
+
+          #nothing stored: search, as step 5's obsConflict does - only the used
+          #edges and their usage column, and the matrix wrap()ped for the worker
+          vftDbg("OBS CONFLICT ORIGINAL")
+          pt <- sf::st_zm(sf::st_as_sf(dplyr::as_tibble(orig$pathUsage |> tidygraph::activate(edges))),
+                          drop = TRUE, what = "ZM")
+          edges <- pt[is.finite(pt$passage) & pt$passage > 0, "passage"]
+          rm(pt)
+          sm    <- if(inherits(SM_pres, "SpatRaster")) terra::wrap(SM_pres) else SM_pres
+          visit <- conflictVisit
+
+          conflictOrigBusy(TRUE)
+          progress <- vftProgress(message = "Konflikte werden gesucht",
+                                  detail  = vftMsg("Dies sollte weniger als %d Sekunden dauern", 10),
+                                  millis  = 250)
+
+          vftFuture({
+            out <- vftConflictHotspots(sm, edges, "passage")
+            progress$close()
+            out
+          }, seed = TRUE, progress = progress) %...>% (function(hotspots){
+            conflictOrigBusy(FALSE)
+            #left and came back since: another matrix or simulation, maybe
+            if(!identical(visit, conflictVisit)){
+              vftDbg("conflict (Original): page re-entered during the search - result dropped")
+              return(invisible(NULL))
+            }
+
+            #kept on the Original, as step 5 keeps its searches
+            r$networkList[[1]]$conflicts <- list(hotspots = hotspots, smKey = smKey)
+
+            if(!nrow(hotspots)){
+              shiny::showNotification(vftTrText(i18n(), "Kein Konflikt gefunden"),
+                                      type = "message")
+              return(invisible(NULL))
+            }
+
+            #deferUntilFlush = FALSE: a promise callback, see heatProxy()
+            setConflictsOrigOn(TRUE)
+            leaflet::leafletProxy("versionMap", deferUntilFlush = FALSE) %>%
+              leaflet::clearGroup("conflictOrig") %>%
+              addConflictOrigCircles(hotspots)
+            invisible(NULL)
+          }) %...!% (function(e){
+            vftAsyncError(progress, "Konfliktsuche")(e)
+            conflictOrigBusy(FALSE)
+          })
+        }, ignoreInit = TRUE)
+
       # CONFIRM NEW VERSIONS ####
 
       obsConfirm <- shiny::observeEvent( input$newVersionsConfirmButton, {
@@ -5300,6 +5436,8 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
       #starts off on every visit.
       conflictKey(vftConflictKey(SM_pres))
       setConflictsOn(FALSE)
+      setConflictsOrigOn(FALSE)
+      conflictVisit <<- conflictVisit + 1L
       SMcolors      <<- .rx$SMcolors()
       shp_PA        <<- .rx$shp_PA()
       finalPolygons <<- .rx$finalPolygons()

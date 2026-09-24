@@ -277,11 +277,22 @@ vftDbg("UI6")
                                         shiny::tags$style(shiny::HTML(paste(
                                           ".vftConflictBtnWrap { position: absolute; left: 25px; bottom: 25px; z-index: 1000; }",
                                           "#newVersions-showConflicts { background-color: #ffffff; border: 2px solid #c62828; color: #c62828; font-weight: bold; box-shadow: 0 1px 4px rgba(0,0,0,0.3); }",
-                                          "#newVersions-showConflicts.vftConflictOn { background-color: #c62828; color: #ffffff; }"))),
+                                          "#newVersions-showConflicts.vftConflictOn { background-color: #c62828; color: #ffffff; }",
+                                          "#newVersions-showConflictsOrig { margin-left: 8px; background-color: #ffffff; border: 2px dashed #6a1b9a; color: #6a1b9a; font-weight: bold; box-shadow: 0 1px 4px rgba(0,0,0,0.3); }",
+                                          "#newVersions-showConflictsOrig.vftConflictOn { background-color: #6a1b9a; color: #ffffff; }"))),
+                                        #The second button shows the Original's conflicts
+                                        #whichever card is selected, and searches for them if
+                                        #step 5 never did - see "SHOW THE ORIGINAL'S CONFLICTS".
+                                        #Dashed purple on the map too, to read apart from the
+                                        #selected scenario's red.
                                         shiny::div(class = "vftConflictBtnWrap",
                                                    shinyjs::disabled(
                                                      shiny::actionButton(shiny::NS(id, "showConflicts"),
                                                                          label = i18n$t("Konflikte anzeigen"))
+                                                   ),
+                                                   shinyjs::disabled(
+                                                     shiny::actionButton(shiny::NS(id, "showConflictsOrig"),
+                                                                         label = i18n$t("Konflikte im Original anzeigen"))
                                                    ))
 
                                  ),

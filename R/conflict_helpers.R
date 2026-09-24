@@ -48,11 +48,21 @@ vftConflictKey <- function(sm){
 #' nothing is stored too (zero rows) and also comes back NULL: there is nothing
 #' to show.
 vftScenarioConflicts <- function(scenario, smKey){
+  h <- vftStoredConflicts(scenario, smKey)
+  if(is.null(h) || !nrow(h)) return(NULL)
+  h
+}
+
+#' Like vftScenarioConflicts(), but a valid search that found nothing comes
+#' back as its zero-row data.frame rather than NULL - so NULL means "never
+#' searched, or searched on something else", and a caller that would run the
+#' search itself (the newVersions page's Original button) can tell that apart
+#' from "searched, none".
+vftStoredConflicts <- function(scenario, smKey){
   if(!is.list(scenario) || is.null(scenario$pathUsage)) return(NULL)
   cf <- scenario$conflicts
   if(!is.list(cf) || is.null(cf$hotspots) || is.null(smKey)) return(NULL)
   if(!isTRUE(all.equal(cf$smKey, smKey))) return(NULL)
-  if(!nrow(cf$hotspots)) return(NULL)
   cf$hotspots
 }
 
