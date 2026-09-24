@@ -152,6 +152,31 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
       if(is.null(SM_pres)) shinyjs::disable(id = "SMbutton")
     }
 
+    #' Can the conflict button run? It needs both halves of the question: a
+    #' sensitivity matrix and a simulation in the SELECTED scenario.
+    conflictReady <- function(){
+      !is.null(SM_pres) &&
+        selectedNetwork_position <= length(r$networkList) &&
+        !is.null(r$networkList[[selectedNetwork_position]]$pathUsage)
+    }
+
+    #' Unlike applySMState() this one both enables and disables: the button is
+    #' not touched by the map-present observer, so nothing else will. Called at
+    #' the end of plotPathUsage(), which every change of selection, simulation
+    #' or visit goes through.
+    applyConflictState <- function(){
+      if(conflictReady() && !conflictBusy) shinyjs::enable(id = "conflictButton")
+      else shinyjs::disable(id = "conflictButton")
+    }
+
+    #A search runs in a worker, so the map can move on under it. `conflictGen`
+    #counts map redraws - plotPathUsage() bumps it, and every redraw clears the
+    #circles anyway - and a result whose generation is no longer current belongs
+    #to a map that is gone, so it is dropped rather than drawn onto another
+    #scenario. `conflictBusy` keeps the button dead while a search is in flight.
+    conflictGen  <- 0L
+    conflictBusy <- FALSE
+
     #' Offer to go and build one.
     smAskCreate <- function(){
       shiny::showModal(shiny::modalDialog(
@@ -1099,6 +1124,12 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
 
 
       r$refreshMap <- FALSE
+
+      #the selected scenario may have just gained or lost its simulation. Any
+      #conflict circles already went with the clearShapes() / rebuild above, and
+      #a search still in flight now describes a map that is gone.
+      conflictGen <<- conflictGen + 1L
+      applyConflictState()
     # })
     }
 
@@ -1539,6 +1570,8 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
         #insert result into networkList
         r$networkList[[selectedNetwork_position]]$pathUsage <- r$result$pathUsage
         r$networkList[[selectedNetwork_position]]$dayPop <- r$result$dayPop
+        #a conflict search describes the simulation it ran on, not this one
+        r$networkList[[selectedNetwork_position]]$conflicts <- NULL
 
         #update button to reflect presence of pathUsage
         inputid <- r$versionsUI[[selectedNetwork_position]]$inputId_select
@@ -1796,6 +1829,94 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
         }
 
 
+      }, ignoreInit = TRUE)
+
+      #observe conflict button ####
+      #Circles round the places where the most sensitive cells and the most used
+      #paths meet. The all-agents `passage` column, not the one on display, so
+      #the answer does not change with the agent-type or within-AOI filters and
+      #the circles never go stale behind them. They are shapes, so the
+      #clearShapes() / full rebuild in plotPathUsage() removes them whenever the
+      #scenario, its simulation or the language changes.
+      #
+      #The search runs in a worker (1.5 s on a 1M-cell matrix with 50k edges -
+      #too long for the thread every session shares). What crosses over is the
+      #matrix, wrap()ped because a SpatRaster is an external pointer, and only
+      #the used edges with only their usage column: a cell reached by nothing
+      #but unused edges scores 0 and can never qualify, so they change nothing.
+      obsConflict <- shiny::observeEvent(input$conflictButton, {
+        #the button is disabled otherwise; this is the console-fired click
+        if(!conflictReady() || conflictBusy) return(invisible(NULL))
+
+        vftDbg("OBS CONFLICT")
+        pt    <- getPassageTable()
+        edges <- pt[is.finite(pt$passage) & pt$passage > 0, "passage"]
+        sm    <- if(inherits(SM_pres, "SpatRaster")) terra::wrap(SM_pres) else SM_pres
+        gen   <- conflictGen
+        pos   <- selectedNetwork_position
+        #what the stored result will be checked against on the newVersions page
+        smKey <- vftConflictKey(SM_pres)
+
+        conflictBusy <<- TRUE
+        shinyjs::disable(id = "conflictButton")
+        settle <- function(){
+          conflictBusy <<- FALSE
+          applyConflictState()
+        }
+
+        progress <- vftProgress(message = "Konflikte werden gesucht",
+                                detail  = vftMsg("Dies sollte weniger als %d Sekunden dauern", 10),
+                                millis  = 250)
+        t0 <- Sys.time()
+
+        vftFuture({
+          out <- vftConflictHotspots(sm, edges, "passage")
+          progress$close()
+          out
+        }, seed = TRUE, progress = progress) %...>% (function(hotspots){
+          settle()
+          vftDbg(sprintf("conflict: %d circle(s) in %.1f s", nrow(hotspots),
+                         as.numeric(difftime(Sys.time(), t0, units = "secs"))))
+
+          #the map was redrawn while the worker ran - another scenario, a new
+          #simulation, a language change - and these circles describe none of it
+          if(!identical(gen, conflictGen)){
+            vftDbg("conflict: map changed during the search - result dropped")
+            return(invisible(NULL))
+          }
+
+          #kept on the scenario, for the newVersions page to show again - an
+          #empty result too, so that page can tell "searched, none" from "never
+          #searched" if it ever needs to. The generation check above is what
+          #makes `pos` safe: nothing has redrawn, so nothing has re-selected or
+          #re-simulated. See vftScenarioConflicts() for when it stops counting.
+          r$networkList[[pos]]$conflicts <- list(hotspots = hotspots, smKey = smKey)
+
+          #deferUntilFlush = FALSE: a promise callback is not an observer, nothing
+          #here invalidates a reactive an output reads, so a deferred proxy call
+          #would sit in leaflet's queue until the user's next click. See
+          #heatProxy() in newVersions_server.R.
+          proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet",
+                                         deferUntilFlush = FALSE) |>
+            leaflet::clearGroup("conflict")
+
+          if(!nrow(hotspots)){
+            shiny::showNotification(vftTrText(i18n(), "Kein Konflikt gefunden"),
+                                    type = "message")
+            return(invisible(NULL))
+          }
+
+          proxy |> leaflet::addCircles(lng = hotspots$lng, lat = hotspots$lat,
+                                       radius = hotspots$radius_m, group = "conflict",
+                                       color = "red", weight = 3, opacity = 1,
+                                       fill = TRUE, fillColor = "red", fillOpacity = 0.15,
+                                       label = vftTrText(i18n(), "Konflikt Biodiversität–Erholung"),
+                                       options = leaflet::pathOptions(pane = "layer3"))
+          invisible(NULL)
+        }) %...!% (function(e){
+          vftAsyncError(progress, "Konfliktsuche")(e)
+          settle()
+        })
       }, ignoreInit = TRUE)
 
       obsParking <- shiny::observeEvent(input$ParkingCheckbox, {

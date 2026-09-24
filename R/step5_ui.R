@@ -59,6 +59,13 @@ vftDbg("UI6")
                                   shiny::h5( shiny::strong(i18n$t("Andere Informationen anzeigen"))),
 
                                   shiny::checkboxInput(shiny::NS(id, "SMcheckbox"), i18n$t("Sensitivitäts-Matrix")),
+                                  #enabled by applyConflictState() in step5_server.R
+                                  #only while the selected scenario has a simulation
+                                  #AND a sensitivity matrix exists
+                                  shiny::actionButton(shiny::NS(id, "conflictButton"),
+                                                      label = i18n$t("Biodiversitäts-Erholungs-Konflikt finden"),
+                                                      class = "btn-danger btn-sm",
+                                                      style = "margin-bottom: 15px; white-space: normal;"),
                                   shiny::checkboxInput(shiny::NS(id, "aoi"), i18n$t("Zielgebiete")),
                                   shiny::checkboxInput(shiny::NS(id, "onlyAOIcheckbox"), i18n$t("Innerhalb Zielgebiete")),
                                   shiny::checkboxInput(shiny::NS(id, "startingCheckbox"), i18n$t("Agenten Ausgangspunkte")),

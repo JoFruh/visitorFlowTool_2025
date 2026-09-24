@@ -93,6 +93,10 @@ newVersions_server <- function(id, networkList, i18n, currentLang, isFirstRun,
     currentLang   <- NULL
     isFirstRun    <- FALSE
     SM_pres       <- NULL
+    #vftConflictKey() of SM_pres - reactive, unlike the snapshots, because the
+    #conflict button's enabled state has to follow it. See "SHOW
+    #BIODIVERSITY-RECREATION CONFLICTS".
+    conflictKey   <- shiny::reactiveVal(NULL)
     SMcolors      <- NULL
     shp_PA        <- NULL
     finalPolygons <- NULL
@@ -1140,6 +1144,15 @@ if(is.null(r$updateNetworkPlot)){
                                  weight = 5,
                                  options = leaflet::pathOptions(pane = "layer_SM"))
         }
+
+        #THE CONFLICTS ####
+        #Step 5's conflict circles for this scenario, if the user has them
+        #switched on - a re-render starts from an empty map, so a toggle that is
+        #on has to be drawn again here or it would say "on" over nothing. After
+        #the branches for the same reason as the perimeter above. Isolated: the
+        #button's own observers own the reactions to both reads.
+        conflictsNow <- shiny::isolate(if(isTRUE(r$conflictsOn)) conflictsHere() else NULL)
+        if(!is.null(conflictsNow)) map <- addConflictCircles(map, conflictsNow)
 
         #add or remove dummy group (this is to trigger an observer that determines when the map finished rendering)
         #in isolation to avoid linking input$versionMap_groups
@@ -5128,6 +5141,63 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
           }
         })
 
+        # SHOW BIODIVERSITY-RECREATION CONFLICTS ####
+        #
+        #Step 5's "find conflict" search, kept on the scenario it ran on
+        #(r$networkList[[i]]$conflicts) and shown again here. Nothing is
+        #computed on this page: a scenario with no search - or whose search no
+        #longer describes it - leaves the button greyed out. "No longer
+        #describes it" is vftScenarioConflicts()' call (R/conflict_helpers.R):
+        #the scenario has been edited since (every edit here NULLs pathUsage)
+        #or the sensitivity matrix has changed since (conflictKey, set per
+        #visit in enter()).
+        #
+        #A toggle. r$conflictsOn is the user's choice, and it outlives the
+        #map's many re-renders - card switches, context switches, edits - by
+        #being drawn inside the render too (see "THE CONFLICTS" there). This
+        #observer only takes it away, when the scenario on screen has nothing to
+        #show.
+
+        #the conflicts to draw for the selected scenario, or NULL
+        conflictsHere <- function(){
+          nl  <- r$networkList
+          pos <- r$position
+          if(is.null(nl) || is.null(pos) || !length(pos) || pos > length(nl)) return(NULL)
+          vftScenarioConflicts(nl[[pos]], conflictKey())
+        }
+
+        addConflictCircles <- function(map, h){
+          leaflet::addCircles(map, lng = h$lng, lat = h$lat, radius = h$radius_m,
+                              group = "conflict", color = "red", weight = 3, opacity = 1,
+                              fill = TRUE, fillColor = "red", fillOpacity = 0.15,
+                              label = vftTrText(i18n(), "Konflikt Biodiversität–Erholung"),
+                              options = leaflet::pathOptions(pane = "layer3"))
+        }
+
+        setConflictsOn <- function(on){
+          r$conflictsOn <- on
+          shinyjs::toggleClass(id = "showConflicts", class = "vftConflictOn", condition = on)
+        }
+
+        obsConflictState <- shiny::observe({
+          h <- conflictsHere()
+          shinyjs::toggleState(id = "showConflicts", condition = !is.null(h))
+          if(is.null(h) && isTRUE(shiny::isolate(r$conflictsOn))){
+            setConflictsOn(FALSE)
+            leaflet::leafletProxy("versionMap") %>% leaflet::clearGroup("conflict")
+          }
+        })
+
+        obsShowConflicts <- shiny::observeEvent(input$showConflicts, {
+          h <- conflictsHere()
+          #greyed out otherwise; this is the console-fired click
+          if(is.null(h)) return(invisible(NULL))
+          on <- !isTRUE(r$conflictsOn)
+          setConflictsOn(on)
+          proxy <- leaflet::leafletProxy("versionMap") %>% leaflet::clearGroup("conflict")
+          if(on) addConflictCircles(proxy, h)
+        }, ignoreInit = TRUE)
+
       # CONFIRM NEW VERSIONS ####
 
       obsConfirm <- shiny::observeEvent( input$newVersionsConfirmButton, {
@@ -5225,6 +5295,11 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
       currentLang   <<- .rx$currentLang()
       isFirstRun    <<- isTRUE(as.logical(.rx$isFirstRun()))
       SM_pres       <<- .rx$SM_pres()
+      #the matrix step 5's stored conflict searches are checked against. Once
+      #per visit, because SM_pres only changes between visits. The toggle
+      #starts off on every visit.
+      conflictKey(vftConflictKey(SM_pres))
+      setConflictsOn(FALSE)
       SMcolors      <<- .rx$SMcolors()
       shp_PA        <<- .rx$shp_PA()
       finalPolygons <<- .rx$finalPolygons()

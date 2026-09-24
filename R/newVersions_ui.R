@@ -262,7 +262,27 @@ vftDbg("UI6")
 
                                  column(12, class = "vft-nv-mapslot",
 
-                                        shinycssloaders::withSpinner(  leaflet::leafletOutput(shiny::NS(id, "versionMap"), height = 600), type = 3, color = "#069869", color.background = "white" )
+                                        shinycssloaders::withSpinner(  leaflet::leafletOutput(shiny::NS(id, "versionMap"), height = 600), type = 3, color = "#069869", color.background = "white" ),
+
+                                        #CONFLICTS. Shows again the biodiversity-recreation
+                                        #conflicts step 5 found for the selected scenario. On the
+                                        #map, bottom-left, the one corner leaflet leaves free here
+                                        #(zoom top-left, legends top-right, attribution
+                                        #bottom-right). Outside the leafletOutput, not a leaflet
+                                        #control, so it survives the map's re-renders and shinyjs
+                                        #can grey it out. Disabled until the server has checked the
+                                        #selected scenario - see the conflict observers in
+                                        #newVersions_server.R. The column is Bootstrap's
+                                        #position:relative, which is what `absolute` is against.
+                                        shiny::tags$style(shiny::HTML(paste(
+                                          ".vftConflictBtnWrap { position: absolute; left: 25px; bottom: 25px; z-index: 1000; }",
+                                          "#newVersions-showConflicts { background-color: #ffffff; border: 2px solid #c62828; color: #c62828; font-weight: bold; box-shadow: 0 1px 4px rgba(0,0,0,0.3); }",
+                                          "#newVersions-showConflicts.vftConflictOn { background-color: #c62828; color: #ffffff; }"))),
+                                        shiny::div(class = "vftConflictBtnWrap",
+                                                   shinyjs::disabled(
+                                                     shiny::actionButton(shiny::NS(id, "showConflicts"),
+                                                                         label = i18n$t("Konflikte anzeigen"))
+                                                   ))
 
                                  ),
 
