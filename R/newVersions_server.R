@@ -700,6 +700,9 @@ if(is.null(r$updateNetworkPlot)){
           session$sendCustomMessage(type = "set-paint-active", message = paintContext)
           if(paintContext) shinyjs::show(id = "paintColorButtonsDiv")
           else             shinyjs::hide(id = "paintColorButtonsDiv")
+          #the underground switch means nothing without the national layer
+          shinyjs::toggle(id = "ugToggleDiv",
+                          condition = paintContext && file.exists(undergroundPath()))
           #the cards' heat icons belong to this context alone. By selector: the
           #card column's ids are not namespaced. Leaving it takes a shown map's
           #red border and lit switch with it - the layer went with the old map.
@@ -982,7 +985,11 @@ if(is.null(r$updateNetworkPlot)){
               #the heat surface sits above the paint (it is opaque, and it is what
               #you are reading while it is on) but below layer3, so the path
               #network stays visible over it
-              leaflet::addMapPane("heatPane", zIndex = 430)
+              leaflet::addMapPane("heatPane", zIndex = 430)%>%
+              #underground structures: over the paint, so an outline stays
+              #readable on a crown, but under the heat surface it would only
+              #clutter - see ugOnRender()
+              leaflet::addMapPane("ugPane", zIndex = 428)
 
             session$sendCustomMessage(type="set-paint-active", message=TRUE)
 
@@ -1115,6 +1122,10 @@ if(is.null(r$updateNetworkPlot)){
               canopy  = rasterToRuns(paintEdits$canopyRaster)
             ))
             session$sendCustomMessage("set-paint-level", list(canopy = canopyActive))
+
+            #what lies underground in this area, drawn into this map instance
+            #if it is already known, built off the main thread if not
+            if(paintOK) map <- ugOnRender(map, paintAOI)
           }
 
         #THE STUDY PERIMETER ####
@@ -1287,8 +1298,18 @@ armBrush <- function(session, r, id){
 
   showHeightBar(r, ramp, armed)
 
+  #UNDERGROUND OVERRIDES LAST UNTIL THE FAMILY IS ARMED AFRESH. Arming a tree
+  #or a block after some other material clears every "ignore" and the warning
+  #box; a height swatch keeps the base (tree 10 m -> 20 m is still 7), so it
+  #keeps them. Before the early return below, which a re-click of the same
+  #material takes.
+  prevBase <- paintBaseId(shiny::isolate(r$armedPaintId))
+  newBase  <- paintBaseId(armed)
+  if(newBase %in% UG_WARN_BASES && !identical(prevBase, newBase)) ugReset()
+
   if(identical(shiny::isolate(r$armedPaintId), armed)) return(invisible(NULL))
   r$armedPaintId <- armed
+  ugSyncVisibility()
   #only the id travels: the browser already has every material's color and level,
   #including every ramp step's, straight out of PAINT_CATEGORIES
   session$sendCustomMessage("set-paint-color", list(id = armed))
@@ -1681,6 +1702,195 @@ clearHeat <- function(){
     leaflet::removeControl("heatLegend")
   invisible(NULL)
 }
+
+# UNDERGROUND STRUCTURES UNDER THE PAINT ####
+#
+# A tree or a block painted over an underground garage, a tunnel or a culvert is
+# WARNED about, never refused: see R/underground_helpers.R for the data and the
+# arithmetic. What lives here is the session side:
+#
+#   ugSeed      undergroundSeed() of the current study area, NULL until built
+#   ugKey       the area it belongs to (paintBaselineKey()), so a card switch
+#               reuses it and a new area rebuilds it
+#   ugCells     the cells hit since the family was last armed - a SET, so a
+#               stroke flushed in parts or painted over twice counts once
+#   ugIgnored   elements the user chose to ignore: greyed on the overlay,
+#               dropped from the box, silent. Cleared by ugReset(), which
+#               armBrush() calls whenever a tree or block is armed afresh.
+#
+# Per session and never saved: derived from the area and from what the user did
+# since arming, neither of which is scenario state.
+ugSeed    <- NULL
+ugKey     <- NULL
+ugReq     <- 0L
+ugCells   <- NULL
+ugIgnored <- integer(0)
+ugNoDataShown <- character(0)
+
+#sent at once for the same reason as heatProxy(): the build settles in a
+#promise callback, which nothing flushes
+ugProxy <- function()
+  leaflet::leafletProxy("versionMap", session = session, deferUntilFlush = FALSE)
+
+ugLang <- function()
+  tryCatch(shiny::isolate(i18n())$get_translation_language(), error = function(e) "de")
+
+#The overlay is up while a tree or a block is armed - that is when it answers a
+#question - or whenever the switch says so.
+ugVisible <- function(){
+  if(isTRUE(shiny::isolate(input$showUG))) return(TRUE)
+  a <- shiny::isolate(r$armedPaintId)
+  length(a) == 1L && !is.na(a) && paintBaseId(a) %in% UG_WARN_BASES
+}
+
+ugAddPolygons <- function(map, els){
+  if(is.null(els) || !nrow(els)) return(map)
+  tr   <- shiny::isolate(i18n())
+  lang <- ugLang()
+  ign  <- els$ug_id %in% ugIgnored
+  col  <- ifelse(ign, UG_IGNORED_COLOR,
+                 UNDERGROUND_KINDS$color[match(els$kind, UNDERGROUND_KINDS$kind)])
+  lab  <- vapply(seq_len(nrow(els)), function(i)
+    undergroundTooltip(els[i, ], tr, lang, ignored = ign[i]), character(1))
+  leaflet::addPolygons(map, data = els, layerId = paste0("ug_", els$ug_id), group = "ug",
+                       color = col, fillColor = col, weight = 2, opacity = 0.9,
+                       fillOpacity = ifelse(ign, 0.08, 0.2), dashArray = "5 4",
+                       label = lab, options = leaflet::pathOptions(pane = "ugPane"))
+}
+
+ugShowHide <- function(map){
+  if(ugVisible()) leaflet::showGroup(map, "ug") else leaflet::hideGroup(map, "ug")
+}
+
+#the whole overlay, onto the map instance on screen
+ugDraw <- function(){
+  if(is.null(ugSeed)) return(invisible(NULL))
+  ugProxy() %>% leaflet::clearGroup("ug") %>% ugAddPolygons(ugSeed$elements) %>% ugShowHide()
+  invisible(NULL)
+}
+
+#Restyle some elements in place: leaflet replaces a shape that has the same
+#layerId, so this re-adds exactly those polygons with their new colour.
+ugRestyle <- function(ids){
+  if(is.null(ugSeed) || is.null(ugSeed$elements) || !length(ids)) return(invisible(NULL))
+  els <- ugSeed$elements[ugSeed$elements$ug_id %in% ids, ]
+  if(nrow(els)) ugProxy() %>% ugAddPolygons(els) %>% ugShowHide()
+  invisible(NULL)
+}
+
+ugSyncVisibility <- function(){
+  if(is.null(ugSeed) || isFALSE(shiny::isolate(input$contextChoice) == 4)) return(invisible(NULL))
+  ugProxy() %>% ugShowHide()
+  invisible(NULL)
+}
+
+#The warning box, rebuilt from the running set minus what is ignored. One box
+#(id "ugWarn") that is replaced in place, never a stack of them.
+ugShowWarning <- function(){
+  cells <- ugCells
+  if(!is.null(cells)) cells <- cells[!cells$ug_id %in% ugIgnored, ]
+  if(is.null(cells) || !nrow(cells) || is.null(ugSeed)){
+    shiny::removeNotification("ugWarn", session = session)
+    return(invisible(NULL))
+  }
+  ui <- undergroundWarningUI(undergroundSummarise(cells, ugSeed), ugSeed$elements,
+                             ignoreInput = session$ns("ugIgnore"),
+                             tr = shiny::isolate(i18n()), lang = ugLang())
+  shiny::showNotification(ui, id = "ugWarn", duration = NULL, closeButton = TRUE,
+                          type = "warning", session = session)
+  invisible(NULL)
+}
+
+#A flush just landed. `delta` is list(ground, canopy) in the wire format. The
+#box is (re)opened only when an element not already in it is hit: painting on
+#over the same garage should not keep bringing back a box the user closed.
+ugCheck <- function(delta){
+  if(is.null(ugSeed) || is.null(ugSeed$grid)) return(invisible(NULL))
+  new <- undergroundHitCells(delta, ugSeed, ignore = ugIgnored)
+  if(!nrow(new)) return(invisible(NULL))
+  fresh <- !all(new$ug_id %in% ugCells$ug_id)
+  ugCells <<- undergroundMergeCells(ugCells, new)
+  if(fresh) ugShowWarning()
+  invisible(NULL)
+}
+
+ugReset <- function(){
+  had <- ugIgnored
+  ugIgnored <<- integer(0)
+  ugCells   <<- NULL
+  shiny::removeNotification("ugWarn", session = session)
+  if(length(had) && isTRUE(shiny::isolate(input$contextChoice) == 4)) ugRestyle(had)
+  invisible(NULL)
+}
+
+#"Only partly recorded here", once per area: a gated canton's survey returns
+#nothing, and an empty overlay must not read as "nothing underground".
+ugNoDataNotice <- function(){
+  if(is.null(ugSeed) || !isTRUE(ugSeed$noData) || ugKey %in% ugNoDataShown) return(invisible(NULL))
+  ugNoDataShown <<- c(ugNoDataShown, ugKey)
+  shiny::showNotification(
+    vftTrText(shiny::isolate(i18n()),
+              "Unterirdische Bauwerke sind hier nur teilweise erfasst (amtliche Vermessung nicht freigegeben)."),
+    id = "ugNoData", duration = 12, type = "message", session = session)
+  invisible(NULL)
+}
+
+#Called from the context 4 render with the map it is building. A known area is
+#drawn straight into that map - a proxy call from inside the render would
+#address the instance being replaced. A new area is built in a daemon and drawn
+#through the proxy when it lands, unless the user has moved on by then.
+ugOnRender <- function(map, aoi){
+  if(!file.exists(undergroundPath())) return(map)
+  key <- tryCatch(paintBaselineKey(aoi), error = function(e) NULL)
+  if(is.null(key)) return(map)
+  if(identical(key, ugKey)){
+    if(!is.null(ugSeed)){
+      map <- map %>% ugAddPolygons(ugSeed$elements) %>% ugShowHide()
+      ugNoDataNotice()
+    }
+    return(map)
+  }
+  #a new area: nothing from the old one applies
+  ugKey  <<- key
+  ugSeed <<- NULL
+  ugIgnored <<- integer(0)
+  ugCells <<- NULL
+  shiny::removeNotification("ugWarn", session = session)
+  ugReq <<- ugReq + 1L
+  req <- ugReq
+  t0  <- Sys.time()
+  vftFuture({
+    undergroundSeed(aoi)
+  }) %...>% (function(seed){
+    if(!identical(req, ugReq)) return(invisible(NULL))
+    ugSeed <<- seed
+    if(!is.null(seed))
+      message(sprintf("underground: %d elements in this area, built in %.1f s%s",
+                      if(is.null(seed$elements)) 0L else nrow(seed$elements),
+                      as.numeric(difftime(Sys.time(), t0, units = "secs")),
+                      if(isTRUE(seed$noData)) " (partly unreleased survey)" else ""))
+    if(isTRUE(shiny::isolate(input$contextChoice) == 4)){
+      ugDraw()
+      ugNoDataNotice()
+    }
+  }) %...!% (function(e){
+    message("underground: layer failed - ", conditionMessage(e))
+  })
+  map
+}
+
+shiny::observeEvent(input$showUG, {
+  ugSyncVisibility()
+}, ignoreInit = TRUE)
+
+#"Ignorieren" in the warning box
+shiny::observeEvent(input$ugIgnore, {
+  id <- suppressWarnings(as.integer(input$ugIgnore))
+  if(length(id) != 1L || is.na(id)) return(NULL)
+  ugIgnored <<- unique(c(ugIgnored, id))
+  ugRestyle(id)
+  ugShowWarning()
+}, ignoreInit = TRUE)
 
 #HEAT MAPS KEPT PER SCENARIO, AND THE ICONS ON THE CARDS.
 #
@@ -2195,6 +2405,9 @@ observeEvent(input$paintCells, {
       card <- heatCardKey(pos)
       heatStoreBump(heatStore, card)
       sendHeatIcons(card)
+      #a warning must never cost the ack: a throw here would make the browser
+      #resend cells that are already written
+      try(ugCheck(list(ground = delta$ground, canopy = delta$canopy)), silent = FALSE)
     }
 
     session$sendCustomMessage("paint-cells-ack", list(seq = delta$seq))
@@ -2235,6 +2448,7 @@ observeEvent(input$paintImport, {
     }
 
     wrote <- FALSE
+    patches <- list()
     for(fld in c("paintedRaster", "canopyRaster")){
       uri   <- if(fld == "canopyRaster") msg$canopy else msg$ground
       patch <- paintDecodeClassPNG(uri, col0, rowTop, w, h)
@@ -2242,6 +2456,7 @@ observeEvent(input$paintImport, {
       r$networkList[[pos]][[fld]] <- paintApplyPatch(
         shiny::isolate(r$networkList[[pos]][[fld]]), patch
       )
+      patches[[fld]] <- patch
       wrote <- TRUE
     }
     #stale heat, exactly as a stroke makes it
@@ -2249,6 +2464,10 @@ observeEvent(input$paintImport, {
       card <- heatCardKey(pos)
       heatStoreBump(heatStore, card)
       sendHeatIcons(card)
+      #a plan's trees and blocks warn like painted ones; the patch goes through
+      #the stroke format so there is one hit test, not two
+      try(ugCheck(list(ground = rasterToRuns(patches$paintedRaster),
+                       canopy = rasterToRuns(patches$canopyRaster))), silent = FALSE)
     }
     message(sprintf("paint: plan import on version %d, %g x %g cells", pos, w, h))
     session$sendCustomMessage("paint-import-ack", list(seq = msg$seq))
@@ -2364,6 +2583,8 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
                            choices = heatBinChoices(i18n()), selected = sel)
   #the heat icons' tooltips are the same labels, in markup built on the server
   sendHeatIcons()
+  #...and so are the underground outlines' hover labels
+  if(isTRUE(shiny::isolate(input$contextChoice) == 4)) ugDraw()
 })
 ##Observe end of render ####
       #observe event when map finishes rendering
@@ -3598,6 +3819,12 @@ vftDbg("add versions")
 
         # SHAPE WAS CLICKED ####
         obsShapeClick <- shiny::observeEvent(input[["versionMap_shape_click"]], {
+          #every branch below looks the clicked shape up by its id. A shape drawn
+          #without one - the study perimeter's outline - is not something to
+          #edit, and would otherwise fail in the edge lookup (context 1) or the
+          #`group ==` test (context 3).
+          if(is.null(input[["versionMap_shape_click"]]$id)) return(invisible(NULL))
+
           #save map state
           r$mapView <- list(center_lng = input[["versionMap_center"]]$lng,
                                          center_lat = input[["versionMap_center"]]$lat,
@@ -5170,12 +5397,17 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
           vftScenarioConflicts(nl[[pos]], conflictKey())
         }
 
+        #interactive = FALSE: the circles sit in layer3 over the nodes and edges
+        #and would swallow the clicks this page is built on - a node or edge
+        #under one could not be edited, a context-3 map click inside one never
+        #arrived, and a click on one reached obsShapeClick with no id. Drawn
+        #purely as a picture, every click goes through to what is underneath.
+        #No label for the same reason: a tooltip needs pointer events.
         addConflictCircles <- function(map, h){
           leaflet::addCircles(map, lng = h$lng, lat = h$lat, radius = h$radius_m,
                               group = "conflict", color = "red", weight = 3, opacity = 1,
                               fill = TRUE, fillColor = "red", fillOpacity = 0.15,
-                              label = vftTrText(i18n(), "Konflikt Biodiversität–Erholung"),
-                              options = leaflet::pathOptions(pane = "layer3"))
+                              options = leaflet::pathOptions(pane = "layer3", interactive = FALSE))
         }
 
         setConflictsOn <- function(on){
@@ -5237,8 +5469,8 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
                               group = "conflictOrig", color = "#6a1b9a", weight = 3,
                               opacity = 1, dashArray = "8,6",
                               fill = TRUE, fillColor = "#6a1b9a", fillOpacity = 0.12,
-                              label = vftTrText(i18n(), "Konflikt Biodiversität–Erholung (Original)"),
-                              options = leaflet::pathOptions(pane = "layer3"))
+                              #click-through, as addConflictCircles() above
+                              options = leaflet::pathOptions(pane = "layer3", interactive = FALSE))
         }
 
         setConflictsOrigOn <- function(on){

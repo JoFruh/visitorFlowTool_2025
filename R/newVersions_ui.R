@@ -94,7 +94,27 @@ vftDbg("UI6")
                           shiny::column(12, align = "center",
                                         shinyWidgets::prettySwitch(shiny::NS(id, "showAOI"), value = FALSE, label = NULL, width = "150px",
                                                                    bigger = TRUE, fill = TRUE, status = "success", inline = TRUE)
-                          ))
+                          )),
+
+                        #underground structures under the paint - Hitzeminderung
+                        #only, and only where the national layer exists; shown by
+                        #the context 4 render (see ugOnRender() in
+                        #newVersions_server.R). The overlay also appears on its own
+                        #while a tree or a block is armed; this switch keeps it up
+                        #for any other material too.
+                        shinyjs::hidden(shiny::div(id = shiny::NS(id, "ugToggleDiv"),
+                          shiny::fluidRow(
+                            shiny::column(12, align = "center",
+                                          shiny::h5(shiny::strong(i18n$t("Untergrund anzeigen")))
+                            )
+                          ),
+                          shiny::fluidRow(shiny::h5()),
+                          shiny::fluidRow(
+                            shiny::column(12, align = "center",
+                                          shinyWidgets::prettySwitch(shiny::NS(id, "showUG"), value = FALSE, label = NULL, width = "150px",
+                                                                     bigger = TRUE, fill = TRUE, status = "success", inline = TRUE)
+                            ))
+                        ))
                  ),
 
 
