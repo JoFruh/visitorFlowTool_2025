@@ -101,7 +101,13 @@
     seq:          0,
     flushTimer:   null,
     lastLoad:     null,
-    LayerClass:   null
+    LayerClass:   null,
+    //underground elements the brush stops at (R's undergroundMaskRuns()):
+    //rows maps a global row to its runs [colStart, colEnd, elementId], sorted.
+    //warn maps each category id that stops to its base (water, tree, block);
+    //ignored elements take paint and are only reported. stop is the element
+    //the current stamp ran into, reported the ids already reported this stroke.
+    ug: { rows: new Map(), warn: {}, ignored: new Set(), stop: null, reported: new Set() }
   };
 
   // ── The painted grid ────────────────────────────────────────────────────────
@@ -651,6 +657,49 @@
     return [activeLevel()];
   }
 
+  // ── Underground elements ───────────────────────────────────────────────────
+
+  function toArray(x) { return x == null ? [] : [].concat(x); }
+
+  /* An element under the brush. One that is not ignored stops the stroke (the
+   * caller ends it and reports it); an ignored one is reported once per stroke,
+   * so R can say it was painted over. */
+  function noteUgHit(id, base, ignored) {
+    if (!ignored) {
+      if (!state.ug.stop) state.ug.stop = { id: id, base: base };
+      return;
+    }
+    if (state.ug.reported.has(id)) return;
+    state.ug.reported.add(id);
+    reportUgHit({ id: id, base: base }, true);
+  }
+
+  function reportUgHit(hit, ignored) {
+    Shiny.setInputValue("newVersions-ugHit",
+      { id: hit.id, base: hit.base, ignored: !!ignored, t: Date.now() },
+      { priority: "event" });
+  }
+
+  /* fillRun, minus the cells of any element that is not ignored - paint never
+   * goes over one. The eraser and materials that do not warn are not clipped. */
+  function fillGuarded(grid, row, cs, ce, catId, color, pending) {
+    var base = state.erasing ? null : state.ug.warn[catId];
+    var runs = base ? state.ug.rows.get(row) : null;
+    if (!runs) { grid.fillRun(row, cs, ce, catId, color, pending); return; }
+    var c = cs;
+    for (var i = 0; i < runs.length && c <= ce; i++) {
+      var u = runs[i];
+      if (u[1] < c) continue;
+      if (u[0] > ce) break;
+      var ign = state.ug.ignored.has(u[2]);
+      noteUgHit(u[2], base, ign);
+      if (ign) continue;          //painted with the rest of the run
+      if (u[0] > c) grid.fillRun(row, c, u[0] - 1, catId, color, pending);
+      c = u[1] + 1;
+    }
+    if (c <= ce) grid.fillRun(row, c, ce, catId, color, pending);
+  }
+
   /* Stamp a disc in cell space. Cell centres are at (col+0.5, row+0.5), so the
    * result is exactly the set of grid cells whose centre falls inside the brush -
    * the same binary rule R's raster would have applied. */
@@ -661,7 +710,7 @@
     if (state.brushAtMin || rCells <= 0.5) {
       var r = Math.floor(fr), c = Math.floor(fc);
       if (state.erasing) grid.clearRun(r, c, c, pending);
-      else               grid.fillRun(r, c, c, catId, color, pending);
+      else               fillGuarded(grid, r, c, c, catId, color, pending);
       return;
     }
     var r2 = rCells * rCells;
@@ -678,20 +727,25 @@
       //only the paint grid is ever touched. The baseline underneath is left
       //exactly as decoded - hidden by opaque paint, revealed again by the eraser.
       if (state.erasing) grid.clearRun(row, cs, ce, pending);
-      else               grid.fillRun(row, cs, ce, catId, color, pending);
+      else               fillGuarded(grid, row, cs, ce, catId, color, pending);
     }
   }
 
   /* Stamp along the segment between two pointer samples. Without this, fast
-   * strokes leave gaps wherever the browser skipped a pointermove. */
+   * strokes leave gaps wherever the browser skipped a pointermove.
+   *
+   * Returns the underground element the segment ran into, or null. The stamps
+   * go in order along the segment and stop at the first that met one, so a
+   * fast stroke does not jump an element and carry on beyond it. */
   function stampSegment(map, from, to) {
     var catId = state.categoryId;
     var color = state.colors[catId];
+    state.ug.stop = null;
     //the eraser needs no material, so a missing colour only blocks painting
-    if ((!color && !state.erasing) || !state.transform) return;
+    if ((!color && !state.erasing) || !state.transform) return null;
 
     var rCells = (state.brushRadius * metresPerPixel(map, to.x, to.y)) / state.res;
-    if (!(rCells > 0)) return;
+    if (!(rCells > 0)) return null;
 
     var a = containerToCell(map, from.x, from.y);
     var b = containerToCell(map, to.x, to.y);
@@ -703,15 +757,17 @@
     //level: rubbing out a building should not also clear the canopy above it
     //unless that is the level you are on
     var levels = state.erasing ? [activeLevel()] : targetLevels(catId);
+    for (var i = 1; i <= steps && !state.ug.stop; i++) {
+      var t = i / steps;
+      levels.forEach(function (level) {
+        stampDisc(level, a.c + dc * t, a.r + dr * t, rCells, catId, color, state.pending[level]);
+      });
+    }
     levels.forEach(function (level) {
-      var pending = state.pending[level];
-      for (var i = 1; i <= steps; i++) {
-        var t = i / steps;
-        stampDisc(level, a.c + dc * t, a.r + dr * t, rCells, catId, color, pending);
-      }
       if (state.layers[level]) state.layers[level].requestRedraw();
     });
-    scheduleFlush();
+    if (state.pending.ground.size || state.pending.canopy.size) scheduleFlush();
+    return state.ug.stop;
   }
 
   // ── Sending deltas to R ─────────────────────────────────────────────────────
@@ -875,6 +931,17 @@
       return L.point(e.clientX - rect.left, e.clientY - rect.top);
     }
 
+    /* The stroke ran into an underground element: it ends here, as if the
+     * button had been released, and R explains. A new stroke may start at once;
+     * one that touches the element again stops again. */
+    function stopAtUg(e, hit) {
+      painting = false;
+      if (e && e.pointerId != null && el.hasPointerCapture && el.hasPointerCapture(e.pointerId)) {
+        el.releasePointerCapture(e.pointerId);
+      }
+      reportUgHit(hit, false);
+    }
+
     el.addEventListener("contextmenu", function (e) { e.preventDefault(); });
 
     el.addEventListener("pointerdown", function (e) {
@@ -898,8 +965,10 @@
       }
       el.setPointerCapture(e.pointerId);
       painting = true;
+      state.ug.reported = new Set();
       last = pt(e);
-      stampSegment(map, last, last);
+      var hit = stampSegment(map, last, last);
+      if (hit) stopAtUg(e, hit);
     });
 
     el.addEventListener("pointermove", function (e) {
@@ -913,8 +982,9 @@
       if (!painting || !state.active) return;
       e.preventDefault(); e.stopPropagation();
       var now = pt(e);
-      stampSegment(map, last, now);
+      var hit = stampSegment(map, last, now);
       last = now;
+      if (hit) stopAtUg(e, hit);
     });
 
     function endPointer(e) {
@@ -1423,6 +1493,27 @@
     flush();
     state.categoryId = msg.id;
     updateCursor();
+  });
+
+  /* The underground elements of this area, which materials stop at them and
+   * which are ignored. R sends an empty mask for an area still being built. */
+  on("ug-mask", function (msg) {
+    var rows = new Map(), r = toArray(msg && msg.runs);
+    for (var i = 0; i + 3 < r.length; i += 4) {
+      var list = rows.get(r[i]);
+      if (!list) { list = []; rows.set(r[i], list); }
+      list.push([r[i + 1], r[i + 1] + r[i + 2] - 1, r[i + 3]]);
+    }
+    rows.forEach(function (list) { list.sort(function (a, b) { return a[0] - b[0]; }); });
+    var warn = {}, ids = toArray(msg && msg.warnIds), bases = toArray(msg && msg.warnBase);
+    ids.forEach(function (id, k) { warn[id] = bases[k]; });
+    state.ug.rows    = rows;
+    state.ug.warn    = warn;
+    state.ug.ignored = new Set(toArray(msg && msg.ignored));
+  });
+
+  on("ug-ignored", function (msg) {
+    state.ug.ignored = new Set(toArray(msg && msg.ids));
   });
 
   on("set-brush-radius", function (radius) {

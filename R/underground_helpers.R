@@ -6,10 +6,13 @@
 #' reads it for one study area and answers, per brush stroke, which of them the
 #' stroke put a tree or a block on top of.
 #'
-#' WARN ONLY. Nothing here alters or refuses paint. The user sees which element
-#' was hit, how much of it and - where the data has it - how deep it lies, and
-#' may ignore that one element (newVersions_server.R keeps the list and resets
-#' it whenever a tree or block is armed afresh).
+#' THE BRUSH STOPS AT AN ELEMENT. undergroundMaskRuns() hands the browser the
+#' element cells, and paintbrush.js clips every stroke of a warning material
+#' at them and ends the stroke there; the user is told what they were doing and
+#' over what, and may ignore that one element, after which paint goes over it
+#' (newVersions_server.R keeps the list and resets it whenever a warning
+#' material is armed afresh). A plan import is not a stroke and is not clipped:
+#' undergroundHitCells() only warns about what it covered.
 #'
 #' DEPTH. Only structures that come from a swissTLM3D 3D line carry one: the
 #' floor (road, track, stream bed) under the terrain, measured per 20 m piece.
@@ -17,11 +20,11 @@
 #' the structure. Underground BUILDINGS have no depth anywhere in the national
 #' data, and the warning says so rather than guessing.
 
-#' Base materials that warn: tree (7) and block (8). Literal on purpose - a
-#' top-level expression reading PAINT_CATEGORIES would run before
+#' Base materials that warn: water (5), tree (7) and block (8). Literal on
+#' purpose - a top-level expression reading PAINT_CATEGORIES would run before
 #' paintbrush_helpers.R is sourced (files load alphabetically), which fails the
 #' whole package load. Artificial canopy (6) is excluded by the user's choice.
-UG_WARN_BASES <- c(7L, 8L)
+UG_WARN_BASES <- c(5L, 7L, 8L)
 
 #' Floor depth past which a tunnel or culvert stops mattering to what is planted
 #' or built above it. A road tunnel's floor at 15 m leaves ~8 m of cover over its
@@ -30,21 +33,29 @@ UG_WARN_BASES <- c(7L, 8L)
 #' dropped - an unknown depth always warns.
 UG_MAX_DEPTH_M <- 15
 
-#' The kinds of element, their i18n key (German literal, ASCII like the rest of
-#' the translation table) and the overlay colour.
+#' The kinds of element and their i18n key (German literal, ASCII like the rest
+#' of the translation table).
 UNDERGROUND_KINDS <- data.frame(
   kind  = c("garage", "building", "road_tunnel", "rail_tunnel", "tunnel",
             "underpass", "culvert", "reservoir"),
   label = c("Tiefgarage", "Unterirdisches Bauwerk", "Strassentunnel", "Bahntunnel",
             "Tunnel/Unterfuehrung", "Unterfuehrung", "Eingedoltes Gewaesser",
             "Reservoir"),
-  color = c("#d95f02", "#e6ab02", "#7570b3", "#7570b3", "#7570b3",
-            "#e7298a", "#1f78b4", "#1f78b4"),
   stringsAsFactors = FALSE
 )
 
-#' Colour of an element the user chose to ignore.
-UG_IGNORED_COLOR <- "#9e9e9e"
+#' Overlay colour of every element, whatever its kind - the hover label names
+#' the kind - and of one the user chose to ignore. The ignored grey is also the
+#' "Element ignored" button's, the dark one the "Ignore" button's, so the box
+#' and the map speak the same code.
+UG_COLOR         <- "#555555"
+UG_IGNORED_COLOR <- "#c8c8c8"
+
+#' What the user was doing, per warning base: the sentence of the warning,
+#' with %s where the element's name goes (in bold). German literal keys.
+UG_DOING <- c("5" = "Sie platzieren Wasser ueber einem unterirdischen Bauwerk: %s.",
+              "7" = "Sie pflanzen Baeume ueber einem unterirdischen Bauwerk: %s.",
+              "8" = "Sie bauen ueber einem unterirdischen Bauwerk: %s.")
 
 #' GWR building classes (GKLAS), short labels. An AV underground object often
 #' carries the EGID of the building it belongs to, so its class says what the
@@ -125,8 +136,10 @@ undergroundSeed <- function(aoi, buffer_m = 250, path = undergroundPath(),
 
   cov <- try(sf::st_read(path, layer = "coverage", wkt_filter = wkt, quiet = TRUE),
              silent = TRUE)
+  #OSM stands in for a gated canton's survey but is far from complete, so it
+  #still counts as "partly recorded"
   noData <- !inherits(cov, "try-error") && nrow(cov) > 0 &&
-    any(cov$status == "tlm_only" & lengths(sf::st_intersects(cov, shp)) > 0)
+    any(cov$status %in% c("tlm_only", "osm") & lengths(sf::st_intersects(cov, shp)) > 0)
 
   empty <- list(elements = NULL, grid = NULL, id = integer(0), depth = numeric(0),
                 noData = noData)
@@ -253,6 +266,30 @@ undergroundSeed <- function(aoi, buffer_m = 250, path = undergroundPath(),
   })
 }
 
+#' The element cells as runs for the browser's brush: a flat integer vector
+#' (row, colStart, count, ug_id, ...) in the global grid indices the brush and
+#' the paint wire format use. Runs never cross a grid row, and NA is left out,
+#' so the vector's length follows the elements' outlines, not the grid's size.
+undergroundMaskRuns <- function(seed){
+  if(is.null(seed) || is.null(seed$grid) || !length(seed$id)) return(integer(0))
+  g <- seed$grid
+  v <- seed$id
+  v[is.na(v)] <- 0L
+  n <- length(v)
+  start <- c(TRUE, v[-1L] != v[-n]) | ((seq_len(n) - 1L) %% g$ncol == 0L)
+  s   <- which(start)
+  len <- diff(c(s, n + 1L))
+  ids <- v[s]
+  keep <- ids != 0L
+  if(!any(keep)) return(integer(0))
+  s <- s[keep]; len <- len[keep]; ids <- ids[keep]
+  ri <- (s - 1L) %/% g$ncol + 1L
+  ci <- (s - 1L) %% g$ncol + 1L
+  row <- as.integer(round(g$ymax / g$res)) - ri
+  col <- ci + as.integer(round(g$xmin / g$res)) - 1L
+  as.integer(rbind(row, col, len, ids))
+}
+
 #' The cells of a brush flush that carry a warning material, as global grid
 #' indices. `runsByCat` is the wire format applyPaintRuns() reads:
 #' list(list(id, runs = c(row, colStart, count, ...)), ...).
@@ -368,44 +405,53 @@ undergroundTooltip <- function(el, tr = NULL, lang = "de", ignored = FALSE){
   s
 }
 
-#' The body of the warning box: one row per element, largest first, at most
-#' `max_rows`, each with a link that ignores that element.
+#' The one element a set of hit cells is reported as - the one with the most
+#' cells - and the warning material that covered most of it. NULL for no cells.
+#' Used for a plan import, which can cover several elements at once; a stroke
+#' stops at the first and reports that one.
+undergroundTopHit <- function(cells){
+  if(is.null(cells) || !nrow(cells)) return(NULL)
+  n  <- table(cells$ug_id)
+  id <- as.integer(names(n)[which.max(n)])
+  b  <- table(cells$base[cells$ug_id == id])
+  list(ug_id = id, base = as.integer(names(b)[which.max(b)]))
+}
+
+#' The body of the warning box: what the user is doing, over which element (in
+#' bold), that it is not recommended, and under it the button that ignores the
+#' element - or, once it is ignored, a light grey "Element ignored" in its place.
 #'
-#' `acc` is the running list from undergroundMergeHits(); `elements` the seed's;
-#' `ignoreInput` the namespaced input id the links set.
-undergroundWarningUI <- function(acc, elements, ignoreInput, tr = NULL, lang = "de",
-                                 max_rows = 5){
-  if(is.null(acc) || !nrow(acc)) return(NULL)
-  mat <- function(b) vftTrText(tr, if(b == 7L) "Baum" else "Kuenstlicher Block")
-  ids <- unique(acc$ug_id)
-  tot <- vapply(ids, function(i) sum(acc$m2[acc$ug_id == i]), numeric(1))
-  ids <- ids[order(-tot)]
-  shown <- utils::head(ids, max_rows)
-  rows <- lapply(shown, function(i){
-    a  <- acc[acc$ug_id == i, ]
-    el <- elements[match(i, elements$ug_id), ]
-    lab <- if(nrow(el) && !is.na(el$ug_id)) undergroundLabel(el, tr, lang) else paste("#", i)
-    what <- paste(vapply(seq_len(nrow(a)), function(j)
-      sprintf("%s ≈ %s m²", mat(a$base[j]), format(round(a$m2[j]), big.mark = "'")),
-      character(1)), collapse = ", ")
-    dmin <- suppressWarnings(min(a$dmin, na.rm = TRUE)); dmax <- suppressWarnings(max(a$dmax, na.rm = TRUE))
-    depth <- undergroundDepthText(if(is.finite(dmin)) dmin else NA, if(is.finite(dmax)) dmax else NA, tr)
-    shiny::tags$div(
-      style = "margin: 4px 0;",
-      shiny::tags$b(lab), shiny::tags$br(),
-      what, " · ", depth, " ",
-      shiny::tags$a(href = "#", style = "margin-left: 6px;",
-                    onclick = sprintf("Shiny.setInputValue('%s', %d, {priority: 'event'}); return false;",
-                                      ignoreInput, as.integer(i)),
-                    vftTrText(tr, "Ignorieren"))
-    )
-  })
-  more <- length(ids) - length(shown)
+#' `el` is the element's row of seed$elements (NULL/empty falls back to its id),
+#' `base` the warning base being painted (5, 7, 8), `ignoreInput` the namespaced
+#' input id the button sets.
+undergroundWarningUI <- function(el, id, base, ignored, ignoreInput, tr = NULL, lang = "de"){
+  lab <- if(!is.null(el) && nrow(el) && !is.na(el$ug_id)) undergroundLabel(el, tr, lang)
+         else paste("#", id)
+  key <- UG_DOING[as.character(base)]
+  if(is.na(key)) key <- UG_DOING[["7"]]
+  txt <- vftTrText(tr, key)
+  #"over a Underground car park": English wants the article to follow the name
+  if(identical(lang, "en") && grepl("^[AEIOUaeiou]", lab)) txt <- sub(" a %s", " an %s", txt, fixed = TRUE)
+  parts <- strsplit(txt, "%s", fixed = TRUE)[[1]]
+  if(length(parts) < 2) parts <- c(parts, "")
+  btnStyle <- "margin-top: 8px; border: none; border-radius: 3px; padding: 3px 10px;"
+  btn <- if(ignored){
+    shiny::tags$button(type = "button", disabled = NA,
+                       style = paste0(btnStyle, " background: ", UG_IGNORED_COLOR,
+                                      "; color: #555; cursor: default;"),
+                       vftTrText(tr, "Element ignoriert"))
+  }else{
+    shiny::tags$button(type = "button",
+                       style = paste0(btnStyle, " background: ", UG_COLOR, "; color: #fff;"),
+                       onclick = sprintf("Shiny.setInputValue('%s', %d, {priority: 'event'});",
+                                         ignoreInput, as.integer(id)),
+                       vftTrText(tr, "Dieses Element ignorieren"))
+  }
   shiny::tagList(
-    shiny::tags$div(shiny::tags$b(vftTrText(tr, "Unterirdische Bauwerke unter der Bemalung:"))),
-    rows,
-    if(more > 0) shiny::tags$div(sprintf(vftTrText(tr, "+ %d weitere"), more)),
-    shiny::tags$div(style = "margin-top: 4px; font-size: 90%;",
-                    vftTrText(tr, "Ueberdeckung unbekannt - Pflanzung bzw. Fundation vor Ort pruefen."))
+    #no formatting whitespace around the name: it would render as "garage ."
+    shiny::tags$div(parts[1], shiny::tags$b(lab, .noWS = "outside"),
+                    paste(parts[-1], collapse = "%s")),
+    shiny::tags$div(vftTrText(tr, "Dies wird nicht empfohlen.")),
+    shiny::tags$div(btn)
   )
 }

@@ -18,14 +18,22 @@
 #'     km2 of central Zurich, where swissTLM3D has 0; 32 in the Sion window
 #'     against TLM3D's 8. Free in 21 cantons + FL. JU LU NE NW OW VD need a
 #'     release ("Freigabe erforderlich"), and the open WFS returns NOTHING there
-#'     - not an error, an empty answer. See UG_AV_GATED and the `coverage`
-#'     layer, which is what stops that emptiness reading as "no constraint".
+#'     - not an error, an empty answer. NW and OW released it to us, JU LU NE VD
+#'     did not and are never requested (UG_AV_CLOSED). See UG_AV_GATED and the
+#'     `coverage` layer, which is what stops that emptiness reading as "no
+#'     constraint".
 #'   swissTLM3D (already local). Road and rail tunnels and underpasses, and
 #'     culverted streams, as 3D LINES. The Z of such a line is the road or the
 #'     stream bed, so terrain minus Z is the DEPTH of the structure's floor -
 #'     the one depth that exists nationally. Verified in Zurich: open streams
 #'     come out at 0 +- 1 m (the control), culverts at 0-6 m, the Milchbuck
 #'     cut-and-cover tunnel at 0-7 m.
+#'   OpenStreetMap, via Overpass, ONLY for JU LU NE VD and any released canton
+#'     whose AV did not arrive. Underground car parks, buildings tagged
+#'     underground or on a negative layer, covered reservoirs, and culverted
+#'     streams. Far thinner than AV - VD has ~150 such polygons in the
+#'     whole canton, where AV has 352 in one km2 of Zurich - so the canton keeps
+#'     its "partly recorded" notice; it is status "osm", not "av".
 #'   GWR public export (housing-stat / MADD). The AV object often carries the
 #'     EGID of the building it belongs to. Only GKLAS 1242 (Garagengebaeude)
 #'     says "garage"; most links point at the building ABOVE (in Zurich 140 of
@@ -41,11 +49,12 @@
 #'   kind    garage building road_tunnel rail_tunnel tunnel underpass culvert
 #'           reservoir
 #'   name    TLM3D name (a tunnel's, a stream's) where there is one
-#'   source  AV / TLM3D
+#'   source  AV / TLM3D / OSM
 #'   egid, gklas   GWR link, AV rows only
 #'   depth_m floor depth under the terrain; TLM3D line pieces only, NA elsewhere
-#'   rank    burn order at runtime: 1 line pieces, 2 TLM3D buildings, 3 AV
-#' and layer `coverage`: one polygon per canton, status "av" or "tlm_only".
+#'   rank    burn order at runtime: 1 line pieces, 2 TLM3D buildings, 3 AV/OSM
+#' and layer `coverage`: one polygon per canton, status "av", "osm" (AV gated,
+#' OSM in its place) or "tlm_only" (neither).
 #'
 #' Same rules as generate_ground_canopy_CH.r: function definitions only, the
 #' driver sits inside `if (FALSE)` at the bottom.
@@ -86,6 +95,9 @@ UG_AV_ART <- c(unterirdisches_Gebaeude             = "building",
 
 #cantons whose AV needs a release; the open WFS returns nothing for them
 UG_AV_GATED <- c("JU", "LU", "NE", "NW", "OW", "VD")
+#...and those of them that have NOT released it to us (2026-09-25): their AV is
+#never requested, neither openly nor with the credentials. OSM stands in.
+UG_AV_CLOSED <- c("JU", "LU", "NE", "VD")
 
 #swissBOUNDARIES3D kantonsnummer -> the abbreviation AV's `Kanton` carries
 UG_KANTON <- c("ZH", "BE", "LU", "UR", "SZ", "OW", "NW", "GL", "ZG", "FR", "SO",
@@ -114,6 +126,20 @@ UG_WALL_M <- 1
 UG_CULVERT_WIDTH <- 3
 
 UG_GARAGE_GKLAS <- 1242L
+
+#OSM fallback for gated cantons. overpass-api.de answers 406 to a request with
+#no User-Agent, and an EMPTY body when it is busy - both retried like AV's 429.
+UG_OSM_DIR      <- file.path(UG_DIR, "osm")
+UG_OSM_URL      <- c("https://overpass-api.de/api/interpreter",
+                     "https://overpass.private.coffee/api/interpreter")
+UG_OSM_UA       <- "visitorFlowTool data-raw/generate_underground_CH.r"
+UG_OSM_BACKOFF  <- c(30, 60, 120, 300)
+#AV surveys only PUBLIC watercourses; ditch and drain are not, and TLM3D has no
+#counterpart for them either
+UG_OSM_WATERWAY <- c("river", "stream", "canal")
+#an OSM culvert running within this distance of a TLM3D culvert for most of its
+#length is the same one, already there with a measured depth
+UG_OSM_DUP_M    <- 10
 
 
 # ------------------------------------------------------------------ fetch ---
@@ -145,7 +171,10 @@ ug_cantons <- function(path = UG_BND, url = UG_BND_URL){
 }
 
 #' The land cover tiles that touch Switzerland - the only ones worth a request.
-ug_tiles_ch <- function(cantons = ug_cantons()){
+#' A tile lying only in cantons in `skip` is left out; one that also reaches
+#' an open canton is kept for that canton's part.
+ug_tiles_ch <- function(cantons = ug_cantons(), skip = UG_AV_CLOSED){
+  cantons <- cantons[!cantons$kanton %in% skip, ]
   g  <- lc_tile_grid()
   bb <- lapply(seq_len(nrow(g)), function(i) sf::st_as_sfc(sf::st_bbox(
     c(xmin = g$xmin[i], ymin = g$ymin[i], xmax = g$xmax[i], ymax = g$ymax[i]), crs = 2056)))
@@ -187,6 +216,8 @@ ug_fetch_av_tile <- function(tile, dir = UG_AV_TILES, auth = ug_auth(),
   done <- file.path(dir, paste0(tile$tile_id, ".done"))
   if(file.exists(done) && !overwrite) return(invisible(TRUE))
   dir.create(dir, recursive = TRUE, showWarnings = FALSE)
+  #an overwrite that dies half way must not leave the old marker standing
+  unlink(done)
   unlink(list.files(dir, pattern = paste0("^", tile$tile_id, "_p"), full.names = TRUE))
 
   h <- curl::new_handle(timeout = 300)
@@ -201,6 +232,9 @@ ug_fetch_av_tile <- function(tile, dir = UG_AV_TILES, auth = ug_auth(),
       res <- try(curl::curl_fetch_disk(ug_av_url(tile, start, page), f, handle = h),
                  silent = TRUE)
       if(!inherits(res, "try-error") && res$status_code == 200) break
+      #refused credentials do not get better by waiting
+      if(!inherits(res, "try-error") && res$status_code == 401)
+        stop("geodienste.ch refused the credentials (401) - see ug_auth_ok()")
       if(is.na(wait)) break
       message(sprintf("AV: tile %s answered %s, waiting %d s", tile$tile_id,
                       if(inherits(res, "try-error")) "an error" else res$status_code, wait))
@@ -219,10 +253,40 @@ ug_fetch_av_tile <- function(tile, dir = UG_AV_TILES, auth = ug_auth(),
 }
 
 #' Credentials for released cantons, from the environment. NULL when unset,
-#' which is the open service.
-ug_auth <- function(){
+#' which is the open service. Set them in the USER .Renviron (~/.Renviron,
+#' C:/Users/frueh/.Renviron here), never in this file:
+#'   GEODIENSTE_USER=...
+#'   GEODIENSTE_PASS=...
+#' NOT in the project's .Renviron: that one is tracked by git. And R reads only
+#' one of the two at startup - the project's, when R starts in the project - so
+#' the user file is read here explicitly when the variables are still unset.
+#' The geodienste.ch website login answered 401 on the WFS (2026-09-25) - check
+#' ug_auth_ok() before a long run.
+#' Where "~" is depends on who started R: with HOME unset (VS Code, RStudio) it
+#' is the OneDrive "Dokumente" folder, with HOME set (Git Bash) the profile
+#' folder. Both are tried, the first file found is read.
+ug_auth <- function(user_env = c(Sys.getenv("R_ENVIRON_USER"),
+                                 path.expand("~/.Renviron"),
+                                 file.path(Sys.getenv("USERPROFILE"), ".Renviron"))){
+  user_env <- user_env[nzchar(user_env) & file.exists(user_env)]
+  if(!nzchar(Sys.getenv("GEODIENSTE_USER")) && length(user_env))
+    readRenviron(user_env[1])
   u <- Sys.getenv("GEODIENSTE_USER"); p <- Sys.getenv("GEODIENSTE_PASS")
   if(nzchar(u) && nzchar(p)) c(u, p) else NULL
+}
+
+#' One request with the credentials over central Stans (NW), a gated canton
+#' released to us: the number of AV objects returned. 0 means the account is
+#' accepted but NW is not (yet) released to it; an error means the credentials
+#' are refused.
+ug_auth_ok <- function(auth = ug_auth()){
+  if(is.null(auth)) stop("GEODIENSTE_USER / GEODIENSTE_PASS are not set")
+  tile <- list(xmin = 2670000, ymin = 1200500, xmax = 2671500, ymax = 1202000)
+  h <- curl::new_handle(timeout = 120)
+  curl::handle_setopt(h, userpwd = paste(auth, collapse = ":"), httpauth = 1L)
+  r <- curl::curl_fetch_memory(ug_av_url(tile), handle = h)
+  if(r$status_code != 200) stop("geodienste.ch answered HTTP ", r$status_code)
+  length(jsonlite::fromJSON(rawToChar(r$content), simplifyVector = FALSE)$features)
 }
 
 #' Fetch every tile that touches Switzerland. Resumable; ~2200 requests.
@@ -419,6 +483,143 @@ ug_gwr_gklas <- function(egid, cantons, dir = UG_GWR_DIR){
 }
 
 
+# ------------------------------------------------------------------- OSM ---
+
+#' Overpass QL for one canton, answered as OSM XML: GDAL's OSM driver then
+#' assembles the polygons, multipolygon relations included, so no geometry is
+#' built by hand here. Ways and relations only - an underground car park mapped
+#' as a node is its entrance, which says nothing about the footprint.
+ug_osm_query <- function(kanton, waterways = UG_OSM_WATERWAY){
+  sprintf(paste0(
+    '[out:xml][timeout:900];area["ISO3166-2"="CH-%s"]->.a;(',
+    'wr["amenity"="parking"]["parking"="underground"](area.a);',
+    'wr["building"]["location"="underground"](area.a);',
+    'wr["building"]["building"!="roof"]["layer"~"^-"](area.a);',
+    'wr["man_made"="reservoir_covered"](area.a);',
+    'way["waterway"~"^(%s)$"]["tunnel"="culvert"](area.a););',
+    '(._;>;);out body;'),
+    kanton, paste(waterways, collapse = "|"))
+}
+
+#' Overpass reports a timeout or a memory limit as a <remark> inside an HTTP
+#' 200, and a busy server as an empty body. Only a closed document without a
+#' remark is an answer.
+ug_osm_complete <- function(f){
+  if(!file.exists(f) || file.size(f) == 0) return(FALSE)
+  txt <- readChar(f, file.size(f), useBytes = TRUE)
+  grepl("</osm>\\s*$", txt) && !grepl("<remark>", txt, fixed = TRUE)
+}
+
+#' Each canton's extract, cached as <dir>/<KT>.osm. Downloaded to a .part file
+#' and renamed only when complete, so a killed run never leaves a truncated
+#' extract that reads as a canton with fewer objects. Returns the cantons that
+#' have one; a canton that cannot be fetched is reported and left out, so the
+#' build falls back to "tlm_only" there instead of dying.
+ug_fetch_osm <- function(kantone, dir = UG_OSM_DIR, overwrite = FALSE){
+  dir.create(dir, recursive = TRUE, showWarnings = FALSE)
+  for(kt in kantone){
+    f <- file.path(dir, paste0(kt, ".osm"))
+    if(file.exists(f) && !overwrite) next
+    tmp <- paste0(f, ".part")
+    ok  <- FALSE
+    for(wait in c(UG_OSM_BACKOFF, NA)){
+      for(url in UG_OSM_URL){
+        h <- curl::new_handle(timeout = 1200, useragent = UG_OSM_UA,
+                              postfields = paste0("data=", curl::curl_escape(ug_osm_query(kt))))
+        res <- try(curl::curl_fetch_disk(url, tmp, handle = h), silent = TRUE)
+        ok  <- !inherits(res, "try-error") && res$status_code == 200 && ug_osm_complete(tmp)
+        if(ok) break
+      }
+      if(ok || is.na(wait)) break
+      message(sprintf("OSM: no complete answer for %s, waiting %d s", kt, wait))
+      Sys.sleep(wait)
+    }
+    if(ok) file.rename(tmp, f) else{ unlink(tmp); message("OSM: giving up on ", kt) }
+  }
+  kantone[file.exists(file.path(dir, paste0(kantone, ".osm")))]
+}
+
+#' One canton's OSM objects, in the columns AV rows carry: kind, name.
+#'
+#' Clipped to the canton: Overpass's area and swissBOUNDARIES3D disagree by
+#' metres along a border, and an object across the line is in the neighbour's
+#' AV already. A polygon belongs to the canton its interior point lies in; a
+#' culvert is cut at the border.
+#'
+#' Culverts are dropped where TLM3D already has them (`tlm_culverts`, 2D lines):
+#' a TLM3D culvert carries a measured depth and the element the tunnel logic
+#' links to, the OSM one would only be a second outline of it. Then buffered to
+#' UG_CULVERT_WIDTH like TLM3D's.
+ug_read_osm <- function(kanton, cantons, tlm_culverts = NULL, dir = UG_OSM_DIR,
+                        dist = UG_OSM_DUP_M, share = 0.5){
+  f <- file.path(dir, paste0(kanton, ".osm"))
+  kt <- sf::st_geometry(cantons[cantons$kanton == kanton, ])
+  tag <- function(other, key){
+    m <- regmatches(other, regexec(sprintf('"%s"=>"([^"]*)"', key), other))
+    vapply(m, function(z) if(length(z) == 2) z[2] else NA_character_, character(1))
+  }
+  out <- list()
+
+  pol <- sf::st_read(f, layer = "multipolygons", quiet = TRUE)
+  if(nrow(pol) > 0){
+    pol <- sf::st_transform(pol, 2056)
+    ot  <- pol$other_tags
+    lyr <- suppressWarnings(as.numeric(tag(ot, "layer")))
+    hgt <- suppressWarnings(as.numeric(tag(ot, "height")))
+    ugb <- tag(ot, "location") %in% "underground" |
+      #a negative layer alone also marks a building set into a slope or under a
+      #bridge; one with a height stands above ground (Delemont: a 6000 m2
+      #shopping centre, 2 storeys, layer -1)
+      (!is.na(lyr) & lyr < 0 & !(!is.na(hgt) & hgt > 0))
+    pol$kind <- ifelse(pol$man_made %in% "reservoir_covered", "reservoir",
+                ifelse(pol$amenity %in% "parking" & tag(ot, "parking") %in% "underground", "garage",
+                ifelse(!is.na(pol$building) & ugb,
+                       ifelse(pol$building %in% c("parking", "garage", "garages"), "garage",
+                              "building"), NA)))
+    #a member way pulled in with a relation can carry tags of its own
+    pol <- pol[!is.na(pol$kind), ]
+    pol <- sf::st_make_valid(pol)
+    pol <- pol[sf::st_geometry_type(pol) %in% c("POLYGON", "MULTIPOLYGON"), ]
+    inside <- lengths(sf::st_intersects(sf::st_point_on_surface(sf::st_geometry(pol)), kt)) > 0
+    pol <- pol[inside, ]
+    if(nrow(pol) > 0)
+      out$pol <- sf::st_sf(kind = pol$kind, name = pol$name, geom = sf::st_geometry(pol))
+  }
+
+  lin <- sf::st_read(f, layer = "lines", quiet = TRUE)
+  if(nrow(lin) > 0){
+    lin <- lin[lin$waterway %in% UG_OSM_WATERWAY & tag(lin$other_tags, "tunnel") %in% "culvert", ]
+    lin <- sf::st_transform(lin, 2056)
+    lin <- suppressWarnings(sf::st_intersection(lin[, c("name")], kt))
+    #a culvert touching the border comes back as a point too
+    lin <- lin[sf::st_geometry_type(lin) %in% c("LINESTRING", "MULTILINESTRING"), ]
+    lin <- suppressWarnings(sf::st_cast(sf::st_cast(lin, "MULTILINESTRING"), "LINESTRING"))
+    if(nrow(lin) > 0 && length(tlm_culverts)){
+      #share of points every 5 m that lie within `dist` of a TLM3D culvert
+      len <- as.numeric(sf::st_length(lin))
+      smp <- sf::st_line_sample(lin, n = pmax(2L, as.integer(ceiling(len / 5))), type = "regular")
+      pts <- suppressWarnings(sf::st_cast(sf::st_sf(line = seq_along(smp), geom = smp), "POINT"))
+      tc  <- tlm_culverts[lengths(sf::st_intersects(tlm_culverts,
+                            sf::st_as_sfc(sf::st_bbox(sf::st_buffer(kt, dist))))) > 0]
+      if(length(tc)){
+        nb <- sf::st_nearest_feature(pts, tc)
+        dd <- as.numeric(sf::st_distance(pts, tc[nb], by_element = TRUE))
+        dup <- tapply(dd <= dist, pts$line, mean) >= share
+        lin <- lin[!dup[as.character(seq_len(nrow(lin)))] %in% TRUE, ]
+      }
+    }
+    if(nrow(lin) > 0)
+      out$lin <- sf::st_sf(kind = "culvert", name = lin$name,
+                           geom = sf::st_buffer(sf::st_geometry(lin), UG_CULVERT_WIDTH / 2,
+                                                endCapStyle = "FLAT"))
+  }
+  if(!length(out)) return(NULL)
+  x <- do.call(rbind, unname(out))
+  x$kanton <- kanton
+  x
+}
+
+
 # ------------------------------------------------------------------ build ---
 
 #' Give an AV tunnel or culvert polygon the identity of the TLM3D line it
@@ -447,16 +648,16 @@ ug_link_av <- function(av, pieces){
   av
 }
 
-#' Drop a TLM3D underground building that an AV one already covers by at least
-#' `share` of its area - the same object surveyed twice.
-ug_drop_covered <- function(tlm, av, share = 0.5){
-  avb <- av[av$Art == "unterirdisches_Gebaeude", ]
-  if(!nrow(tlm) || !nrow(avb)) return(tlm)
-  hits <- sf::st_intersects(tlm, avb)
+#' Drop a TLM3D underground building that an AV or OSM one (`cover`, an sfc)
+#' already covers by at least `share` of its area - the same object recorded
+#' twice. The AV/OSM one is kept: it knows a garage from a building.
+ug_drop_covered <- function(tlm, cover, share = 0.5){
+  if(!nrow(tlm) || !length(cover)) return(tlm)
+  hits <- sf::st_intersects(tlm, cover)
   keep <- vapply(seq_len(nrow(tlm)), function(i){
     if(!length(hits[[i]])) return(TRUE)
     inter <- suppressWarnings(sf::st_intersection(sf::st_geometry(tlm)[i],
-                                                  sf::st_union(sf::st_geometry(avb)[hits[[i]]])))
+                                                  sf::st_union(cover[hits[[i]]])))
     a <- if(length(inter)) sum(as.numeric(sf::st_area(inter))) else 0
     a < share * as.numeric(sf::st_area(sf::st_geometry(tlm)[i]))
   }, logical(1))
@@ -506,9 +707,32 @@ build_underground_CH <- function(out = UG_OUT, av_dir = UG_AV_TILES,
             (av$kind == "culvert" & av$ug_id <= nrow(lines))),
       sum(av$Art %in% c("Tunnel_Unterfuehrung_Galerie", "eingedoltes_oeffentliches_Gewaesser")))
 
-  tb <- ug_drop_covered(ug_tlm_buildings(gpkg), av)
+  #OSM where AV stays gated: always in UG_AV_CLOSED, and in a released canton
+  #whose objects have not arrived (yet) - a released canton with no AV object
+  #at all would be implausible
+  got <- unique(av$Kanton)
+  gap <- union(UG_AV_CLOSED, setdiff(UG_AV_GATED, got))
+  av  <- av[!av$Kanton %in% UG_AV_CLOSED, ]
+  osm <- NULL
+  have <- if(length(gap)) ug_fetch_osm(gap) else character(0)
+  if(length(have)){
+    tc  <- sf::st_geometry(sf::st_zm(lines[lines$kind == "culvert", ], drop = TRUE, what = "ZM"))
+    osm <- lapply(have, ug_read_osm, cantons = cantons, tlm_culverts = tc)
+    osm <- do.call(rbind, osm[!vapply(osm, is.null, logical(1))])
+  }
+  if(!is.null(osm) && nrow(osm) > 0){
+    osm$ug_id <- next_id + seq_len(nrow(osm))
+    next_id   <- next_id + nrow(osm)
+    say("OSM: %d objects (%s; %s)", nrow(osm),
+        paste(names(table(osm$kanton)), table(osm$kanton), collapse = ", "),
+        paste(names(table(osm$kind)), table(osm$kind), collapse = ", "))
+  }else osm <- NULL
+
+  cover <- sf::st_geometry(av[av$Art == "unterirdisches_Gebaeude", ])
+  if(!is.null(osm)) cover <- c(cover, sf::st_geometry(osm[osm$kind != "culvert", ]))
+  tb <- ug_drop_covered(ug_tlm_buildings(gpkg), cover)
   tb$ug_id <- next_id + seq_len(nrow(tb))
-  say("TLM3D underground buildings kept beside AV: %d", nrow(tb))
+  say("TLM3D underground buildings kept beside AV/OSM: %d", nrow(tb))
 
   cols <- c("ug_id", "kind", "name", "source", "egid", "gklas", "depth_m", "rank")
   pieces$source <- "TLM3D"; pieces$egid <- NA_integer_; pieces$gklas <- NA_integer_
@@ -516,19 +740,24 @@ build_underground_CH <- function(out = UG_OUT, av_dir = UG_AV_TILES,
   tb$name <- NA_character_; tb$source <- "TLM3D"; tb$egid <- NA_integer_
   tb$gklas <- NA_integer_; tb$depth_m <- NA_real_; tb$rank <- 2L
   av$source <- "AV"; av$depth_m <- NA_real_; av$rank <- 3L
-  #the three parts name their geometry column differently (geometry / geom), and
+  #OSM burns with AV: it stands in for it, and the two never share a canton
+  if(!is.null(osm)){
+    osm$source <- "OSM"; osm$egid <- NA_integer_; osm$gklas <- NA_integer_
+    osm$depth_m <- NA_real_; osm$rank <- 3L
+  }
+  #the parts name their geometry column differently (geometry / geom), and
   #rbind() matches columns by name
   geo <- function(x) sf::st_sf(sf::st_drop_geometry(x)[, cols],
                                geom = sf::st_geometry(x))
   ug <- rbind(geo(pieces), geo(tb), geo(av))
+  if(!is.null(osm)) ug <- rbind(ug, geo(osm))
   ug$ug_id <- as.integer(ug$ug_id); ug$rank <- as.integer(ug$rank)
 
-  #coverage: a released canton with no AV object at all would be implausible,
-  #so a gated canton counts as covered once any of its objects has arrived
-  got <- unique(av$Kanton)
-  cantons$status <- ifelse(cantons$kanton %in% UG_AV_GATED & !cantons$kanton %in% got,
-                           "tlm_only", "av")
-  say("coverage: %s", paste(cantons$kanton[cantons$status == "tlm_only"], collapse = " "))
+  cantons$status <- ifelse(!cantons$kanton %in% gap, "av",
+                           ifelse(cantons$kanton %in% have, "osm", "tlm_only"))
+  say("coverage: osm %s; tlm_only %s",
+      paste(cantons$kanton[cantons$status == "osm"], collapse = " "),
+      paste(cantons$kanton[cantons$status == "tlm_only"], collapse = " "))
 
   dir.create(dirname(out), recursive = TRUE, showWarnings = FALSE)
   tmp <- paste0(out, ".tmp.gpkg")
@@ -545,11 +774,20 @@ build_underground_CH <- function(out = UG_OUT, av_dir = UG_AV_TILES,
 # ----------------------------------------------------------------- driver ---
 
 if(FALSE){
-  #1. AV, ~2200 requests, resumable. Rerun with GEODIENSTE_USER/PASS set once
-  #   the gated cantons are released - only their tiles need overwrite = TRUE.
+  #1. AV, ~2200 requests, resumable. Skips tiles lying only in UG_AV_CLOSED.
   ug_fetch_av()
+  #1b. NW and OW, released to us: GEODIENSTE_USER/PASS in C:/Users/frueh/.Renviron
+  #    (NOT the project .Renviron, which git tracks; ug_auth() reads the user
+  #    file itself), check the account (a count; an error means refused), then
+  #    refetch only those cantons' tiles. NOT JU LU NE VD - see UG_AV_CLOSED.
+  ug_auth_ok()
+  k <- ug_cantons()
+  ug_fetch_av(ug_tiles_ch(k[k$kanton %in% c("NW", "OW"), ]), overwrite = TRUE)
 
-  #2. everything else, and the file
+  #2. everything else, and the file. Fetches OSM itself for JU LU NE VD, and
+  #   for any gated canton AV left empty (cached in UG_OSM_DIR;
+  #   ug_fetch_osm(..., overwrite = TRUE)
+  #   to refresh).
   build_underground_CH()
 
   #3. checks

@@ -3,16 +3,19 @@
 ##
 ## Checked:
 ##   1. hit arithmetic on a synthetic seed - exact m2 for a tree, a block
-##      counted once although it arrives on both levels, nothing for grass or
-##      artificial canopy, nothing for an ignored element, the depth range of
-##      the hit cells only, and a flush sent twice counting once
+##      counted once although it arrives on both levels, water warns, nothing
+##      for grass or artificial canopy, nothing for an ignored element, the
+##      depth range of the hit cells only, and a flush sent twice counting once;
+##      the brush's mask runs decode back to exactly the seed's cells
 ##   2. ug_pieces() on a synthetic 3D line over a flat terrain: piece length,
 ##      depth, width
 ##   3. labels: garage with EGID, building with its GWR class in French, a
-##      named tunnel, unknown and measured depth
+##      named tunnel, unknown and measured depth; the warning box names what is
+##      done over which element (bold), with the ignore button or "ignored"
 ##   4. the national file (skipped when absent): central Zurich has >= 352 AV
 ##      underground buildings, the Sion window >= 32 plus measured TLM3D
-##      pieces, one kind per element, Lausanne is "tlm_only"
+##      pieces, one kind per element, Lausanne falls back to OSM and OSM rows
+##      stay inside the fallback cantons
 ##   5. undergroundSeed() on a real area: grid on the paint grid, every
 ##      element's own cells carry its id, a tree stroke over one element hits
 ##      exactly it, deep tunnel pieces never warn
@@ -63,6 +66,8 @@ ok("a block on both levels is counted once (5 x 10 = 50 m2)",
    nrow(hb) == 1 && hb$base == 8 && hb$m2 == 50, sprintf("(%s)", paste(hb$m2, collapse = ",")))
 ok("...and its depth is unknown", is.na(hb$dmin))
 
+ok("water over the element warns",
+   nrow(undergroundHits(list(ground = runs(5L, 11:12, 11, 5), canopy = list()), seed)) == 1)
 ok("grass over the element warns nothing",
    nrow(undergroundHits(list(ground = runs(1L, 11:20, 1, 100), canopy = list()), seed)) == 0)
 ok("artificial canopy over it warns nothing",
@@ -82,6 +87,27 @@ ok("the same flush twice still covers 100 m2", undergroundSummarise(acc, seed)$m
 acc <- undergroundMergeCells(acc, undergroundHitCells(list(ground = list(),
                                                             canopy = runs(10L, 16:17, 11, 20)), seed))
 ok("a second flush over new cells adds them (140 m2)", undergroundSummarise(acc, seed)$m2 == 140)
+
+th <- undergroundTopHit(undergroundHitCells(both, seed))
+ok("the top hit of a plan names one element and its material",
+   !is.null(th) && th$ug_id %in% c(5, 9) && th$base == 7)
+ok("no cells, no top hit", is.null(undergroundTopHit(undergroundHitCells(list(), seed))))
+
+#the mask the brush stops at: runs (row, colStart, count, id) decode back to
+#exactly the seed's element cells, in the same global indices as the paint
+mr <- matrix(undergroundMaskRuns(seed), nrow = 4)
+ok("mask: one run per element row (10 + 10)", ncol(mr) == 20, sprintf("(%d)", ncol(mr)))
+dec <- do.call(rbind, lapply(seq_len(ncol(mr)), function(j)
+  data.frame(row = mr[1, j], col = mr[2, j] + seq_len(mr[3, j]) - 1L, id = mr[4, j])))
+ref <- which(!is.na(seed$id))
+refdf <- data.frame(row = YT - ((ref - 1L) %/% 100L + 1L), col = X0 + (ref - 1L) %% 100L,
+                    id = seed$id[ref])
+ok("mask: decoded cells equal the seed's cells",
+   nrow(dec) == nrow(refdf) &&
+     identical(sort(paste(dec$row, dec$col, dec$id)), sort(paste(refdf$row, refdf$col, refdf$id))))
+ok("mask: a stroke at a decoded cell hits that element",
+   undergroundHits(list(ground = list(), canopy = list(list(id = 7L,
+     runs = c(dec$row[1], dec$col[1], 1)))), seed)$ug_id == dec$id[1])
 
 # ------------------------------------------------------------------ 2 ------
 cat("=== 2. ug_pieces() on a synthetic line ===\n")
@@ -123,15 +149,25 @@ ok("unknown depth", undergroundDepthText(NA, NA) == "Tiefe unbekannt")
 ok("measured depth range", undergroundDepthText(2.6, 6.2) == "Sohle ca. 3\u20136 m unter Terrain",
    undergroundDepthText(2.6, 6.2))
 ok("single depth", undergroundDepthText(4, 4) == "Sohle ca. 4 m unter Terrain")
-ui <- undergroundWarningUI(undergroundHits(tree, seed),
-                           sf::st_sf(el("garage", egid = 1)[rep(1, 1), ] |> transform(ug_id = 5L),
-                                     geometry = sf::st_sfc(sf::st_point(c(0, 0)))),
-                           ignoreInput = "newVersions-ugIgnore")
-html <- as.character(ui)
-ok("the box names the element and links an ignore for it",
-   grepl("Tiefgarage (EGID 1)", html, fixed = TRUE) &&
+gar <- el("garage", egid = 1) |> transform(ug_id = 5L)
+html <- as.character(undergroundWarningUI(gar, 5L, 7L, ignored = FALSE,
+                                          ignoreInput = "newVersions-ugIgnore"))
+ok("the box says what is done over which element, the element in bold",
+   grepl("Sie pflanzen Baeume ueber einem unterirdischen Bauwerk: <b>Tiefgarage (EGID 1)</b>.",
+         html, fixed = TRUE), html)
+ok("...that it is not recommended", grepl("Dies wird nicht empfohlen.", html, fixed = TRUE))
+ok("...with a dark grey ignore button for it",
+   grepl(UG_COLOR, html, fixed = TRUE) && grepl("Dieses Element ignorieren", html, fixed = TRUE) &&
      #the attribute is HTML-escaped; the browser hands the handler plain quotes
      grepl("Shiny.setInputValue(&#39;newVersions-ugIgnore&#39;, 5,", html, fixed = TRUE))
+hi <- as.character(undergroundWarningUI(gar, 5L, 8L, ignored = TRUE,
+                                        ignoreInput = "newVersions-ugIgnore"))
+ok("ignored: a light grey 'Element ignoriert' replaces the button",
+   grepl("Element ignoriert", hi, fixed = TRUE) && grepl(UG_IGNORED_COLOR, hi, fixed = TRUE) &&
+     !grepl("setInputValue", hi, fixed = TRUE))
+ok("a block reads as building, water as placing water",
+   grepl("Sie bauen", hi, fixed = TRUE) &&
+     grepl("Sie platzieren Wasser", as.character(undergroundWarningUI(gar, 5L, 5L, FALSE, "x")), fixed = TRUE))
 
 # ------------------------------------------------------------------ 4 ------
 path <- undergroundPath()
@@ -162,8 +198,21 @@ if(!file.exists(path)){
   ok("every element has one kind", all(tapply(both$kind, both$ug_id,
                                               function(k) length(unique(k))) == 1))
   lau <- win(2537500, 1152000, 2538500, 1153000, layer = "coverage")
-  ok("Lausanne (VD, unreleased) is tlm_only", identical(unique(lau$status), "tlm_only"),
+  ok("Lausanne (VD, unreleased) falls back to OSM", identical(unique(lau$status), "osm"),
      paste(lau$kanton, lau$status))
+  #central Lausanne, 2 x 2 km: OSM has underground car parks there
+  lz <- win(2537000, 1151500, 2539000, 1153500)
+  ok("...and OSM underground car parks are in the file there",
+     sum(lz$source == "OSM" & lz$kind == "garage") >= 3,
+     sprintf("(%d OSM garages, %d AV rows)", sum(lz$source == "OSM" & lz$kind == "garage"),
+             sum(lz$source == "AV")))
+  cov <- sf::st_read(path, layer = "coverage", quiet = TRUE)
+  osm <- sf::st_read(path, quiet = TRUE,
+                     query = "SELECT * FROM underground WHERE source = 'OSM'")
+  inK <- cov$kanton[unlist(sf::st_intersects(sf::st_point_on_surface(sf::st_geometry(osm)),
+                                             cov))]
+  ok("OSM rows lie only in cantons marked osm", all(inK %in% cov$kanton[cov$status == "osm"]),
+     sprintf("(%d rows: %s)", nrow(osm), paste(names(table(inK)), table(inK), collapse = ", ")))
 
   cat("=== 5. undergroundSeed() on a real area ===\n")
   aoi <- sf::st_transform(sf::st_as_sfc(sf::st_bbox(

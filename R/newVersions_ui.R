@@ -100,8 +100,8 @@ vftDbg("UI6")
                         #only, and only where the national layer exists; shown by
                         #the context 4 render (see ugOnRender() in
                         #newVersions_server.R). The overlay also appears on its own
-                        #while a tree or a block is armed; this switch keeps it up
-                        #for any other material too.
+                        #while water, a tree or a block is armed; this switch keeps
+                        #it up for any other material too.
                         shinyjs::hidden(shiny::div(id = shiny::NS(id, "ugToggleDiv"),
                           shiny::fluidRow(
                             shiny::column(12, align = "center",
@@ -210,6 +210,37 @@ vftDbg("UI6")
                                    .paintHeightBar {
                                             display: flex; flex-direction: column;
                                             height: 104px; width: 56px; gap: 0;
+                                            /* 104px in a 100px row: centred, it overhangs 2px
+                                               above and below, exactly as it did beside the rows */
+                                            align-self: center;
+                                            }
+                                   /* The bar pops up directly LEFT OF THE ARMED MATERIAL. The
+                                      materials are flex items with fixed `order`s (set inline in the
+                                      palette below: 10, 20, ... 80), and showHeightBar() in
+                                      newVersions_server.R gives the bar the class of the armed ramp,
+                                      whose order falls just before that material's column. CSS order
+                                      rather than moving the node, so the swatches' input bindings are
+                                      never touched. */
+                                   .paintHeightBar.paintHeightAt_canopy_artificial { order: 35; }
+                                   .paintHeightBar.paintHeightAt_canopy_tree       { order: 55; }
+                                   .paintHeightBar.paintHeightAt_artificial_block  { order: 75; }
+                                   /* ...and everything else shifts LEFT to make room: the palette is
+                                      centred, so a 56px bar + 10px gap would push the right half 33px
+                                      right. Reserving the same 66px on the right re-centres it in a
+                                      box that much narrower, which keeps every button right of the bar
+                                      - the armed one, the block, the switch, the tools - exactly where
+                                      it was. Toggled with the bar in showHeightBar().
+                                      A shrinkable pseudo-element and not padding: this row is already
+                                      near full at 1400px, and there padding pushed the row past its
+                                      column, so flexbox squeezed the level switch (130 -> 97px) to make
+                                      up the difference. The spacer's huge flex-shrink makes it give up
+                                      its room before anything else does, so on a narrow screen the
+                                      reservation is dropped rather than the switch. basis 66 with a
+                                      -15px margin, because as a flex item it also brings the row's 15px
+                                      gap with it: 66 all told, 0 all told once shrunk away. */
+                                   .paintToolRow.paintHeightOn::after {
+                                            content: ''; flex: 0 1000 66px; min-width: 0;
+                                            margin-left: -15px;
                                             }
                                    .paintHeightGroup {
                                             display: flex; flex-direction: column;
@@ -299,7 +330,17 @@ vftDbg("UI6")
                                           "#newVersions-showConflicts { background-color: #ffffff; border: 2px solid #c62828; color: #c62828; font-weight: bold; box-shadow: 0 1px 4px rgba(0,0,0,0.3); }",
                                           "#newVersions-showConflicts.vftConflictOn { background-color: #c62828; color: #ffffff; }",
                                           "#newVersions-showConflictsOrig { margin-left: 8px; background-color: #ffffff; border: 2px dashed #6a1b9a; color: #6a1b9a; font-weight: bold; box-shadow: 0 1px 4px rgba(0,0,0,0.3); }",
-                                          "#newVersions-showConflictsOrig.vftConflictOn { background-color: #6a1b9a; color: #ffffff; }"))),
+                                          "#newVersions-showConflictsOrig.vftConflictOn { background-color: #6a1b9a; color: #ffffff; }",
+                                          "#newVersions-showUsage { margin-left: 8px; background-color: #ffffff; border: 2px solid #182db5; color: #182db5; font-weight: bold; box-shadow: 0 1px 4px rgba(0,0,0,0.3); }",
+                                          "#newVersions-showUsage.vftConflictOn { background-color: #182db5; color: #ffffff; }",
+                                          #the path usage overlay is a picture over the network
+                                          #being edited: its WebGL canvas sits above the edges'
+                                          #canvas and would take every click meant for them. A
+                                          #canvas takes pointer events by default, so this pane
+                                          #is made click-through, all of it. (Pane "usageLayer":
+                                          #Leaflet's createPane() drops "Pane" from a name when it
+                                          #builds the class, so "usagePane" would not match.)
+                                          ".leaflet-usageLayer-pane, .leaflet-usageLayer-pane * { pointer-events: none !important; }"))),
                                         #The second button shows the Original's conflicts
                                         #whichever card is selected, and searches for them if
                                         #step 5 never did - see "SHOW THE ORIGINAL'S CONFLICTS".
@@ -313,14 +354,22 @@ vftDbg("UI6")
                                                    shinyjs::disabled(
                                                      shiny::actionButton(shiny::NS(id, "showConflictsOrig"),
                                                                          label = i18n$t("Konflikte im Original anzeigen"))
+                                                   ),
+                                                   #PATH USAGE. Step 5's simulated usage over the
+                                                   #network being edited - see "SHOW PATH USAGE" in
+                                                   #newVersions_server.R. Disabled until the server
+                                                   #finds a simulation to show.
+                                                   shinyjs::disabled(
+                                                     shiny::actionButton(shiny::NS(id, "showUsage"),
+                                                                         label = i18n$t("Wegnutzung anzeigen"))
                                                    ))
 
                                  ),
 
                                  #PAINT COLOR BUTTONS (heat mitigation, context 4) ####
-                                 #canopy row on top, ground row below, both right-aligned against the
-                                 #vertical level switch on their right - the switch knob sits on the row
-                                 #it activates
+                                 #canopy buttons on top, ground buttons below, laid out in columns against
+                                 #the vertical level switch on their right - the switch knob sits on the
+                                 #row it activates
                                  shiny::fluidRow(
                                    shinyjs::useShinyjs(),
                                    shinyjs::inlineCSS(list(.colorBtnSelected = "border-width: thick; border-color: black")),
@@ -331,10 +380,24 @@ vftDbg("UI6")
                                                    id = NS(id, "paintColorButtonsDiv"),
                                                    style = "display:none;",
                                                    shiny::div(
+                                                     id = NS(id, "paintToolRow"),
+                                                     class = "paintToolRow",
                                                      style = "display:flex; align-items:center; justify-content:center; gap:15px; margin-top:10px;",
-                                                     #HEIGHT BAR. Leftmost, because the level switch has to stay
-                                                     #immediately right of the two material rows - its knob slides
-                                                     #onto the row it activates, so nothing may come between them.
+                                                     #MATERIALS. Laid out as COLUMNS, not as a canopy row over a
+                                                     #ground row: the height bar has to be able to open between
+                                                     #any two of them and span both levels, and a row can only
+                                                     #take it at its own height. Three ground-only buttons at the
+                                                     #bottom, then two columns of canopy over ground - which puts
+                                                     #the canopy pair above the two rightmost ground buttons, as
+                                                     #the right-aligned rows did - then the block. Each carries an
+                                                     #explicit `order` for the bar to slot between (see
+                                                     #.paintHeightAt_*). 100px = the two 45px rows + their 10px gap.
+                                                     shiny::div(
+                                                     style = "display:flex; align-items:flex-end; gap:10px; height:100px;",
+                                                     #HEIGHT BAR. Placed just left of the armed material by CSS
+                                                     #order. The level switch still sits immediately right of the
+                                                     #materials - its knob slides onto the row it activates - and the
+                                                     #bar never lands after the block, so it never comes between them.
                                                      #
                                                      #Every step of every ramp is built HERE, statically, and shown
                                                      #or hidden with shinyjs - not rendered per material with
@@ -373,64 +436,64 @@ vftDbg("UI6")
                                                          )
                                                        })
                                                      ),
+                                                     #GROUND LEVEL, the three with no canopy button above them
+                                                     shiny::actionButton(
+                                                       inputId = shiny::NS(id, "paintColor_grass"), label = i18n$t("Gras"),
+                                                       class = "colorBtnSelected",
+                                                       style = "order: 10; background-color: lightgreen; width: 90px; height: 45px;"
+                                                     ),
+                                                     shiny::actionButton(
+                                                       inputId = shiny::NS(id, "paintColor_bush"), label = i18n$t("Busch"),
+                                                       class = "colorBtnNotSelected",
+                                                       style = "order: 20; background-color: #6aa84f; color: white; width: 90px; height: 45px;"
+                                                     ),
+                                                     shiny::actionButton(
+                                                       inputId = shiny::NS(id, "paintColor_artificial"), label = i18n$t("Kuenstlich"),
+                                                       class = "colorBtnNotSelected",
+                                                       style = "order: 30; background-color: grey; width: 90px; height: 45px;"
+                                                     ),
+                                                     #CANOPY over GROUND, two columns
                                                      shiny::div(
-                                                       style = "display:flex; flex-direction:column; align-items:flex-end; gap:10px;",
-                                                       #CANOPY LEVEL
-                                                       shiny::div(
-                                                         style = "display:flex; gap:10px;",
-                                                         shiny::actionButton(
-                                                           inputId = shiny::NS(id, "paintColor_canopyArtificial"), label = i18n$t("Kuenstlich"),
-                                                           class = "colorBtnNotSelected",
-                                                           style = "background-color: #e0e0e0; color: black; width: 90px; height: 45px;"
-                                                         ),
-                                                         shiny::actionButton(
-                                                           inputId = shiny::NS(id, "paintColor_canopyTree"), label = i18n$t("Baum"),
-                                                           class = "colorBtnNotSelected",
-                                                           style = "background-color: #004200; color: white; width: 90px; height: 45px;"
-                                                         )
+                                                       style = "order: 40; display:flex; flex-direction:column; gap:10px;",
+                                                       shiny::actionButton(
+                                                         inputId = shiny::NS(id, "paintColor_canopyArtificial"), label = i18n$t("Kuenstlich"),
+                                                         class = "colorBtnNotSelected",
+                                                         style = "background-color: #e0e0e0; color: black; width: 90px; height: 45px;"
                                                        ),
-                                                       #GROUND LEVEL
-                                                       shiny::div(
-                                                         style = "display:flex; gap:10px;",
-                                                         shiny::actionButton(
-                                                           inputId = shiny::NS(id, "paintColor_grass"), label = i18n$t("Gras"),
-                                                           class = "colorBtnSelected",
-                                                           style = "background-color: lightgreen; width: 90px; height: 45px;"
-                                                         ),
-                                                         shiny::actionButton(
-                                                           inputId = shiny::NS(id, "paintColor_bush"), label = i18n$t("Busch"),
-                                                           class = "colorBtnNotSelected",
-                                                           style = "background-color: #6aa84f; color: white; width: 90px; height: 45px;"
-                                                         ),
-                                                         shiny::actionButton(
-                                                           inputId = shiny::NS(id, "paintColor_artificial"), label = i18n$t("Kuenstlich"),
-                                                           class = "colorBtnNotSelected",
-                                                           style = "background-color: grey; width: 90px; height: 45px;"
-                                                         ),
-                                                         shiny::actionButton(
-                                                           inputId = shiny::NS(id, "paintColor_natural"), label = i18n$t("Natuerlich"),
-                                                           class = "colorBtnNotSelected",
-                                                           style = "background-color: #a05a3c; color: white; width: 90px; height: 45px;"
-                                                         ),
-                                                         shiny::actionButton(
-                                                           inputId = shiny::NS(id, "paintColor_water"), label = i18n$t("Wasser"),
-                                                           class = "colorBtnNotSelected",
-                                                           style = "background-color: dodgerblue; color: white; width: 90px; height: 45px;"
-                                                         )
+                                                       shiny::actionButton(
+                                                         inputId = shiny::NS(id, "paintColor_natural"), label = i18n$t("Natuerlich"),
+                                                         class = "colorBtnNotSelected",
+                                                         style = "background-color: #a05a3c; color: white; width: 90px; height: 45px;"
+                                                       )
+                                                     ),
+                                                     shiny::div(
+                                                       style = "order: 60; display:flex; flex-direction:column; gap:10px;",
+                                                       shiny::actionButton(
+                                                         inputId = shiny::NS(id, "paintColor_canopyTree"), label = i18n$t("Baum"),
+                                                         class = "colorBtnNotSelected",
+                                                         style = "background-color: #004200; color: white; width: 90px; height: 45px;"
+                                                       ),
+                                                       shiny::actionButton(
+                                                         inputId = shiny::NS(id, "paintColor_water"), label = i18n$t("Wasser"),
+                                                         class = "colorBtnNotSelected",
+                                                         style = "background-color: dodgerblue; color: white; width: 90px; height: 45px;"
                                                        )
                                                      ),
                                                      #BOTH LEVELS AT ONCE - a solid block occupies the ground and everything
                                                      #above it, so it belongs to neither row and is never disabled by the level
                                                      #switch. Its height is the two rows plus the 10px gap between them, so it
-                                                     #lines up with them exactly.
+                                                     #lines up with them exactly. The 5px margin keeps the 15px it always had
+                                                     #from the materials, now that it shares their 10px-gap container.
                                                      shiny::actionButton(
                                                        inputId = shiny::NS(id, "paintColor_block"), label = i18n$t("Kuenstlicher Block"),
                                                        class = "colorBtnNotSelected",
                                                        #white-space/flex override Bootstrap's nowrap and top-aligned label, which
                                                        #a two-word caption in a 90px-wide, 100px-tall button would otherwise show up
-                                                       style = paste("background-color: #3d3d3d; color: white; width: 90px; height: 100px;",
+                                                       style = paste("order: 80; margin-left: 5px;",
+                                                                     "background-color: #3d3d3d; color: white; width: 90px; height: 100px;",
                                                                      "white-space: normal; display: flex; align-items: center;",
                                                                      "justify-content: center; text-align: center;")
+                                                     )
                                                      ),
                                                      #LEVEL SWITCH (up = canopy, down = ground)
                                                      tags$label(

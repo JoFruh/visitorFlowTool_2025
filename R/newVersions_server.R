@@ -500,6 +500,8 @@ if(is.null(r$updateNetworkPlot)){
       #and none of the stored heat maps can be trusted to describe it: a
       #restored or rebuilt set may reuse card ids with different paint
       heatStoreDrop(heatStore)
+      #nor the kept path usages, for the same reason
+      heatStoreDrop(usageStash)
 
       #select original network at start
       r$position <- 1
@@ -1169,6 +1171,22 @@ if(is.null(r$updateNetworkPlot)){
           vftScenarioConflicts(originalScenario(), conflictKey()) else NULL)
         if(!is.null(conflictsOrigNow)) map <- addConflictOrigCircles(map, conflictsOrigNow)
 
+        #THE PATH USAGE ####
+        #The pane on EVERY map, whether the overlay is on or not: the button
+        #draws through a proxy onto whatever instance this render made, and
+        #glify throws "unable to find pane" rather than fall back to another.
+        #Above the heat surface (430), below the nodes (450) - and click-through,
+        #see its CSS in newVersions_ui.R. Then the overlay itself if it is on,
+        #for the conflicts' reason: a re-render starts from an empty map.
+        map <- leaflet::addMapPane(map, "usageLayer", zIndex = 440)
+        #Isolated, all of it - the legend reads i18n(), and a dependency on
+        #that would re-render the map on every language change.
+        usageDrawn <<- NULL
+        map <- shiny::isolate({
+          usageNow <- if(isTRUE(r$usageOn)) usageSource() else NULL
+          if(is.null(usageNow)) map else drawUsage(map, usageNow)
+        })
+
         #add or remove dummy group (this is to trigger an observer that determines when the map finished rendering)
         #in isolation to avoid linking input$versionMap_groups
         vftDbg("GROUP LENGTH: ")
@@ -1298,10 +1316,10 @@ armBrush <- function(session, r, id){
 
   showHeightBar(r, ramp, armed)
 
-  #UNDERGROUND OVERRIDES LAST UNTIL THE FAMILY IS ARMED AFRESH. Arming a tree
-  #or a block after some other material clears every "ignore" and the warning
-  #box; a height swatch keeps the base (tree 10 m -> 20 m is still 7), so it
-  #keeps them. Before the early return below, which a re-click of the same
+  #UNDERGROUND OVERRIDES LAST UNTIL THE FAMILY IS ARMED AFRESH. Arming water,
+  #a tree or a block after some other material clears every "ignore" and the
+  #warning box; a height swatch keeps the base (tree 10 m -> 20 m is still 7),
+  #so it keeps them. Before the early return below, which a re-click of the same
   #material takes.
   prevBase <- paintBaseId(shiny::isolate(r$armedPaintId))
   newBase  <- paintBaseId(armed)
@@ -1322,11 +1340,18 @@ armBrush <- function(session, r, id){
 #this is show/hide and a class swap, never a re-render - a re-rendered
 #actionButton comes back with its click count reset, and on this page that is the
 #failure mode that has cost the most.
+#
+#The paintHeightAt_* class is what moves the bar next to the armed material (a
+#CSS order, see .paintHeightAt_* in newVersions_ui.R), and paintHeightOn on the
+#row is what makes the other buttons shift left rather than both ways.
 showHeightBar <- function(r, ramp, armed){
   for(rp in vftHeightRamps()){
-    gid <- paste0("paintHeightGroup_", rp$name)
-    if(!is.null(ramp) && identical(rp$base, ramp$base)) shinyjs::show(gid) else shinyjs::hide(gid)
+    gid  <- paste0("paintHeightGroup_", rp$name)
+    mine <- !is.null(ramp) && identical(rp$base, ramp$base)
+    if(mine) shinyjs::show(gid) else shinyjs::hide(gid)
+    shinyjs::toggleClass("paintHeightBar", paste0("paintHeightAt_", rp$name), condition = mine)
   }
+  shinyjs::toggleClass("paintToolRow", "paintHeightOn", condition = !is.null(ramp))
   if(is.null(ramp)){
     shinyjs::hide("paintHeightBar")
     return(invisible(NULL))
@@ -1705,26 +1730,28 @@ clearHeat <- function(){
 
 # UNDERGROUND STRUCTURES UNDER THE PAINT ####
 #
-# A tree or a block painted over an underground garage, a tunnel or a culvert is
-# WARNED about, never refused: see R/underground_helpers.R for the data and the
-# arithmetic. What lives here is the session side:
+# Water, a tree or a block painted over an underground garage, a tunnel or a
+# culvert STOPS at it: the browser holds the element cells (undergroundMaskRuns()),
+# clips the stroke at them, ends it and reports the hit as input$ugHit. R answers
+# with the warning box, which offers to ignore that element; an ignored element
+# takes paint and still reports, so the box comes back saying "Element ignored".
+# See R/underground_helpers.R for the data and the arithmetic. What lives here is
+# the session side:
 #
 #   ugSeed      undergroundSeed() of the current study area, NULL until built
 #   ugKey       the area it belongs to (paintBaselineKey()), so a card switch
 #               reuses it and a new area rebuilds it
-#   ugCells     the cells hit since the family was last armed - a SET, so a
-#               stroke flushed in parts or painted over twice counts once
-#   ugIgnored   elements the user chose to ignore: greyed on the overlay,
-#               dropped from the box, silent. Cleared by ugReset(), which
-#               armBrush() calls whenever a tree or block is armed afresh.
+#   ugIgnored   elements the user chose to ignore: light grey on the overlay,
+#               no longer stopping the brush. Cleared by ugReset(), which
+#               armBrush() calls whenever a warning material is armed afresh.
 #
 # Per session and never saved: derived from the area and from what the user did
 # since arming, neither of which is scenario state.
 ugSeed    <- NULL
 ugKey     <- NULL
 ugReq     <- 0L
-ugCells   <- NULL
 ugIgnored <- integer(0)
+ugShown   <- NULL      #list(id, base) of the element the box is about
 ugNoDataShown <- character(0)
 
 #sent at once for the same reason as heatProxy(): the build settles in a
@@ -1735,8 +1762,8 @@ ugProxy <- function()
 ugLang <- function()
   tryCatch(shiny::isolate(i18n())$get_translation_language(), error = function(e) "de")
 
-#The overlay is up while a tree or a block is armed - that is when it answers a
-#question - or whenever the switch says so.
+#The overlay is up while a warning material is armed - that is when it answers
+#a question - or whenever the switch says so.
 ugVisible <- function(){
   if(isTRUE(shiny::isolate(input$showUG))) return(TRUE)
   a <- shiny::isolate(r$armedPaintId)
@@ -1748,13 +1775,12 @@ ugAddPolygons <- function(map, els){
   tr   <- shiny::isolate(i18n())
   lang <- ugLang()
   ign  <- els$ug_id %in% ugIgnored
-  col  <- ifelse(ign, UG_IGNORED_COLOR,
-                 UNDERGROUND_KINDS$color[match(els$kind, UNDERGROUND_KINDS$kind)])
+  col  <- ifelse(ign, UG_IGNORED_COLOR, UG_COLOR)
   lab  <- vapply(seq_len(nrow(els)), function(i)
     undergroundTooltip(els[i, ], tr, lang, ignored = ign[i]), character(1))
   leaflet::addPolygons(map, data = els, layerId = paste0("ug_", els$ug_id), group = "ug",
                        color = col, fillColor = col, weight = 2, opacity = 0.9,
-                       fillOpacity = ifelse(ign, 0.08, 0.2), dashArray = "5 4",
+                       fillOpacity = ifelse(ign, 0.15, 0.3), dashArray = "5 4",
                        label = lab, options = leaflet::pathOptions(pane = "ugPane"))
 }
 
@@ -1784,42 +1810,56 @@ ugSyncVisibility <- function(){
   invisible(NULL)
 }
 
-#The warning box, rebuilt from the running set minus what is ignored. One box
-#(id "ugWarn") that is replaced in place, never a stack of them.
-ugShowWarning <- function(){
-  cells <- ugCells
-  if(!is.null(cells)) cells <- cells[!cells$ug_id %in% ugIgnored, ]
-  if(is.null(cells) || !nrow(cells) || is.null(ugSeed)){
-    shiny::removeNotification("ugWarn", session = session)
-    return(invisible(NULL))
-  }
-  ui <- undergroundWarningUI(undergroundSummarise(cells, ugSeed), ugSeed$elements,
+#The brush's copy of the element cells, which materials stop at them, and what
+#is ignored. An empty mask (no seed yet, a new area) stops nothing. Custom
+#messages are written at once, so this is safe from the promise callback.
+ugSendMask <- function(){
+  ids <- PAINT_CATEGORIES$id[paintBaseId(PAINT_CATEGORIES$id) %in% UG_WARN_BASES]
+  session$sendCustomMessage("ug-mask", list(
+    runs     = I(undergroundMaskRuns(ugSeed)),
+    warnIds  = I(ids),
+    warnBase = I(paintBaseId(ids)),
+    ignored  = I(ugIgnored)))
+  invisible(NULL)
+}
+
+ugSendIgnored <- function()
+  session$sendCustomMessage("ug-ignored", list(ids = I(ugIgnored)))
+
+#The warning box for one element. One box (id "ugWarn") replaced in place,
+#never a stack of them.
+ugShowWarning <- function(id, base){
+  if(is.null(ugSeed)) return(invisible(NULL))
+  els <- ugSeed$elements
+  el  <- if(is.null(els)) NULL else els[match(id, els$ug_id), ]
+  ui <- undergroundWarningUI(el, id, base, ignored = id %in% ugIgnored,
                              ignoreInput = session$ns("ugIgnore"),
                              tr = shiny::isolate(i18n()), lang = ugLang())
   shiny::showNotification(ui, id = "ugWarn", duration = NULL, closeButton = TRUE,
                           type = "warning", session = session)
+  ugShown <<- list(id = id, base = base)
   invisible(NULL)
 }
 
-#A flush just landed. `delta` is list(ground, canopy) in the wire format. The
-#box is (re)opened only when an element not already in it is hit: painting on
-#over the same garage should not keep bringing back a box the user closed.
+#A plan import landed. It is not a stroke, so nothing stopped it: warn about
+#the element it covered most of, unless everything it covered is ignored.
+#`delta` is list(ground, canopy) in the wire format.
 ugCheck <- function(delta){
   if(is.null(ugSeed) || is.null(ugSeed$grid)) return(invisible(NULL))
-  new <- undergroundHitCells(delta, ugSeed, ignore = ugIgnored)
-  if(!nrow(new)) return(invisible(NULL))
-  fresh <- !all(new$ug_id %in% ugCells$ug_id)
-  ugCells <<- undergroundMergeCells(ugCells, new)
-  if(fresh) ugShowWarning()
+  top <- undergroundTopHit(undergroundHitCells(delta, ugSeed, ignore = ugIgnored))
+  if(!is.null(top)) ugShowWarning(top$ug_id, top$base)
   invisible(NULL)
 }
 
 ugReset <- function(){
   had <- ugIgnored
   ugIgnored <<- integer(0)
-  ugCells   <<- NULL
+  ugShown   <<- NULL
   shiny::removeNotification("ugWarn", session = session)
-  if(length(had) && isTRUE(shiny::isolate(input$contextChoice) == 4)) ugRestyle(had)
+  if(length(had)){
+    ugSendIgnored()
+    if(isTRUE(shiny::isolate(input$contextChoice) == 4)) ugRestyle(had)
+  }
   invisible(NULL)
 }
 
@@ -1846,15 +1886,18 @@ ugOnRender <- function(map, aoi){
   if(identical(key, ugKey)){
     if(!is.null(ugSeed)){
       map <- map %>% ugAddPolygons(ugSeed$elements) %>% ugShowHide()
+      ugSendMask()
       ugNoDataNotice()
     }
     return(map)
   }
-  #a new area: nothing from the old one applies
+  #a new area: nothing from the old one applies, and the brush must not stop
+  #at the old area's elements while the new ones are built
   ugKey  <<- key
   ugSeed <<- NULL
   ugIgnored <<- integer(0)
-  ugCells <<- NULL
+  ugShown   <<- NULL
+  ugSendMask()
   shiny::removeNotification("ugWarn", session = session)
   ugReq <<- ugReq + 1L
   req <- ugReq
@@ -1864,6 +1907,7 @@ ugOnRender <- function(map, aoi){
   }) %...>% (function(seed){
     if(!identical(req, ugReq)) return(invisible(NULL))
     ugSeed <<- seed
+    ugSendMask()
     if(!is.null(seed))
       message(sprintf("underground: %d elements in this area, built in %.1f s%s",
                       if(is.null(seed$elements)) 0L else nrow(seed$elements),
@@ -1883,13 +1927,25 @@ shiny::observeEvent(input$showUG, {
   ugSyncVisibility()
 }, ignoreInit = TRUE)
 
-#"Ignorieren" in the warning box
+#The brush hit an element: stopped at it, or painted over it if it is ignored
+#(paintbrush.js, once per stroke and element then)
+shiny::observeEvent(input$ugHit, {
+  h <- input$ugHit
+  id   <- suppressWarnings(as.integer(h$id))
+  base <- suppressWarnings(as.integer(h$base))
+  if(length(id) != 1L || is.na(id) || length(base) != 1L || is.na(base)) return(NULL)
+  ugShowWarning(id, base)
+}, ignoreInit = TRUE)
+
+#"Ignore this element" in the warning box: light grey on the map, no longer
+#stopping the brush, and the box says so in place of the button
 shiny::observeEvent(input$ugIgnore, {
   id <- suppressWarnings(as.integer(input$ugIgnore))
   if(length(id) != 1L || is.na(id)) return(NULL)
   ugIgnored <<- unique(c(ugIgnored, id))
+  ugSendIgnored()
   ugRestyle(id)
-  ugShowWarning()
+  if(!is.null(ugShown) && identical(ugShown$id, id)) ugShowWarning(id, ugShown$base)
 }, ignoreInit = TRUE)
 
 #HEAT MAPS KEPT PER SCENARIO, AND THE ICONS ON THE CARDS.
@@ -2405,9 +2461,6 @@ observeEvent(input$paintCells, {
       card <- heatCardKey(pos)
       heatStoreBump(heatStore, card)
       sendHeatIcons(card)
-      #a warning must never cost the ack: a throw here would make the browser
-      #resend cells that are already written
-      try(ugCheck(list(ground = delta$ground, canopy = delta$canopy)), silent = FALSE)
     }
 
     session$sendCustomMessage("paint-cells-ack", list(seq = delta$seq))
@@ -2464,8 +2517,9 @@ observeEvent(input$paintImport, {
       card <- heatCardKey(pos)
       heatStoreBump(heatStore, card)
       sendHeatIcons(card)
-      #a plan's trees and blocks warn like painted ones; the patch goes through
-      #the stroke format so there is one hit test, not two
+      #a plan is not a stroke and was not stopped at underground elements, so
+      #it only warns. The patch goes through the stroke format so there is one
+      #hit test, not two; a warning must never cost the ack
       try(ugCheck(list(ground = rasterToRuns(patches$paintedRaster),
                        canopy = rasterToRuns(patches$canopyRaster))), silent = FALSE)
     }
@@ -2842,6 +2896,8 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
             #its heat maps go with it - taken off the map first if one is up
             if(identical(heatShown$card, inputId_select)) hideHeat()
             heatStoreDrop(heatStore, inputId_select)
+            #and its kept path usage
+            heatStoreDrop(usageStash, inputId_select)
 
             #the card that was just deleted cannot be the one either page opens
             #on. vftVersionPosition() would fall back to the first card anyway,
@@ -5566,6 +5622,198 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
           })
         }, ignoreInit = TRUE)
 
+        # SHOW PATH USAGE ####
+        #
+        #Step 5's simulated path usage, drawn over the network being edited so
+        #the edits are not made blind. A picture only: nothing on the scenario
+        #changes, nothing is saved, and the layer is click-through (see its CSS
+        #in newVersions_ui.R), so editing works as usual underneath it.
+        #
+        #WHICH SIMULATION. Every edit on this page NULLs the scenario's
+        #pathUsage (a new network needs a new simulation), and a copy starts
+        #without one - so "the selected scenario's usage" would be gone after the
+        #first click. In order:
+        #  own       the selected scenario's live pathUsage
+        #  stale     the usage this card had before it was edited (usageStash)
+        #  original  the Original's - the usual case: "Neu" against where
+        #            people walk today
+        #The legend says which, so an outdated one is never read as current.
+        #
+        #usageStash holds, per card (inputId_select, like the heat store), the
+        #last pathUsage the card arrived with and the layer built from it (see
+        #usageLayer()). pathUsage only ever changes in step 5, so filling it in enter()
+        #catches every value before an edit here can clear it - none of the
+        #edit handlers need to know about it. A NULL pathUsage leaves an entry
+        #alone, which is what keeps "stale" alive across visits. Module-local
+        #and never in r$networkList: it must not reach a save or step 5.
+        usageStash <- new.env(parent = emptyenv())
+        #what the map shows right now, as usageId(), or NULL
+        usageDrawn <- NULL
+
+        #the card position `pos` hangs on: versionsUI and networkList share positions
+        usageCardKey <- function(pos){
+          v <- r$versionsUI
+          if(is.null(pos) || !length(pos) || pos > length(v)) return(NULL)
+          v[[pos]]$inputId_select
+        }
+
+        #make the stash hold `pu` under `key`, keeping the built table if it
+        #already does. identical() is a pointer check when nothing has copied
+        #the graph, which is the usual case.
+        usageStashPut <- function(key, pu){
+          if(is.null(key) || is.null(pu)) return(invisible(NULL))
+          old <- usageStash[[key]]
+          if(is.null(old) || !identical(old$pu, pu)) usageStash[[key]] <- list(pu = pu, layer = NULL)
+          invisible(NULL)
+        }
+
+        #per visit: forget deleted cards, take in every simulation there is
+        usageStashRefresh <- function(){
+          keys <- vapply(r$versionsUI, function(v) v$inputId_select, character(1))
+          #heatStoreDrop() is a plain drop-keys-from-an-environment
+          heatStoreDrop(usageStash, setdiff(ls(usageStash, all.names = TRUE), keys))
+          nl <- r$networkList
+          for(i in seq_along(nl)){
+            if(i <= length(keys)) usageStashPut(keys[[i]], nl[[i]]$pathUsage)
+          }
+        }
+
+        #the simulation to show for the selected card, as list(key, kind), or NULL
+        usageSource <- function(){
+          nl  <- r$networkList
+          pos <- r$position
+          if(is.null(nl) || is.null(pos) || !length(pos) || pos > length(nl)) return(NULL)
+          key <- usageCardKey(pos)
+          if(is.null(key)) return(NULL)
+          if(!is.null(nl[[pos]]$pathUsage)){
+            usageStashPut(key, nl[[pos]]$pathUsage)
+            return(list(key = key, kind = "own"))
+          }
+          if(!is.null(usageStash[[key]])) return(list(key = key, kind = "stale"))
+          origKey <- usageCardKey(1)
+          if(!is.null(nl[[1]]$pathUsage)){
+            usageStashPut(origKey, nl[[1]]$pathUsage)
+            return(list(key = origKey, kind = "original"))
+          }
+          NULL
+        }
+
+        usageId <- function(src) paste(src$key, src$kind)
+
+        #The layer, ENCODED, built once per simulation and kept in the stash:
+        #the leaflet calls vftAddNetworkLines() makes, with their GeoJSON
+        #already written, and the JS they need. Drawing is then a replay of
+        #those calls, onto a map or a proxy, and costs next to nothing - the
+        #encoding is what scales with edge count (0.2-0.4 s at 29k edges,
+        #measured), and without the cache every toggle and every re-render
+        #with the overlay on would pay it again.
+        #
+        #Only the USED edges, and only the columns the drawing reads: the
+        #network itself is already on the map. Palette, widths and width
+        #reference as step 5's plotPathUsage(), so the two pages read the same.
+        usageLayer <- function(key){
+          e <- usageStash[[key]]
+          if(is.null(e)) return(NULL)
+          if(is.null(e$layer)){
+            et   <- dplyr::as_tibble(e$pu |> tidygraph::activate(edges))
+            geom <- names(et)[vapply(et, function(col) inherits(col, "sfc"), logical(1))][1]
+            keep <- is.finite(et$passage) & et$passage > 0
+            if(!any(keep)) return(NULL)
+            ut   <- sf::st_as_sf(et[keep, c("passage", "passageAOI", geom)])
+            #st_zm() only when there is a Z or M to drop: it rebuilds every
+            #geometry either way, and was 0.35 s of a 0.36 s build at 28k
+            #edges on a network that has neither
+            g <- sf::st_geometry(ut)
+            if(!is.null(attr(g, "z_range")) || !is.null(attr(g, "m_range")))
+              ut <- sf::st_zm(ut, drop = TRUE, what = "ZM")
+            mx  <- max(ut$passage)
+            pal <- leaflet::colorNumeric(c("darkgrey", grDevices::colorRampPalette(
+                     c("lightblue", "steelblue", "#182db5", "#37046e"))(max(mx - 1, 1))),
+                     domain = c(0, mx))
+            base <- leaflet::leaflet()
+            m <- vftAddNetworkLines(base, ut, values = ut$passage,
+                                    weightRef = ut$passageAOI, pal = pal,
+                                    group = "usageNV", pane = "usageLayer")
+            #the JS the GL layer adds (one copy per width class, hence unique),
+            #not leaflet's own, which every map already carries. m$x$limits is
+            #left behind on purpose: the overlay must not move the view.
+            e$layer <- list(calls = m$x$calls,
+                            deps  = unique(utils::tail(m$dependencies,
+                                             length(m$dependencies) - length(base$dependencies))))
+            usageStash[[key]] <- e
+          }
+          e$layer
+        }
+
+        #the legend: step 5's classes, less "kein" - unused paths are not drawn
+        usageLegend <- function(map, kind){
+          title <- switch(kind,
+                          own      = "Wegnutzung:",
+                          stale    = "Wegnutzung (letzte Simulation)",
+                          original = "Wegnutzung (Original)")
+          leaflet::addLegend(map, position = "topright",
+                             title  = vftTrText(i18n(), title),
+                             labels = vapply(c("niedrigste", "mittlere", "hohe", "höchste"),
+                                             function(k) vftTrText(i18n(), k), character(1)),
+                             colors = c("lightblue", "steelblue", "#182db5", "#37046e"),
+                             layerId = "legendUsageNV")
+        }
+
+        #onto a map or a proxy. The JS goes on first: a proxy ships whatever
+        #dependencies it carries with its call, and the map being drawn on may
+        #never have held a GL layer (an editable scenario's is all SVG).
+        drawUsage <- function(map, src){
+          layer <- vftTime("newVersions:usageLayer", usageLayer(src$key))
+          if(is.null(layer)) return(map)
+          map$dependencies <- c(map$dependencies, layer$deps)
+          for(cl in layer$calls){
+            map <- do.call(leaflet::invokeMethod, c(list(map, NULL, cl$method), cl$args))
+          }
+          usageDrawn <<- usageId(src)
+          usageLegend(map, src$kind)
+        }
+
+        clearUsage <- function(map){
+          usageDrawn <<- NULL
+          vftClearNetworkLines(map, group = "usageNV") |>
+            leaflet::removeControl("legendUsageNV")
+        }
+
+        setUsageOn <- function(on){
+          r$usageOn <- on
+          shinyjs::toggleClass(id = "showUsage", class = "vftConflictOn", condition = on)
+        }
+
+        #Live when there is something to show. A card switch is not this
+        #observer's to redraw: it re-renders the map, and the render draws the
+        #new card's overlay (see "THE PATH USAGE" there) - redrawing here as
+        #well would pay for it twice. What is left for this one is the source
+        #changing UNDER the same map, which is an edit turning "own" into
+        #"stale": the same lines, so only the legend's title changes.
+        obsUsageState <- shiny::observe({
+          src <- usageSource()
+          shinyjs::toggleState(id = "showUsage", condition = !is.null(src))
+          if(!isTRUE(shiny::isolate(r$usageOn))) return(invisible(NULL))
+          if(is.null(src)){
+            setUsageOn(FALSE)
+            clearUsage(leaflet::leafletProxy("versionMap"))
+          }else if(!is.null(usageDrawn) && !identical(usageId(src), usageDrawn) &&
+                   startsWith(usageDrawn, paste0(src$key, " "))){
+            usageDrawn <<- usageId(src)
+            usageLegend(leaflet::leafletProxy("versionMap"), src$kind)
+          }
+        })
+
+        obsShowUsage <- shiny::observeEvent(input$showUsage, {
+          src <- usageSource()
+          #greyed out otherwise; this is the console-fired click
+          if(is.null(src)) return(invisible(NULL))
+          on <- !isTRUE(r$usageOn)
+          setUsageOn(on)
+          proxy <- clearUsage(leaflet::leafletProxy("versionMap"))
+          if(on) drawUsage(proxy, src)
+        }, ignoreInit = TRUE)
+
       # CONFIRM NEW VERSIONS ####
 
       obsConfirm <- shiny::observeEvent( input$newVersionsConfirmButton, {
@@ -5669,6 +5917,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
       conflictKey(vftConflictKey(SM_pres))
       setConflictsOn(FALSE)
       setConflictsOrigOn(FALSE)
+      setUsageOn(FALSE)
       conflictVisit <<- conflictVisit + 1L
       SMcolors      <<- .rx$SMcolors()
       shp_PA        <<- .rx$shp_PA()
@@ -5839,6 +6088,8 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
                                        vapply(r$versionsUI, function(v) v$inputId_select,
                                               character(1))))
       heatShown <<- NULL
+      #every simulation this visit arrives with, before an edit can clear it
+      usageStashRefresh()
       generateVersionButtons()
 
       #--- 6. redraw. output$versionMap reads r$updateRender and
