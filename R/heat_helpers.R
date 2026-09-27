@@ -449,20 +449,21 @@ heatGeometryTerm <- function(shade, svf, wall, geom = heatGeometry(),
 #' reaches the palette from INSIDE a function body, where the lookup happens at
 #' call time and the order no longer matters.
 
-#' The time-of-day choices for the Hitzeminderung control, labelled.
+#' The translation key of each time-of-day bin. The time-of-day buttons on the
+#' newVersions page label themselves with these through i18n$t(), and
+#' heatBinChoices() below turns them into plain text for the card icons'
+#' tooltips - one list, so the two cannot drift apart.
+HEAT_BIN_KEYS <- c(morning = "Morgen", midday = "Mittag", afternoon = "Nachmittag")
+
+#' The time-of-day bins, labelled in whatever language the Translator is set to.
 #'
-#' Values are HEAT_BINS, which is what heatRaster() takes; labels are the German
-#' keys translated into whatever language the Translator is currently set to.
-#' Lives here rather than in the UI so the UI and the language observer that
-#' refreshes it cannot drift apart - they are the same list or they are a bug.
-#'
-#' Through vftTrText(), because a select's labels must be plain character and
-#' i18n$t() returns a tag once usei18n() has run. See vftTrText() for what that
-#' costs and why the server has to update these on a language change.
+#' Values are HEAT_BINS, which is what heatRaster() takes. Through vftTrText(),
+#' because a tooltip attribute must be plain character and i18n$t() returns a
+#' tag once usei18n() has run - so the caller has to refresh it on a language
+#' change (sendHeatIcons() in the language observer does).
 heatBinChoices <- function(i18n = NULL){
-  keys <- c(morning = "Morgen", midday = "Mittag", afternoon = "Nachmittag")
   stats::setNames(HEAT_BINS,
-                  vapply(HEAT_BINS, function(b) vftTrText(i18n, keys[[b]]),
+                  vapply(HEAT_BINS, function(b) vftTrText(i18n, HEAT_BIN_KEYS[[b]]),
                          character(1)))
 }
 

@@ -291,13 +291,16 @@ vftFitHeightCSS <- function(){
       margin: 0;
     }
 
-    /* ---- newVersions: map column and sidebar end on the same line ------- */
-    /* Both columns are flex, both are the same height, and in each one the
-       element that should absorb the slack is the one that flexes - the map on
-       the left, the scenario list on the right. That is what makes the bottom of
-       the map and the bottom of the confirm button line up, and it keeps lining
-       up when the paint-tool block under the map is shown: the map gives back
-       exactly the height the tools take, rather than the page growing by it. */
+    /* ---- newVersions: map and sidebar end on the same line -------------- */
+    /* The body is a column: a top row (layer rail | map | scenario sidebar)
+       that absorbs the slack, and under it the paint panel, which only the
+       Hitzeminderung context shows and which spans all three. In the top row
+       the map and the sidebar are the same height, and in the sidebar the
+       scenario list is what flexes - that is what makes the bottom of the map
+       and the bottom of the confirm button line up, and it keeps lining up when
+       the paint panel is shown: the top row gives back exactly the height the
+       panel takes, rather than the page growing by it. The top row's own rules
+       are with the rest of the page's CSS in R/newVersions_ui.R. */
     /* The band's height is not computed from a reserve any more. The page is a
        .vft-fit-page and this row is its grow child, so the row IS whatever the
        head leaves and the columns simply fill it. The reserve that used to be
@@ -316,20 +319,23 @@ vftFitHeightCSS <- function(){
     .vft-fit-page > .vft-nv-body{
       flex: 1 1 auto;
       min-height: 300px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
     }
+    .vft-nv-body > *{ flex: 0 0 auto; }
     .vft-nv-col{
       display: flex;
       flex-direction: column;
       min-height: 0;
-      /* 100% of that row, so the bottom of the map and the bottom of the
-         confirm button land on the bottom of the pane. The 780px cap is the
-         one the clamp had: past it a map is tall enough, and the slack on a
-         very tall monitor is better left blank than spent on more map. */
+      /* 100% of the top row, so the bottom of the map and the bottom of the
+         confirm button land on the same line. The 780px cap is the one the
+         clamp had: past it a map is tall enough, and the slack on a very tall
+         monitor is better left blank than spent on more map. */
       height: 100%;
       max-height: 780px;
     }
     .vft-nv-col > *{ flex: 0 0 auto; }
-    .vft-nv-col > .vft-nv-mapslot{ flex: 1 1 auto; min-height: 200px; }
     .vft-nv-mapslot .shiny-spinner-output-container{ height: 100%; }
     #newVersions-versionMap{ height: 100% !important; }
     /* the sidebar's list sits one level down, inside its own fluidRow, so the

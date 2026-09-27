@@ -209,11 +209,16 @@ newVersions_server <- function(id, networkList, i18n, currentLang, isFirstRun,
                         en = list("Paths/Roads"         = 1, "Parking/Residences"   = 3))
       choices[[heatLab]] <- 4
 
+      #drawn as one segmented control (the #newVersions-contextChoice rules in
+      #newVersions_ui.R), each choice with its icon in front of the label
+      ctxIcons <- c("1" = "road", "3" = "home", "4" = "heat")
       buttons <- shiny::radioButtons(
         inputId = NS(id,"contextChoice"),
         label = NULL,
         inline = TRUE,
-        choices = choices,
+        choiceNames = lapply(names(choices), function(n)
+          shiny::tagList(nvIcon(ctxIcons[[as.character(choices[[n]])]]), shiny::span(n))),
+        choiceValues = unname(unlist(choices)),
         selected = selectedChoice
       )
 
@@ -702,9 +707,6 @@ if(is.null(r$updateNetworkPlot)){
           session$sendCustomMessage(type = "set-paint-active", message = paintContext)
           if(paintContext) shinyjs::show(id = "paintColorButtonsDiv")
           else             shinyjs::hide(id = "paintColorButtonsDiv")
-          #the underground switch means nothing without the national layer
-          shinyjs::toggle(id = "ugToggleDiv",
-                          condition = paintContext && file.exists(undergroundPath()))
           #the cards' heat icons belong to this context alone. By selector: the
           #card column's ids are not namespaced. Leaving it takes a shown map's
           #red border and lit switch with it - the layer went with the old map.
@@ -1000,6 +1002,9 @@ if(is.null(r$updateNetworkPlot)){
             shinyjs::show(id = "paintColorButtonsDiv")
             setPaintLevelButtons(canopyActive)
             shiny::isolate(applyPaintLevelColor(session, r, if(canopyActive) "canopy" else "ground"))
+            #a card switch lands here too: the heat button's label follows the
+            #card now selected
+            heatLabelSync()
 
             #THE HEAT MODE DOES NOT SURVIVE A RE-RENDER, so do not let the switch
             #claim that it does. The surface is drawn through leafletProxy onto the
@@ -1341,9 +1346,9 @@ armBrush <- function(session, r, id){
 #actionButton comes back with its click count reset, and on this page that is the
 #failure mode that has cost the most.
 #
-#The paintHeightAt_* class is what moves the bar next to the armed material (a
-#CSS order, see .paintHeightAt_* in newVersions_ui.R), and paintHeightOn on the
-#row is what makes the other buttons shift left rather than both ways.
+#The paintHeightAt_* class is what moves the bar next to the armed material,
+#on its right (a CSS order, see .paintHeightAt_* in newVersions_ui.R); the
+#buttons after it are pushed along to make room.
 showHeightBar <- function(r, ramp, armed){
   for(rp in vftHeightRamps()){
     gid  <- paste0("paintHeightGroup_", rp$name)
@@ -1351,7 +1356,6 @@ showHeightBar <- function(r, ramp, armed){
     if(mine) shinyjs::show(gid) else shinyjs::hide(gid)
     shinyjs::toggleClass("paintHeightBar", paste0("paintHeightAt_", rp$name), condition = mine)
   }
-  shinyjs::toggleClass("paintToolRow", "paintHeightOn", condition = !is.null(ramp))
   if(is.null(ramp)){
     shinyjs::hide("paintHeightBar")
     return(invisible(NULL))
@@ -1762,13 +1766,12 @@ ugProxy <- function()
 ugLang <- function()
   tryCatch(shiny::isolate(i18n())$get_translation_language(), error = function(e) "de")
 
-#The overlay is up while a warning material is armed - that is when it answers
-#a question - or whenever the switch says so.
-ugVisible <- function(){
-  if(isTRUE(shiny::isolate(input$showUG))) return(TRUE)
-  a <- shiny::isolate(r$armedPaintId)
-  length(a) == 1L && !is.na(a) && paintBaseId(a) %in% UG_WARN_BASES
-}
+#The overlay is always up on the Hitzeminderung context - it used to follow a
+#switch and the armed material, and now it is simply part of what that context
+#shows. It is only ever drawn there (ugOnRender() runs from the context 4
+#render, and ugDraw()/ugSyncVisibility() check the context), and a new map
+#instance for any other context comes without it.
+ugVisible <- function() TRUE
 
 ugAddPolygons <- function(map, els){
   if(is.null(els) || !nrow(els)) return(map)
@@ -1923,10 +1926,6 @@ ugOnRender <- function(map, aoi){
   map
 }
 
-shiny::observeEvent(input$showUG, {
-  ugSyncVisibility()
-}, ignoreInit = TRUE)
-
 #The brush hit an element: stopped at it, or painted over it if it is ignored
 #(paintbrush.js, once per stroke and element then)
 shiny::observeEvent(input$ugHit, {
@@ -2012,6 +2011,21 @@ sendHeatIcons <- function(cards = NULL) shiny::isolate({
     session$sendCustomMessage("vft-heat-icons",
                               list(card = card, html = as.character(heatIconsFor(card))))
   }
+  #every change to the store is followed by a call here, so this is also where
+  #the heat button learns whether there is a map to show
+  heatLabelSync()
+  invisible(NULL)
+})
+
+#"Hitze berechnen" or "Hitze anzeigen". The button holds both labels (so the
+#client translates them) and the vftHeatHasMap class picks one: shown when the
+#SELECTED card has a valid map at the chosen time of day, or when a map is up
+#at all - then the button is held down and "anzeigen" is what it is doing.
+heatLabelSync <- function() shiny::isolate({
+  card <- heatCardKey(r$position)
+  has  <- isTRUE(r$heatOn) ||
+    !is.null(heatStoreGet(heatStore, card, heatCurrentBin(), heatAoiKey()))
+  shinyjs::toggleClass("heatSwitch", "vftHeatHasMap", condition = has)
   invisible(NULL)
 })
 
@@ -2042,7 +2056,7 @@ hideHeat <- function(clear = TRUE){
   if(!is.null(prev)) shinyjs::removeClass(prev, "vftHeatCard")
   if(isTRUE(clear)) clearHeat()
   applyPaintGates()
-  if(!is.null(prev)) sendHeatIcons(prev)
+  if(!is.null(prev)) sendHeatIcons(prev) else heatLabelSync()
   invisible(NULL)
 }
 
@@ -2289,6 +2303,7 @@ shiny::observeEvent(input$heatBin, {
   if(is.null(bin) || !nzchar(bin)) return(NULL)
   if(identical(bin, shiny::isolate(r$heatBin))) return(NULL)
   r$heatBin <- bin
+  heatLabelSync()
   if(!isTRUE(shiny::isolate(r$heatOn)) || is.null(heatShown)) return(NULL)
   card  <- heatShown$card
   entry <- heatStoreGet(heatStore, card, bin, heatAoiKey())
@@ -2349,7 +2364,7 @@ shiny::observeEvent(input$heatIconClick, {
     return(NULL)
   }
   r$heatBin <- bin
-  shiny::updateSelectInput(inputId = "heatBin", selected = bin)
+  shiny::updateRadioButtons(inputId = "heatBin", selected = bin)
   showHeat(card, bin, entry)
 }, ignoreInit = TRUE)
 
@@ -2626,16 +2641,9 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
     r$currentLang <- "en"
   }
 
-  #The time-of-day labels are plain text, not the <span> the client swaps by
-  #itself, because a select's options cannot hold a tag - see heatBinChoices().
-  #So they are re-rendered here, keeping whatever bin is selected: passing
-  #`choices` without `selected` would silently reset the read-out to midday on
-  #every language change.
-  sel <- shiny::isolate(r$heatBin)
-  if(is.null(sel) || !nzchar(sel)) sel <- HEAT_BIN_DEFAULT
-  shiny::updateSelectInput(inputId = "heatBin",
-                           choices = heatBinChoices(i18n()), selected = sel)
-  #the heat icons' tooltips are the same labels, in markup built on the server
+  #The time-of-day buttons translate themselves now (their labels are i18n
+  #spans), but the heat icons' tooltips are the same labels as plain text, in
+  #markup built on the server - see heatBinChoices()
   sendHeatIcons()
   #...and so are the underground outlines' hover labels
   if(isTRUE(shiny::isolate(input$contextChoice) == 4)) ugDraw()
@@ -2810,47 +2818,38 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
                                 selected = FALSE, provisional = FALSE, heatBins = character(0)){
 
         label <- versionLabel(name, inputId_select, provisional)
+        #isStart: the cards arrive disabled and are enabled once the page is
+        #ready (see the enable/disable loops over versionsUI)
+        maybeDisabled <- function(tag) if(isTRUE(isStart)) shinyjs::disabled(tag) else tag
 
+        #One card: the select button fills it, the heat icons sit in its
+        #bottom-left corner and the delete X in its top-right one - a sibling
+        #of the select button, not inside it, so a click on the X never also
+        #selects the card. The cards are the grid cells of the scenario list
+        #(the .vftCardSlot rules in newVersions_ui.R), after the "+" tile.
         shiny::insertUI(
           selector = '#placeholder',
           ## wrap element in a div with id for ease of removal
-          ui = shiny::tags$div(id = id_ui_name,
-                        shiny::div(style = "height: 5px"),
-
+          ui = shiny::tags$div(id = id_ui_name, class = "vftCardSlot",
                         shiny::tags$div(class = "vftCard",
-                        if(isTRUE(selected)){
-                          if(isStart == TRUE){
-                            shinyjs::disabled(
-                              shiny::actionButton(inputId = shiny::NS(id, inputId_select), label = label, width = "100px", style = "height: 100px", class = "selected")
+                          maybeDisabled(
+                            shiny::actionButton(inputId = shiny::NS(id, inputId_select), label = label,
+                                                class = if(isTRUE(selected)) "selected" else "notSelected")
+                          ),
+                          heatIconsTag(inputId_select, heatBins, i18n = shiny::isolate(i18n()),
+                                       ns = session$ns),
+                          if(name != "Original"){
+                            maybeDisabled(
+                              shiny::tags$button(
+                                id = shiny::NS(id, inputId_removal), type = "button",
+                                class = "vftB action-button vftCardDel",
+                                title = vftTrText(shiny::isolate(i18n()), "Szenario löschen"),
+                                shiny::HTML(paste0('<svg width="12" height="12" viewBox="0 0 24 24" fill="none" ',
+                                                   'stroke="currentColor" stroke-width="3" stroke-linecap="round" ',
+                                                   'aria-hidden="true"><path d="M6 6l12 12"/><path d="M18 6 6 18"/></svg>')))
                             )
-                          }else{
-                            shiny::actionButton(inputId = shiny::NS(id, inputId_select), label = label, width = "100px", style = "height: 100px", class = "selected")
                           }
-
-                        }else{
-                          if(isStart == TRUE){
-                            shinyjs::disabled(
-                              shiny::actionButton(inputId = shiny::NS(id, inputId_select), label = label, width = "100px", style = "height: 100px", class = "notSelected")
-                            )
-                          }else{
-                            shiny::actionButton(inputId = shiny::NS(id, inputId_select), label = label, width = "100px", style = "height: 100px", class = "notSelected")
-                          }
-
-                        },
-                        heatIconsTag(inputId_select, heatBins, i18n = shiny::isolate(i18n()),
-                                     ns = session$ns)
-                        ),
-                        if(name != "Original"){
-                          if(isStart == TRUE){
-                            shinyjs::disabled(
-                              shiny::actionButton(inputId = shiny::NS(id, inputId_removal), label = "X", width = "30px", style = "height: 30px")
-                            )
-                          }else{
-                            shiny::actionButton(inputId = shiny::NS(id, inputId_removal), label = "X", width = "30px", style = "height: 30px")
-                          }
-
-                          },
-                          shiny::div(style = "height: 5px")
+                        )
           )
         )
 
@@ -5350,8 +5349,8 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
               #meets this offer first: the switch is put back BEFORE the modal
               #goes up - there is nothing to draw either way - and "no" leaves
               #it unchecked and clickable, so turning it on again asks again.
-              shinyWidgets::updatePrettySwitch(session = session,
-                                               inputId = "showSM", value = FALSE)
+              shiny::updateCheckboxInput(session = session,
+                                         inputId = "showSM", value = FALSE)
               smAskCreate()
               return(invisible(NULL))
             }
