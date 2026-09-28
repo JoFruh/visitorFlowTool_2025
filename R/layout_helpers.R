@@ -20,13 +20,13 @@
 #      confirm buttons start hidden, and newVersions' paint tools are
 #      `display:none` until the heat-mitigation context shows them; under a
 #      fixed reserve both of those cost dead space at the bottom of the screen
-#      whenever they are not on show. Steps 1, 2, 4 and newVersions use this.
+#      whenever they are not on show. Steps 1, 4, 5 and newVersions use this.
 #
 #   2. A clamp(floor, what is left, ceiling) height, the same idea the nav bar's
 #      `--nav-*` scale already uses (see vftStepNav() in R/app_ui.R) - there the
 #      vw term tracks the monitor's WIDTH, here the middle term tracks what is
 #      left of its HEIGHT. Used where nothing toggles and the element is not the
-#      last thing in its column: step 3's plot and step 5's map frame.
+#      last thing in its column: step 3's plot.
 #
 # The floors matter as much as the fill: below them an element stops being
 # usable - a map you cannot navigate, a species list showing one row - and past
@@ -147,34 +147,22 @@ vftFitHeightCSS <- function(){
          smallest to begin with, so it reserves the most. Measured furniture at
          1080p is 321px; 330 leaves a little slack for a longer translation. */
       --vft-h-step3: clamp(180px, calc(var(--vft-fit) - 330px), 400px);
-
-      /* step 5's map frame. Measured furniture 152px - the title, two lines,
-         and the row of three download buttons under the map. */
-      --vft-h-step5: clamp(260px, calc(var(--vft-fit) - 175px), 600px);
-
-      /* the scenario list beside step 5's map: the 'new scenarios' button sits
-         above it and the launch button below, and both have to stay on screen
-         with it. */
-      --vft-h-step5-list: clamp(150px, calc(var(--vft-fit) - 330px), 400px);
     }
 
     #step3-AOIMap{ height: var(--vft-h-step3) !important; }
 
-    /* step 5's map is the one with a frame around it, because its 'no
-       simulation yet' placeholder is an OVERLAY on the live map rather than a
-       replacement for it (step5_ui.R spells out why it must not be a hide()).
-       Frame, map and overlay have to agree on a size or the white overlay stops
-       covering the map, so all three take it from the frame. The 884px that was
-       the frame's fixed width is now its max-width, so the frame is unchanged
-       on a wide screen and stops overflowing its column on a narrow one.
-       overflow:hidden is the backstop for the overlay's CONTENT: the
-       'noch keine Simulation' image is a fixed-size PNG and used to spill out
-       over the scenario sidebar to its right once the frame started shrinking. */
+    /* step 5's map sits in a frame, because its 'no simulation yet'
+       placeholder is an OVERLAY on the live map rather than a replacement for
+       it (step5_ui.R spells out why it must not be a hide()). Frame, map and
+       overlay have to agree on a size or the white overlay stops covering the
+       map, so all three take it from the frame - and the frame fills the
+       workspace's map slot, which is sized like newVersions' (see
+       .vft-ws-* below). overflow:hidden is the backstop for the overlay's
+       CONTENT: the 'noch keine Simulation' image is a fixed-size PNG. */
     .vft-map5-frame{
       position: relative;
       width: 100%;
-      max-width: 884px;
-      height: var(--vft-h-step5);
+      height: 100%;
       overflow: hidden;
     }
     #step5-mapAreaLeaflet{
@@ -192,24 +180,58 @@ vftFitHeightCSS <- function(){
       height: 100%;
       object-fit: contain;
     }
-    .vft-fit-vlist{ height: var(--vft-h-step5-list) !important; }
 
-    /* ---- step 1: a shorter head, so the map starts higher --------------- */
-    /* The rows between the banner and the map - the step title, the three-column
-       intake block, the 'load saved data' button - were set at the app's default
-       heading sizes and took ~150px of a screen whose whole point is the map
-       under them. These are the same sizes the max-height queries at the foot of
-       this file impose on a short screen, applied to this one block at every
-       height. */
-    .vft-step1-head h3{ font-size: 20px; margin: 6px 0; }
-    .vft-step1-head h4{ font-size: 15px; margin: 4px 0; }
-    .vft-step1-head h5{ font-size: 12px; margin: 3px 0; }
-    .vft-step1-head h6{ font-size: 11px; margin: 2px 0; line-height: 1.35; }
-    .vft-step1-head .form-group{ margin-bottom: 4px; }
+    /* ---- step 1: the three ways in, as a compact row of cards ---------- */
+    /* Upload an outline, draw one, or load a saved session - three cards
+       with an 'ODER' between them, their text set small: at the app's default
+       heading sizes this block took ~150px of a screen whose whole point is the
+       map under it. The cards share one height (stretch), and the load card
+       centres its single button. */
+    .vft-step1-options{
+      display: flex;
+      align-items: stretch;
+      justify-content: center;
+      gap: 12px;
+      padding-bottom: 10px;
+    }
+    .vft-step1-opt{
+      flex: 1 1 0;
+      max-width: 440px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      padding: 8px 12px;
+      text-align: center;
+    }
+    .vft-step1-opt-head{
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1.25;
+      color: #1f2624;
+    }
+    .vft-step1-opt-head svg{ flex: 0 0 auto; color: #006268; }
+    .vft-step1-opt-load{ flex: 0 0 auto; justify-content: center; }
+    /* two lines, split where the label's own <br> splits it */
+    .vft-step1-opt-load .btn{ white-space: nowrap; }
+    .vft-step1-or{
+      align-self: center;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      color: #5b6462;
+    }
+    .vft-step1-opt .form-group{ margin: 4px 0 0; max-width: 100%; }
     /* the fileInput's own progress bar is 20px of permanent white space under
        the control, and it only ever reads 'Upload complete'. */
-    .vft-step1-head .progress{ height: 12px; margin-bottom: 0; }
-    .vft-step1-head .btn-lg{ font-size: 14px; padding: 6px 12px; }
+    .vft-step1-opt .progress{ height: 12px; margin-bottom: 0; }
+    .vft-step1-opt .btn-file{ font-weight: 600; }
+    #step1-zoomText:empty{ display: none; }
+    #step1-zoomText{ font-size: 12px; line-height: 1.3; }
 
     /* ---- step 2: three columns of one height ---------------------------- */
     /* The species list, the plot and the group list are one visual band, so they
@@ -219,6 +241,26 @@ vftFitHeightCSS <- function(){
        the plot beside them can run down to their level - a Bootstrap row cannot
        do that from a row below, because the next row clears the tallest column
        of the one above it. */
+    /* the three columns' names, as section heads (R/ui_theme.R's
+       .vft-sec-head, restated for the h4s they are) */
+    .tab-content .vft-step2-heads h4{
+      margin: 0 0 6px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: #5b6462;
+    }
+    /* the species list and the group list are boxes, like every list in the
+       app; the group column IS its box */
+    .vft-step2-col > .vft-fit-species,
+    .vft-step2-groups{
+      border: 1px solid #d6d9d8;
+      border-radius: 10px;
+    }
+    .vft-step2-col > .vft-fit-species{ padding-top: 6px; padding-bottom: 6px; }
+    .vft-step2-groups{ padding-top: 6px; }
+    #step2-SDMmap img{ border-radius: 10px; }
     .vft-step2-col{
       display: flex;
       flex-direction: column;
@@ -311,20 +353,20 @@ vftFitHeightCSS <- function(){
 
        A separate class from .vft-grow on purpose: that one also carries rules
        for the columns INSIDE it, and `.vft-grow > [class*=\"col-\"] > *` would
-       outrank `.vft-nv-col > *` below and stretch every button and caption in
+       outrank `.vft-ws-col > *` below and stretch every button and caption in
        the sidebar. This sizes the row and nothing else.
 
        min-height is the floor the clamp used to give: below it the pane
        scrolls rather than the map shrinking further. */
-    .vft-fit-page > .vft-nv-body{
+    .vft-fit-page > .vft-ws-body{
       flex: 1 1 auto;
       min-height: 300px;
       display: flex;
       flex-direction: column;
       gap: 12px;
     }
-    .vft-nv-body > *{ flex: 0 0 auto; }
-    .vft-nv-col{
+    .vft-ws-body > *{ flex: 0 0 auto; }
+    .vft-ws-col{
       display: flex;
       flex-direction: column;
       min-height: 0;
@@ -335,18 +377,18 @@ vftFitHeightCSS <- function(){
       height: 100%;
       max-height: 780px;
     }
-    .vft-nv-col > *{ flex: 0 0 auto; }
-    .vft-nv-mapslot .shiny-spinner-output-container{ height: 100%; }
+    .vft-ws-col > *{ flex: 0 0 auto; }
+    .vft-ws-mapslot .shiny-spinner-output-container{ height: 100%; }
     #newVersions-versionMap{ height: 100% !important; }
     /* the sidebar's list sits one level down, inside its own fluidRow, so the
        ROW is the flex child and the box inside it fills the row. */
-    .vft-nv-col > .vft-nv-listrow{
+    .vft-ws-col > .vft-ws-listrow{
       flex: 1 1 auto;
       min-height: 120px;
       display: flex;
       min-width: 0;
     }
-    .vft-nv-listrow > .vft-fit-vlist-nv{ height: 100% !important; }
+    .vft-ws-listrow > .vft-ws-list{ height: 100% !important; }
 
     /* ---- the scenario sidebar, shared by step 5 and newVersions --------- */
     /* Both steps put the same column beside their map: a button on top, the

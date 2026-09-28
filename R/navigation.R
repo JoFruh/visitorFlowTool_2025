@@ -210,13 +210,25 @@ vftStepTrigger <- function(session, step){
 #' Hitzeminderung on the page and the bar moves, pick Wegen/Strassen and it moves
 #' back, without either of those knowing the bar exists.
 #'
+#' `r$vftContextPreset` counts too, and it is what keeps the simulation chain
+#' FOLDED behind the Hitzeminderung door. `r$navContext` is a mirror of the
+#' module's context and lands after `r$navStep` - later still on a first visit,
+#' where the module is only constructed further down the flush - so for that
+#' gap the step says newVersions and the context still says NULL, or "1" from
+#' the last visit. The ring then reads "Neue Versionen", a member of the folded
+#' group, and the bar's ring test unfolds the chain under a click that never
+#' asked for the simulation. goHitze() sets the preset BEFORE it navigates and
+#' clears it only once the flush is over, by which time the mirror has landed,
+#' so the two together cover the whole gap.
+#'
 #' Reads `r` reactively on purpose - its caller is the bar's observe(), which has
 #' to re-run when either half changes. NULL before the first navigation.
 vftNavCurrentId <- function(r){
   step <- r$navStep
   if(is.null(step)) return(NULL)
   if(identical(step, "newVersions") &&
-     identical(as.character(r$navContext), "4")) return("vftNav_hitze")
+     (identical(as.character(r$navContext), "4") ||
+      identical(as.character(r$vftContextPreset), "4"))) return("vftNav_hitze")
   vftNavInputId(step)
 }
 

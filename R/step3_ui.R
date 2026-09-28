@@ -1,4 +1,4 @@
-#### Step 1 UI - determine area ####
+#### Step 3 UI - define the target areas ####
 step3_ui <- function(id, i18n){
 vftDbg("UI4")
       shiny::fluidPage(
@@ -17,68 +17,46 @@ vftDbg("UI4")
           shiny::actionButton(inputId = shiny::NS(id, "infoButton3"), label = "")
         ),
 
-        shiny::fluidRow(
-          shiny::column(12, align = "center",
-                 shiny::h3(strong(i18n$t("Bestimmen der Zielgebiete"))),
-                 shiny::h4(i18n$t("Ein Zielgebiet ist ein Areal, das für Naherholungssuchende von Interesse sein kann.")),
-                 shiny::h4(i18n$t("Für die Erholungssimulation müssen wir alle möglichen Zielgebiete definieren, aus denen die simulierten Besucher wählen können."))
-          )
-        ),
-        shiny::fluidRow(
-          shiny::column(12, align = "center",
-                 shiny::h5(i18n$t("Bewegen Sie den Schieberegler, um den Umfang der Zielgebiete zu bestimmen. (Dies basiert auf einem 'Attraktivitätsmodell')")),
-                 shiny::h5(""),
-                 shiny::h5(i18n$t("Im nächsten Schritt haben Sie die Möglichkeit, Zielgebiete manuell zu korrigieren (hinzufügen/löschen/ausschneiden).")),
-                 shiny::h5(style = "color:#8f0404;font-weight:bold", i18n$t("Tipp: Wählen Sie einen Schwellenwert, der die größten Bereiche erzeugt und diese gleichzeitig voneinander getrennt hält."))
-          )
-        ),
+        #what a target area is, then what to do here, then the tip - three
+        #paragraphs that used to be six headings in three sizes
+        vftHead(i18n$t("Bestimmen der Zielgebiete"),
+                vftSub(i18n$t("Ein Zielgebiet ist ein Areal, das für Naherholungssuchende von Interesse sein kann."), " ",
+                       i18n$t("Für die Erholungssimulation müssen wir alle möglichen Zielgebiete definieren, aus denen die simulierten Besucher wählen können.")),
+                vftSub(i18n$t("Bewegen Sie den Schieberegler, um den Umfang der Zielgebiete zu bestimmen. (Dies basiert auf einem 'Attraktivitätsmodell')"), " ",
+                       i18n$t("Im nächsten Schritt haben Sie die Möglichkeit, Zielgebiete manuell zu korrigieren (hinzufügen/löschen/ausschneiden).")),
+                vftTip(i18n$t("Tipp: Wählen Sie einen Schwellenwert, der die größten Bereiche erzeugt und diese gleichzeitig voneinander getrennt hält."))),
 
               shiny::fluidRow(
                 shiny::column(4),
                 shiny::column(4, align = "center",
-                       shinyWidgets::chooseSliderSkin(skin = "Shiny", color = "#B06161"),
+                       #the skin applies to every slider in the app - step 2's
+                       #threshold slider takes the teal from here too
+                       shinyWidgets::chooseSliderSkin(skin = "Shiny", color = VFT_TEAL),
                        shinyWidgets::sliderTextInput(
                          inputId =shiny::NS(id, "AOISlider"),
                          label = i18n$t("Zielgebiete Schwelle"),
                          choices = as.character(round(seq(from = 20, to = 0, by = -0.1), 1)),
                          selected = 11)
-                       # sliderInput(NS(id, "AOISlider"), label = "Determine AoI extent", min = 11, max = 0, value = 3, width = "100%")
                 ),
-                shiny::column(4,
-          #                     shinyjs::disabled(
-          #                       shiny::tagList(
-          #                         shiny::checkboxInput(inputId = shiny::NS(id, "naturalAreasCheck"), label = shiny::HTML(as.character(i18n$t(":natGebiete:")))) ,
-          #                         shiny::tags$script(
-          #                           "
-          # $('#step3-speciesCheckbox .checkbox label span').map(function(choice){
-          #     this.innerHTML = $(this).text();
-          #
-          # });
-          # "
-          #                         )
-          #                       )
-          #                     )
-
-                )
+                shiny::column(4)
               ),
               shiny::fluidRow(
                 shiny::column(4),
                 shiny::column(4, align = "center",
-                       shiny::plotOutput(shiny::NS(id, "AOIMap"), height = 400),
+                       shiny::div(class = "vft-mapframe",
+                         shiny::plotOutput(shiny::NS(id, "AOIMap"), height = 400)
+                       )
                 ),
                 shiny::column(4)
               ),
-              shiny::div(style = "height: 10px"),
-              shiny::fluidRow(
-                shiny::column(12, align = "center", style = "display:table-cell; vertical-align: middle; ",
-                       shiny::actionButton(shiny::NS(id, "confirmButton3"), label = i18n$t("Best\u00E4tigen"), class = "btn-success btn-lg"),
-                       shiny::actionButton(shiny::NS(id, "skipButton"), label = i18n$t("Skip this step"), class = "btn-secondary")
-                       )
-              ),
-              shiny::div(style = "height: 20px"),
-              # ,
-                # column(4, sliderInput(inputId = NS(id, "threshold"), label = "Threshold", min = 0.1, max = 1, value = 1))
 
+              #ACTIONS: skipping first, the button that finishes the step last
+              shiny::div(class = "vft-actions",
+                shiny::actionButton(shiny::NS(id, "skipButton"), class = "vft-btn",
+                                    label = vftBtnLabel("skip", i18n$t("Skip this step"))),
+                shiny::actionButton(shiny::NS(id, "confirmButton3"), class = "vft-btn-primary",
+                                    label = vftBtnLabel("check", i18n$t("Bestätigen")))
+              )
 )
 
 }

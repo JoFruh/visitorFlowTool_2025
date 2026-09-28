@@ -1,43 +1,9 @@
 #### newVersions UI - create and edit scenarios ####
 
-#The page's one accent colour: the banner's teal (see vftStepNav() in
-#R/app_ui.R). Every switch, selected ring, active tool and primary button on
-#this page uses it. The material swatches do not: their colour IS the paint.
-NV_TEAL      <- "#006268"
-NV_TEAL_TINT <- "#e3f0f0"
-
 #A material's swatch colour, straight from the palette. The buttons used to
 #restate their hexes by hand in inline CSS and had to be edited together with
 #PAINT_CATEGORIES; now there is one table.
 nvPaintHex <- function(name) PAINT_CATEGORIES$hex[match(name, PAINT_CATEGORIES$name)]
-
-#18px stroke icons, drawn in currentColor so they follow the button's text
-nvIcon <- function(name){
-  d <- switch(name,
-    road   = '<path d="M5 20 9.5 4"/><path d="M19 20 14.5 4"/><path d="M12 5v2"/><path d="M12 11v2"/><path d="M12 17v2"/>',
-    home   = '<path d="M3 11 12 4l9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-5h4v5"/>',
-    heat   = '<path d="M14 14.76V4.5a2 2 0 0 0-4 0v10.26a4 4 0 1 0 4 0Z"/><path d="M12 10v6"/>',
-    eraser = '<path d="m7 21-4-4a2 2 0 0 1 0-2.8L13.2 4a2 2 0 0 1 2.8 0l5 5a2 2 0 0 1 0 2.8L12 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/>',
-    reset  = '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
-    upload = '<path d="M12 15V3"/><path d="m7 8 5-5 5 5"/><path d="M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/>',
-    up     = '<path d="m6 15 6-6 6 6"/>')
-  shiny::HTML(paste0('<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" ',
-                     'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">',
-                     d, '</svg>'))
-}
-
-#The small key in front of each map layer: what the layer looks like on the
-#map, so the colour lives here and the control itself stays neutral
-nvGlyph <- function(kind){
-  g <- switch(kind,
-    sm    = '<rect x="1" y="1" width="7.5" height="7.5" rx="1.5" fill="#fee08b"/><rect x="9.5" y="1" width="7.5" height="7.5" rx="1.5" fill="#fdae61"/><rect x="1" y="9.5" width="7.5" height="7.5" rx="1.5" fill="#f46d43"/><rect x="9.5" y="9.5" width="7.5" height="7.5" rx="1.5" fill="#d73027"/>',
-    pa    = '<rect x="1.5" y="1.5" width="15" height="15" rx="3" fill="rgba(74,134,54,0.25)" stroke="#4a8636" stroke-width="1.5"/><path d="M4 12 L12 4 M7 15 L15 7" stroke="#4a8636" stroke-width="1.2"/>',
-    aoi   = '<rect x="1.5" y="1.5" width="15" height="15" rx="3" fill="rgba(0,128,0,0.12)" stroke="green" stroke-width="1.8"/>',
-    conf  = '<circle cx="9" cy="9" r="7" fill="rgba(198,40,40,0.2)" stroke="#c62828" stroke-width="2"/>',
-    orig  = '<circle cx="9" cy="9" r="7" fill="none" stroke="#6a1b9a" stroke-width="2" stroke-dasharray="3 2.5"/>',
-    usage = '<path d="M1.5 13 C 6 13, 8 5, 16.5 5" fill="none" stroke="#182db5" stroke-width="4" stroke-linecap="round"/>')
-  shiny::HTML(paste0('<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">', g, '</svg>'))
-}
 
 #The scene beside the level switch: a tree, a bench, grass and a house. The
 #ground group (grass, bench, the house's ground floor) and the canopy group (the
@@ -71,32 +37,6 @@ nvLevelSceneSVG <- function(){
     '</svg>'))
 }
 
-#A map layer switch: a plain checkbox inside a label, styled as a switch. Still
-#an ordinary Shiny input - shiny's checkboxInputBinding binds any
-#input[type=checkbox] that has an id - so the server reads and updates it with
-#updateCheckboxInput() exactly as it would a checkboxInput().
-nvSwitchRow <- function(inputId, label, glyph){
-  shiny::tags$label(
-    class = "vftRailRow",
-    shiny::tags$input(id = inputId, type = "checkbox", class = "vftRailCheck"),
-    shiny::span(class = "vftGlyph", nvGlyph(glyph)),
-    shiny::span(class = "vftRailLabel", label),
-    shiny::span(class = "vftSw"))
-}
-
-#The same row for the three analysis overlays, which are actionButtons: the
-#server owns their on/off state (a search may have to run first) and says so
-#with the vftConflictOn class, which is what turns the switch on here.
-#Disabled until the server has something to show.
-nvToggleButton <- function(inputId, label, glyph){
-  shinyjs::disabled(
-    shiny::tags$button(
-      id = inputId, type = "button", class = "vftB action-button vftRailRow",
-      shiny::span(class = "vftGlyph", nvGlyph(glyph)),
-      shiny::span(class = "vftRailLabel", label),
-      shiny::span(class = "vftSw")))
-}
-
 #One material. The swatch is the paint colour; the selected ring is teal and
 #comes from the colorBtnSelected class setPaintColor() moves between buttons.
 nvMaterialButton <- function(inputId, label, hex, selected = FALSE, extraClass = NULL, sub = NULL){
@@ -113,21 +53,10 @@ nvDockHead <- function(label) shiny::div(class = "vftDockHead", label)
 
 NV_CSS <- "
 /* ---- head: the title centred over the centred context control ----- */
-/* The head sits over the rail and the map only - the scenario column beside
-   it runs up to the banner, its title level with this one. The left padding
-   is the rail plus the gap, so the title is centred over the MAP, which is
-   within ~10px of the page's centre. */
-.vft-nv-head{ display:flex; flex-direction:column; align-items:center; gap:4px;
-  padding:0 0 8px 216px; }
-.vft-nv-head h4, .vft-nv-side h4{ margin:0; line-height:1.1; }
-.vft-nv-head h4{ text-align:center; }
+/* The head is the shared workspace head (R/ui_theme.R): over the rail and
+   the map only, centred over the map, the scenario column's title level
+   with it. */
 .vft-nv-ctx .form-group{ margin:0; }
-/* The banner's contact line (app_ui.R) is a full-width row of its own, with
-   its text at the far left: on this page it only pushed the title down. Out
-   of the flow here, the text stays where it was, over the empty corner above
-   the rail. */
-.container-fluid:has(> .tabbable > .tab-content > .tab-pane.active .vft-nv-head) > .vft-nav-contact{
-  position:absolute; left:0; }
 
 /* the context radios as one segmented control. The server renders them
    (contextChoice_ui) and may disable the Hitzeminderung choice; the disabled
@@ -154,55 +83,13 @@ NV_CSS <- "
 #newVersions-contextChoice input:focus-visible + span,
 #newVersions-heatBin input:focus-visible + span{ outline:2px solid #006268; outline-offset:1px; }
 
-/* ---- the body: rail | map | scenarios, the paint panel under all three ---
-   The top row holds the head over rail + map (.vft-nv-main) and the scenario
-   column beside them, and absorbs the slack; the paint panel (Hitzeminderung
-   only) takes its natural height under them, so showing it costs the map and
-   the scenario list the same height and the bottom of the map and the bottom
-   of the confirm button stay on one line. See R/layout_helpers.R for the
-   .vft-nv-body / .vft-nv-col rules this builds on. The cap is layout_helpers'
-   780px map cap plus the head. */
-.vft-fit-page > .vft-nv-body{ padding-top:6px; }
-.vft-nv-body > .vft-nv-top{ flex:1 1 auto; min-height:0; max-height:840px; display:flex; gap:16px; }
-.vft-nv-main{ flex:1 1 auto; min-width:0; display:flex; flex-direction:column; }
-.vft-nv-main > .vft-nv-head{ flex:0 0 auto; }
-.vft-nv-maprow{ flex:1 1 auto; min-height:0; display:flex; gap:16px; }
-.vft-nv-col.vft-nv-side{ max-height:none; }
-.vft-nv-rail{ flex:0 0 200px; display:flex; flex-direction:column; gap:12px;
-  min-height:0; overflow-y:auto; }
-.vft-nv-mapslot{ flex:1 1 auto; min-width:0; min-height:200px; position:relative;
-  border:1px solid #d6d9d8; border-radius:10px; overflow:hidden; }
-.vft-nv-side{ flex:0 0 220px; width:220px; }
-
-/* shared button base: these are plain <button>s, not Bootstrap .btn, so no
-   .btn-default hover/active colour has to be fought */
-.vftB{ font:inherit; margin:0; cursor:pointer; }
-.vftB:disabled{ cursor:default; }
-.vftB:focus-visible{ outline:2px solid #006268; outline-offset:2px; }
-
-/* ---- the rail: every 'show X' is one switch row -------------------- */
-.vftRailCard{ background:#ffffff; border:1px solid #d6d9d8; border-radius:10px;
-  padding:10px 6px 6px; display:flex; flex-direction:column; gap:2px; }
-.vftRailHead{ margin:0 8px 4px; font-size:11px; font-weight:700; letter-spacing:.08em;
-  text-transform:uppercase; color:#5b6462; }
-.vftRailRow{ position:relative; display:flex; align-items:center; gap:10px; width:100%;
-  min-height:42px; margin:0; padding:4px 8px; border:0; border-radius:8px;
-  background:transparent; color:#1f2624; font-size:14px; font-weight:400;
-  line-height:1.15; text-align:left; cursor:pointer; }
-.vftRailRow:hover{ background:#f1f4f4; }
-.vftRailRow:disabled{ opacity:.45; background:transparent; }
-.vftGlyph{ flex:0 0 18px; width:18px; height:18px; display:flex; }
-.vftRailLabel{ flex:1 1 auto; min-width:0; }
-input.vftRailCheck{ position:absolute; opacity:0; width:1px; height:1px; margin:0; pointer-events:none; }
-.vftSw{ position:relative; flex:0 0 36px; width:36px; height:20px; border-radius:10px;
-  background:#c6cbc9; transition:background .2s; }
-.vftSw::after{ content:''; position:absolute; top:2px; left:2px; width:16px; height:16px;
-  border-radius:50%; background:#ffffff; box-shadow:0 1px 2px rgba(0,0,0,.3); transition:left .2s; }
-.vftRailCheck:checked ~ .vftSw,
-.vftRailRow.vftConflictOn .vftSw{ background:#006268; }
-.vftRailCheck:checked ~ .vftSw::after,
-.vftRailRow.vftConflictOn .vftSw::after{ left:18px; }
-.vftRailCheck:focus-visible ~ .vftSw{ outline:2px solid #006268; outline-offset:2px; }
+/* ---- the body ------------------------------------------------------ */
+/* Rail | map | scenario column, with the paint panel (Hitzeminderung only)
+   under all three. The layout, the rail and its switch rows, the '+' tile and
+   the confirm button are shared with step 5 and live in R/ui_theme.R; the
+   column heights in R/layout_helpers.R. The paint panel takes its natural
+   height, so showing it costs the map and the scenario list the same height
+   and the bottom of the map and of the confirm button stay on one line. */
 
 /* ---- the paint panel (Hitzeminderung) ------------------------------ */
 /* One line down to a 1440px window. Wraps rather than overflows below that:
@@ -267,10 +154,10 @@ input.paintLevelCheckbox{ position:absolute; top:0; left:0; width:100%; height:1
 /* MATERIALS, laid out as COLUMNS rather than a canopy row over a ground row:
    the height bar has to be able to open between any two of them and span both
    levels, and a row can only take it at its own height. The block (both
-   levels, full height) first, then the three ground-only buttons at the foot,
-   then two columns of canopy over ground - so every canopy button is on the
-   top row and every ground button on the bottom one, which is where the level
-   switch's knob stops. Each item has an explicit `order` for the bar to slot
+   levels, full height) first, then two columns of canopy over ground, then
+   the three ground-only buttons at the foot - so every canopy button is on
+   the top row, packed left against the block, and every ground button on the
+   bottom one, which is where the level switch's knob stops. Each item has an explicit `order` for the bar to slot
    in after (see .paintHeightAt_*). */
 .vftMatWrap{ display:flex; align-items:flex-end; gap:6px; height:100px; }
 .vftMatCol{ display:flex; flex-direction:column; gap:12px; }
@@ -302,8 +189,8 @@ input.paintLevelCheckbox{ position:absolute; top:0; left:0; width:100%; height:1
    flex:1 on the swatches so a 5-step and a 3-step ramp both come to 100px. */
 .paintHeightBar{ height:100px; width:56px; flex:0 0 56px; }
 .paintHeightBar.paintHeightAt_artificial_block{ order:15; }
-.paintHeightBar.paintHeightAt_canopy_artificial{ order:55; }
-.paintHeightBar.paintHeightAt_canopy_tree{ order:65; }
+.paintHeightBar.paintHeightAt_canopy_artificial{ order:25; }
+.paintHeightBar.paintHeightAt_canopy_tree{ order:35; }
 .paintHeightGroup{ display:flex; flex-direction:column; height:100%; gap:3px; }
 .paintHeightBtn{ flex:1 1 0; min-height:0; width:100%; padding:0; border:0; border-radius:5px;
   font-size:11px; font-weight:700; line-height:1; white-space:nowrap; }
@@ -325,10 +212,12 @@ input.paintLevelCheckbox{ position:absolute; top:0; left:0; width:100%; height:1
 .vftB.paintToolActive,
 .vftB.paintToolActive:hover{ background:#006268; border-color:#006268; color:#ffffff; }
 
-/* HEAT. One button that computes and shows: 'Hitze berechnen' while the
+/* HEAT. One button that computes, shows and hides: 'Hitze berechnen' while the
    selected scenario has no map at this time of day, 'Hitze anzeigen' once it
-   has one. Both labels are in the markup, so the client can translate them,
-   and the server only moves the vftHeatHasMap class (heatLabelSync()). */
+   has one, 'Hitze ausblenden' while a map is up (held down, .paintToolActive),
+   because that is what the next click does. All three labels are in the
+   markup, so the client can translate them, and the server only moves classes
+   (heatLabelSync(), showHeat()/hideHeat()). */
 .vftHeatBtn{ position:relative; display:flex; align-items:center; justify-content:center;
   gap:8px; width:100%; height:44px; padding:0 30px; border:1px solid #006268;
   border-radius:8px; background:#ffffff; color:#006268; font-size:15px; font-weight:700;
@@ -336,6 +225,9 @@ input.paintLevelCheckbox{ position:absolute; top:0; left:0; width:100%; height:1
 .vftHeatLblShow{ display:none; }
 .vftHeatHasMap .vftHeatLblShow{ display:inline; }
 .vftHeatHasMap .vftHeatLblCalc{ display:none; }
+.vftHeatLblHide{ display:none; }
+.paintToolActive .vftHeatLblHide{ display:inline; }
+.paintToolActive .vftHeatLblCalc, .paintToolActive .vftHeatLblShow{ display:none; }
 /* WORK IN PROGRESS: the heat model runs in a daemon for seconds, so the button
    that started it says so - a ring turning at its right end. A pseudo-element,
    so it adds no box and the label cannot shift; pointer-events:none because the
@@ -361,33 +253,44 @@ input.paintLevelCheckbox{ position:absolute; top:0; left:0; width:100%; height:1
 #newVersions-heatBin svg{ width:18px; height:18px; }
 #newVersions-heatBin input:disabled + span{ opacity:.5; cursor:default; }
 
+/* HEAT MODE: while a heat map is on screen the brush is refused, so rather
+   than a panel of greyed buttons the panel holds the heat controls alone,
+   centred. The server sets the class with the brush gates (applyPaintGates()).
+   The heat section is exactly as tall as the level switch and the materials
+   (14px head + 8px gap + 100px), so the panel keeps its height and the map
+   above it does not move. */
+.vftDock.vftHeatMode{ justify-content:center; }
+.vftDock.vftHeatMode > :not(.vftDockHeat){ display:none; }
+.vftDock.vftHeatMode .vftDockHeat{ margin-left:0; }
+.vftDock.vftHeatMode .vftDockHead{ text-align:center; }
+
+/* A CLICK ON A DISABLED CONTROL is answered (see the vft-why-disabled script
+   below and 'A CLICK ON A DISABLED CONTROL' in newVersions_server.R). A
+   disabled element gets no click event, so these let the click through to
+   whatever is under them, where the script picks it up. */
+#newVersions-paintColorButtonsDiv button:disabled,
+#newVersions-paintColorButtonsDiv input:disabled,
+#newVersions-showConflicts:disabled,
+#newVersions-showConflictsOrig:disabled,
+#newVersions-showUsage:disabled,
+#newVersions-newVersionsConfirmButton:disabled{ pointer-events:none; }
+
 /* ---- the scenario column ------------------------------------------- */
 /* The list is a 2-column grid of square cards: the dashed '+' tile first,
    then one .vftCardSlot per scenario. The cards are insertUI'd into
    #placeholder, which enter() removes and re-inserts on every visit, so
    #placeholder is display:contents and its cards become cells of the same
    grid as the tile in front of it. */
-.vft-nv-side .vft-fit-vlist-nv{ padding:0 10px; }
 #topPlaceHolder_newVersion{ display:grid; grid-template-columns:repeat(2, minmax(0, 1fr));
   gap:10px; padding:10px 0; }
 #placeholder{ display:contents; }
 .vftCardSlot{ min-width:0; }
-.vftAddCard{ width:100%; aspect-ratio:1 / 1; padding:4px; border:2px dashed #aab4b2;
-  border-radius:10px; background:#f7f9f9; color:#006268; display:flex; flex-direction:column;
-  align-items:center; justify-content:center; gap:4px; font-size:13px; font-weight:600;
-  line-height:1.15; }
-.vftAddCard:hover{ border-color:#006268; background:#e3f0f0; }
-.vftAddCard:disabled{ opacity:.45; background:#f7f9f9; border-color:#aab4b2; }
 /* the delete X, in the card's top-right corner */
 .vftCardDel{ position:absolute; top:4px; right:4px; z-index:3; width:22px; height:22px;
   padding:0; border:0; border-radius:50%; background:transparent; color:#6b7472;
   display:flex; align-items:center; justify-content:center; }
 .vftCardDel:hover{ background:#f6e1df; color:#b3261e; }
 .vftCardDel:disabled{ opacity:.35; background:transparent; }
-.vftConfirmBtn{ width:180px; height:60px; border:0; border-radius:10px; background:#006268;
-  color:#ffffff; font-size:16px; font-weight:700; white-space:normal; }
-.vftConfirmBtn:hover{ background:#004e53; }
-.vftConfirmBtn:disabled{ opacity:.45; }
 
 .leaflet .legend{ font-size:15px; }
 /* the path usage overlay is a picture over the network being edited: its WebGL
@@ -403,7 +306,7 @@ vftDbg("UI6")
       ns <- function(x) shiny::NS(id, x)
 
       #vft-fit-page: this step is a flex column exactly as tall as the pane, and
-      #the body - vft-nv-body - fills it. The head sits inside the body, over
+      #the body - vft-ws-body - fills it. The head sits inside the body, over
       #the map, and the map takes whatever it leaves. Nothing is reserved for
       #the head, because the context radio group in it is server-rendered
       #(contextChoice_ui) and so invisible to any static measurement: a
@@ -429,28 +332,28 @@ vftDbg("UI6")
               ),
 
         #BODY ####
-        shiny::div(class = "vft-nv-body",
-          shiny::div(class = "vft-nv-top",
+        shiny::div(class = "vft-ws-body",
+          shiny::div(class = "vft-ws-top",
 
           #the head over the rail and the map; the scenario column beside
           #this runs up to the top of the page
-          shiny::div(class = "vft-nv-main",
+          shiny::div(class = "vft-ws-main",
 
             #HEAD ####
-            shiny::div(class = "vft-nv-head",
+            shiny::div(class = "vft-head vft-ws-head",
               shiny::h4(shiny::strong(i18n$t("Neue Szenarien erstellen"))),
               shiny::div(class = "vft-nv-ctx", shiny::uiOutput(outputId = ns("contextChoice_ui")))
             ),
 
-           shiny::div(class = "vft-nv-maprow",
+           shiny::div(class = "vft-ws-maprow",
 
             #RAIL: everything that is shown on the map, one switch each ####
-            shiny::div(class = "vft-nv-rail",
+            shiny::div(class = "vft-ws-rail",
               shiny::div(class = "vftRailCard",
                 shiny::div(class = "vftRailHead", i18n$t("Kartenebenen")),
-                nvSwitchRow(ns("showSM"),  i18n$t("Sensitivitäts-Matrix"), "sm"),
-                nvSwitchRow(ns("showPA"),  i18n$t("Schutzgebiete"),        "pa"),
-                nvSwitchRow(ns("showAOI"), i18n$t("Zielgebiete"),          "aoi")
+                vftSwitchRow(ns("showSM"),  i18n$t("Sensitivitäts-Matrix"), "sm"),
+                vftSwitchRow(ns("showPA"),  i18n$t("Schutzgebiete"),        "pa"),
+                vftSwitchRow(ns("showAOI"), i18n$t("Zielgebiete"),          "aoi")
               ),
               #CONFLICTS AND USAGE. The biodiversity-recreation conflicts step 5
               #found for the selected scenario, the Original's (searched for here
@@ -460,16 +363,16 @@ vftDbg("UI6")
               #usage observers in newVersions_server.R.
               shiny::div(class = "vftRailCard",
                 shiny::div(class = "vftRailHead", i18n$t("Auswertung")),
-                nvToggleButton(ns("showConflicts"),     i18n$t("Konflikte"),             "conf"),
-                nvToggleButton(ns("showConflictsOrig"), i18n$t("Konflikte im Original"), "orig"),
-                nvToggleButton(ns("showUsage"),         i18n$t("Wegnutzung"),            "usage")
+                vftToggleButton(ns("showConflicts"),     i18n$t("Konflikte"),             "conf"),
+                vftToggleButton(ns("showConflictsOrig"), i18n$t("Konflikte im Original"), "orig"),
+                vftToggleButton(ns("showUsage"),         i18n$t("Wegnutzung"),            "usage")
               )
             ),
 
             #MAP ####
-            shiny::div(class = "vft-nv-mapslot",
+            shiny::div(class = "vft-ws-mapslot",
               shinycssloaders::withSpinner(leaflet::leafletOutput(ns("versionMap"), height = 600),
-                                           type = 3, color = NV_TEAL, color.background = "white")
+                                           type = 3, color = VFT_TEAL, color.background = "white")
             )
            )
           ),
@@ -478,7 +381,7 @@ vftDbg("UI6")
             #the same height as the map beside it - the scenario list is what
             #flexes, so the confirm button at the foot of this column and the
             #bottom of the map end on the same line. See R/layout_helpers.R.
-            shiny::div(class = "vft-nv-col vft-scencol vft-nv-side",
+            shiny::div(class = "vft-ws-col vft-scencol vft-ws-side",
               shiny::fluidRow(shiny::column(12,
                 shiny::h4(shiny::HTML(paste0(i18n$t("Erstellen/auswählen Sie"), "<br>", i18n$t("ein Szenario"))))
               )),
@@ -488,8 +391,8 @@ vftDbg("UI6")
               #and shrinks with the screen so that the confirm button under it
               #stays put. The box already scrolls, so what a short screen costs
               #is rows of the list, not the button.
-              shiny::fluidRow(class = "vft-nv-listrow",
-                shiny::column(12, class = "vft-fit-vlist-nv vft-vlist",
+              shiny::fluidRow(class = "vft-ws-listrow",
+                shiny::column(12, class = "vft-ws-list vft-vlist",
                        style = "border: 1px solid #d6d9d8; border-radius: 10px; vertical-align:middle; width: 200px; overflow-y: auto;",
                   shinyjs::inlineCSS(list(.selected = "border-width: 3px; border-color: #006268")),
                   shinyjs::inlineCSS(".selected:focus {border-width: 3px; border-color: #006268; background-color: white} "),
@@ -513,23 +416,33 @@ vftDbg("UI6")
                     "  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4;",
                     "  overflow: hidden; max-width: 100%; overflow-wrap: anywhere; text-align: center;",
                     "}")),
-                  #THE HEAT ICONS at a card's foot, one per stored heat map
-                  #that still applies (heatIconsTag() in R/heat_helpers.R).
-                  #Shown on the Hitzeminderung context only - the server
-                  #puts .vftHeatCtx on the column there. .vftHeatStale is
-                  #paintbrush.js hiding them the moment a stroke starts,
-                  #ahead of the flush that makes it true on the server.
+                  #THE HEAT ICONS at a card's foot, one per time of day on
+                  #every card (heatIconsTag() in R/heat_helpers.R): in colour
+                  #where a stored map still applies, greyed where there is
+                  #none yet - clicking a grey one computes it. Shown on the
+                  #Hitzeminderung context only - the server puts .vftHeatCtx
+                  #on the column there. .vftHeatStale is paintbrush.js
+                  #greying them the moment a stroke starts, ahead of the
+                  #flush that makes it true on the server. .vftHeatBusy is
+                  #a job in flight (heatWorking()), which refuses clicks.
                   #The card of the map on screen goes red, over the teal
                   #of the selection, since that may be another card.
                   shinyjs::inlineCSS(paste(
                     ".vftHeatIcons { position: absolute; left: 4px; bottom: 4px; display: none; gap: 2px; z-index: 2; }",
                     "#topPlaceHolder_newVersion.vftHeatCtx .vftHeatIcons { display: flex; }",
-                    "#topPlaceHolder_newVersion .vftHeatIcons.vftHeatStale { display: none; }",
                     ".vftHeatIcon { width: 24px; height: 24px; box-sizing: border-box; padding: 0;",
                     "  border-radius: 50%; border: 1px solid #888; background: #ffffff; opacity: 0.75;",
                     "  display: flex; align-items: center; justify-content: center; cursor: pointer; }",
                     ".vftHeatIcon:hover { opacity: 1; }",
+                    ".vftHeatIcon.vftHeatNone, .vftHeatStale .vftHeatIcon { filter: grayscale(1); opacity: 0.4;",
+                    "  border-style: dashed; }",
+                    ".vftHeatIcon.vftHeatNone:hover, .vftHeatStale .vftHeatIcon:hover { opacity: 0.8; }",
+                    "#topPlaceHolder_newVersion.vftHeatBusy .vftHeatIcon { pointer-events: none; }",
                     ".vftHeatIcon.vftHeatShown { opacity: 1; border: 3px solid red; }",
+                    ".vftHeatIcons .vftHeatIcon.vftHeatPending { filter: none; opacity: 1; border: 2px solid #006268;",
+                    "  animation: vftHeatPulse 0.9s ease-in-out infinite alternate; }",
+                    "@keyframes vftHeatPulse { from { box-shadow: 0 0 0 0 rgba(0,98,104,0.5); }",
+                    "  to { box-shadow: 0 0 0 4px rgba(0,98,104,0); } }",
                     ".vftCard button:disabled ~ .vftHeatIcons { pointer-events: none; opacity: 0.4; }",
                     "#topPlaceHolder_newVersion button.vftHeatCard { border-width: thick !important; border-color: red !important; }")),
                   #...and the server's replacement for one card's strip,
@@ -587,7 +500,7 @@ vftDbg("UI6")
                   shiny::tags$span(class = "paintLevelSlot plvSlotGround", i18n$t("Boden")),
                   shiny::tags$span(
                     class = "paintLevelKnob",
-                    nvIcon("up"),
+                    vftIcon("up"),
                     shiny::tags$span(class = "knobLabelCanopy", i18n$t("Krone")),
                     shiny::tags$span(class = "knobLabelGround", i18n$t("Boden"))
                   )
@@ -598,25 +511,26 @@ vftDbg("UI6")
 
             #MATERIALS, as columns (see .vftMatWrap): the block, which belongs
             #to both levels, spans both rows and is never disabled by the
-            #switch; three ground-only buttons; then canopy over ground twice.
+            #switch; then canopy over ground twice, so the two canopy buttons
+            #follow the block on the top row; then three ground-only buttons.
             shiny::div(class = "vftDockSec",
               nvDockHead(i18n$t("Material")),
               shiny::div(class = "vftMatWrap",
                 nvMaterialButton(ns("paintColor_block"), i18n$t("Kuenstlicher Block"), nvPaintHex("artificial_block"),
                                  extraClass = "vftBlock vftOrd10",
                                  sub = shiny::span(class = "vftBlockSub", i18n$t("Krone + Boden"))),
-                nvMaterialButton(ns("paintColor_grass"),      i18n$t("Gras"),       nvPaintHex("grass"),
-                                 selected = TRUE, extraClass = "vftOrd20"),
-                nvMaterialButton(ns("paintColor_bush"),       i18n$t("Busch"),      nvPaintHex("bush"),       extraClass = "vftOrd30"),
-                nvMaterialButton(ns("paintColor_artificial"), i18n$t("Kuenstlich"), nvPaintHex("artificial"), extraClass = "vftOrd40"),
-                shiny::div(class = "vftMatCol vftOrd50",
+                shiny::div(class = "vftMatCol vftOrd20",
                   nvMaterialButton(ns("paintColor_canopyArtificial"), i18n$t("Kuenstlich"), nvPaintHex("canopy_artificial")),
                   nvMaterialButton(ns("paintColor_natural"),          i18n$t("Natuerlich"), nvPaintHex("natural"))
                 ),
-                shiny::div(class = "vftMatCol vftOrd60",
+                shiny::div(class = "vftMatCol vftOrd30",
                   nvMaterialButton(ns("paintColor_canopyTree"), i18n$t("Baum"),   nvPaintHex("canopy_tree")),
                   nvMaterialButton(ns("paintColor_water"),      i18n$t("Wasser"), nvPaintHex("water"))
                 ),
+                nvMaterialButton(ns("paintColor_grass"),      i18n$t("Gras"),       nvPaintHex("grass"),
+                                 selected = TRUE, extraClass = "vftOrd40"),
+                nvMaterialButton(ns("paintColor_bush"),       i18n$t("Busch"),      nvPaintHex("bush"),       extraClass = "vftOrd50"),
+                nvMaterialButton(ns("paintColor_artificial"), i18n$t("Kuenstlich"), nvPaintHex("artificial"), extraClass = "vftOrd60"),
 
                 #HEIGHT BAR, placed just right of the armed material by CSS
                 #order (.paintHeightAt_*). Every step of every ramp is built
@@ -666,16 +580,16 @@ vftDbg("UI6")
                   id = ns("paintImport"), type = "button",
                   class = "vftB vftTool vftToolWide",
                   onclick = "document.getElementById('newVersions-planFile').click();",
-                  nvIcon("upload"), shiny::span(i18n$t("Bestehenden Plan laden"))),
+                  vftIcon("upload"), shiny::span(i18n$t("Bestehenden Plan laden"))),
                 shiny::tags$input(id = ns("planFile"), type = "file",
                                   accept = ".pdf,.png,.jpg,.jpeg,.tif,.tiff",
                                   style = "display:none;"),
                 shiny::tags$button(id = ns("paintEraser"), type = "button",
                                    class = "vftB action-button vftTool",
-                                   nvIcon("eraser"), shiny::span(i18n$t("Radierer"))),
+                                   vftIcon("eraser"), shiny::span(i18n$t("Radierer"))),
                 shiny::tags$button(id = ns("paintReset"), type = "button",
                                    class = "vftB action-button vftTool",
-                                   nvIcon("reset"), shiny::span(i18n$t("Reset")))
+                                   vftIcon("reset"), shiny::span(i18n$t("Reset")))
               )
             ),
 
@@ -692,9 +606,10 @@ vftDbg("UI6")
               shiny::tags$button(
                 id = ns("heatSwitch"), type = "button",
                 class = "vftB action-button vftHeatBtn",
-                nvIcon("heat"),
+                vftIcon("heat"),
                 shiny::span(class = "vftHeatLblCalc", i18n$t("Hitze berechnen")),
-                shiny::span(class = "vftHeatLblShow", i18n$t("Hitze anzeigen"))),
+                shiny::span(class = "vftHeatLblShow", i18n$t("Hitze anzeigen")),
+                shiny::span(class = "vftHeatLblHide", i18n$t("Hitze ausblenden"))),
               #TIME OF DAY. The heat model is computed for one of three bins,
               #and the ranking of materials genuinely changes between them:
               #asphalt peaks 1-2 h after solar noon while grass and water barely
@@ -718,6 +633,50 @@ vftDbg("UI6")
           #panel above is hidden meanwhile
           shiny::div(id = ns("planImportPanel"), style = "display:none;")
         ),
+
+        #A CLICK ON A DISABLED CONTROL. The browser sends no click to a
+        #disabled element, so the CSS above lets it through to what is under
+        #it and this listens for it on the document, in the capture phase:
+        #  - a label whose own control is disabled (the context radios, the
+        #    level switch, the time of day) - the label still gets the click;
+        #  - otherwise any disabled button of this page's guarded set whose box
+        #    holds the pointer - checked by geometry, because with
+        #    pointer-events:none it is no longer the event's target.
+        #The server is told which control it was and decides what, if
+        #anything, the click gets. Only this page's controls (the ns prefix).
+        shiny::tags$script(shiny::HTML(sprintf(
+          "(function(){
+             if(window.__vftWhyDisabled) return; window.__vftWhyDisabled = true;
+             var NS = '%s';
+             var GUARD = ['#' + NS + 'paintColorButtonsDiv button:disabled',
+                          '#' + NS + 'showConflicts:disabled',
+                          '#' + NS + 'showConflictsOrig:disabled',
+                          '#' + NS + 'showUsage:disabled',
+                          '#' + NS + 'newVersionsConfirmButton:disabled'].join(',');
+             function report(id, value){
+               if(!window.Shiny || !Shiny.setInputValue) return;
+               Shiny.setInputValue(NS + 'disabledClick',
+                                   {id: id, value: value == null ? null : String(value), t: Date.now()},
+                                   {priority: 'event'});
+             }
+             document.addEventListener('click', function(e){
+               var t = e.target;
+               if(!t || !t.closest) return;
+               var lab = t.closest('label');
+               if(lab){
+                 var inp = lab.querySelector('input:disabled');
+                 var key = inp && (inp.id || inp.name) || '';
+                 if(key.indexOf(NS) === 0){ report(key, inp.type === 'radio' ? inp.value : null); return; }
+               }
+               var x = e.clientX, y = e.clientY, els = document.querySelectorAll(GUARD);
+               for(var i = 0; i < els.length; i++){
+                 var b = els[i].getBoundingClientRect();
+                 if(b.width > 0 && x >= b.left && x <= b.right && y >= b.top && y <= b.bottom){
+                   report(els[i].id, null); return;
+                 }
+               }
+             }, true);
+           })();", ns("")))),
 
         shiny::tagList(
           shiny::tags$script(src = "www/paintbrush.js"),  # at the end of the UI, outside tags$head

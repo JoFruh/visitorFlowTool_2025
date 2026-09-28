@@ -17,12 +17,10 @@ step2_ui <- function(id, i18n){
       shiny::actionButton(inputId = shiny::NS(id, "helpButton2"), label = ""),
       shiny::actionButton(inputId = shiny::NS(id, "infoButton2"), label = "")
     ),
-    shiny::fluidRow(
-      shiny::column(12, align = "center",
-      shiny::h3(shiny::strong(i18n$t("Bestimmen die Sensitivit\u00E4tsmatrix")))
-      )
-    ),
-    shiny::fluidRow(
+    vftHead(i18n$t("Bestimmen die Sensitivit\u00E4tsmatrix")),
+    #the three columns' names, set as section heads (.vft-step2-heads in
+    #R/layout_helpers.R) rather than as headings of their own
+    shiny::fluidRow(class = "vft-step2-heads",
       shiny::column(5, align = "center",
              shiny::h4(i18n$t("Arten ausw\u00E4hlen/abw\u00E4gen") )
       ),
@@ -33,7 +31,6 @@ step2_ui <- function(id, i18n){
              shiny::h4(i18n$t("Gruppen ausw\u00E4hlen"))
       )
     ),
-    shiny::div(style = "height: 10px"),
 
     #the three columns below are one visual band and share one height
     #(vft-step2-col, R/layout_helpers.R). Inside each, the tall scrolling part
@@ -63,7 +60,7 @@ step2_ui <- function(id, i18n){
                     #rows of the list rather than the buttons underneath it.
                     #See .vft-step2-col in R/layout_helpers.R.
                     shiny::column(12,  align = "left", class = "vft-fit-species",
-                                  style = "vertical-align:middle; overflow-y: scroll; overflow-x:scroll;",
+                                  style = "vertical-align:middle; overflow-y: auto; overflow-x: auto;",
 
                            # column(2,
                            #        uiOutput(outputId = NS(id, "speciesWeights") )
@@ -85,9 +82,9 @@ step2_ui <- function(id, i18n){
                     #same place on screen as before: this is the column they
                     #already sat under.
                     shiny::div(class = "vft-step2-weights",
-                       shiny::actionButton(shiny::NS(id, "redListWeights"), label = i18n$t("Gewicht Status Rote Liste"), class = "btn-secondary"),
-                       shiny::actionButton(shiny::NS(id, "priorityWeights"), label = i18n$t("Gewicht Priorit\u00E4t"), class = "btn-secondary"),
-                       shiny::actionButton(shiny::NS(id, "resetWeights"), label = i18n$t("Gewichte zur\u00FCcksetzen"), class = "btn-secondary")
+                       shiny::actionButton(shiny::NS(id, "redListWeights"), label = i18n$t("Gewicht Status Rote Liste"), class = "vft-btn"),
+                       shiny::actionButton(shiny::NS(id, "priorityWeights"), label = i18n$t("Gewicht Priorit\u00E4t"), class = "vft-btn"),
+                       shiny::actionButton(shiny::NS(id, "resetWeights"), label = vftBtnLabel("reset", i18n$t("Gewichte zur\u00FCcksetzen")), class = "vft-btn")
                     )
 
 
@@ -100,8 +97,8 @@ step2_ui <- function(id, i18n){
                        shiny::plotOutput(shiny::NS(id, "SDMmap"))
                        ),
                 shiny::column(1),
-                shiny::column(3,  align = "left", class = "vft-step2-col",
-                              style = " vertical-align:middle;  overflow-y: scroll; overflow-x:scroll ;" ,
+                shiny::column(3,  align = "left", class = "vft-step2-col vft-step2-groups",
+                              style = " vertical-align:middle;  overflow-y: auto; overflow-x: auto;" ,
                        shiny::checkboxInput(shiny::NS(id, "groupCheckbox_all"), label = i18n$t("Alle") ),
                        shiny::uiOutput(shiny::NS(id, "groupCheckbox_sens")),
                        shiny::uiOutput(shiny::NS(id, "groupCheckbox_type")),
@@ -128,10 +125,12 @@ step2_ui <- function(id, i18n){
                        #Legend
                        shiny::uiOutput(outputId = shiny::NS(id,"legend_ui") )
                        ),
-                shiny::column(4, align = "center",
-                       shiny::actionButton(shiny::NS(id, "confirmButton2"), label = i18n$t("Best\u00E4tigen"), class = "btn-success btn-lg"),
+                #the download first, the button that finishes the step last -
+                #the same order as every other step's action bar
+                shiny::column(4, align = "center", class = "vft-actions",
+                       shiny::actionButton(shiny::NS(id, "SMbutton"), label = vftBtnLabel("download", i18n$t("Download: Sensitivitäts-Matrix [.tif]")), class = "vft-btn"),
 
-                       shiny::actionButton(shiny::NS(id, "SMbutton"), label = i18n$t("Download: Sensitivitäts-Matrix [.tif]"), class = "btn-warning")
+                       shiny::actionButton(shiny::NS(id, "confirmButton2"), label = vftBtnLabel("check", i18n$t("Best\u00E4tigen")), class = "vft-btn-primary")
                        # shiny::p("oder"),
                        # shiny::actionButton(shiny::NS(id, "selectSpAfter"), label = "Auswahl der Arten NACH der Erholungsmodellierung",
                        #              class = "btn-warning")

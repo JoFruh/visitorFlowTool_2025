@@ -24,64 +24,35 @@ vftDbg("UI1")
                 shiny::actionButton(inputId = shiny::NS(id, "helpButton1"), label = ""),
                 shiny::actionButton(inputId = shiny::NS(id, "infoButton1"), label = "")
               ),
-              #vft-step1-head on both rows between the banner and the map: the
-              #title, the intake block and the 'load saved data' button were set
-              #at the app's default heading sizes and took about 150px off the
-              #one thing this step is for. R/layout_helpers.R sets them a couple
-              #of steps smaller at every screen height, not just a short one.
-              shiny::fluidRow(class = "vft-step1-head",
-                shiny::column(12, align = "center",
-                       shiny::h3(shiny::strong(i18n$t("Definieren den Bereich in der Schweiz.") ) )
+              vftHead(i18n$t("Definieren den Bereich in der Schweiz.")),
+
+              #THE THREE WAYS IN, as three cards with an 'ODER' between them:
+              #upload an outline, draw one on the map, or load a saved session.
+              #Their text is set small (.vft-step1-* in R/layout_helpers.R) -
+              #it took ~150px off the map at the app's default heading sizes.
+              shiny::div(class = "vft-step1-options",
+                shiny::div(class = "vft-card vft-step1-opt",
+                  shiny::div(class = "vft-step1-opt-head", vftIcon("upload"), shiny::span(i18n$t("Eine Kontur einreichen:"))),
+                  vftSub(shiny::HTML(paste0(i18n$t("eine"), " <strong>.kml</strong> ", i18n$t("Datei"), " ", i18n$t("oder als"), " <strong>Shapefile</strong> ", i18n$t("durch mehrerer Dateien"), " (<strong>.shp, .dbf, .shx</strong> etc.)"))),
+                  shiny::fileInput(shiny::NS(id, "shp"), label =NULL, multiple
+                                   = TRUE, accept = c('.shp','.dbf','.sbn','.sbx','.shx',".prj", ".kml"))
+                ),
+                shiny::div(class = "vft-step1-or", i18n$t("ODER")),
+                shiny::div(class = "vft-card vft-step1-opt",
+                  shiny::div(class = "vft-step1-opt-head", vftIcon("draw"), shiny::span(i18n$t("Klicken Sie mehrmals auf die Karte, um einen Bereich direkt zu zeichnen!"))),
+                  vftSub(shiny::HTML(paste0(i18n$t("(Verwenden Sie das"), " ", shiny::strong(i18n$t("Mausrad")), " ", i18n$t("zum"), " ", shiny::strong(i18n$t("Zoomen")), ".)"))),
+                  #written from ten places in step1_server via shinyjs::html().
+                  #A plain div, so it is not a registered output and never enters
+                  #the per-message manageHiddenOutputs() sweep.
+                  shiny::tags$div(id = shiny::NS(id, "zoomText"))
+                ),
+                shiny::div(class = "vft-step1-or", i18n$t("ODER")),
+                shiny::div(class = "vft-card vft-step1-opt vft-step1-opt-load",
+                  shiny::actionButton(inputId = NS(id, "loadSavedData"), class = "vft-btn",
+                                      label = shiny::tagList(vftIcon("folder"), shiny::span(shiny::HTML(text = paste0(i18n$t("Laden Sie gespeicherte Daten"), "<br/>", i18n$t("aus dieser App")," <strong>(.RData)</strong>") ))))
                 )
               ),
-              shiny::fluidRow(class = "vft-step1-head",
-                shiny::column(3, align = "center",
-                shiny::h4(i18n$t("Eine Kontur einreichen:") ),
-                         shiny::h6(shiny::HTML(paste0(i18n$t("eine"), "<strong> .kml</strong>", i18n$t("Datei"), "<br>", i18n$t("oder als"), "<strong> Shapefile</strong><br>", i18n$t("durch mehrerer Dateien"), "<br>(<strong>.shp, .dbf, .shx</strong> etc.)" )) ), #
-                         shiny::fileInput(shiny::NS(id, "shp"), label =NULL, multiple
-                                          = TRUE, accept = c('.shp','.dbf','.sbn','.sbx','.shx',".prj", ".kml"))
-                         #empty space for confirm button
 
-                ),
-                shiny::column(1, align = "center",
-                         shiny::h4(i18n$t("ODER") )
-                         ),
-                shiny::column(4, align = "center",
-                         shiny::h4(i18n$t("Klicken Sie mehrmals auf die Karte, um einen Bereich direkt zu zeichnen!") ),
-                         shiny::h5(shiny::HTML(paste0(i18n$t("(Verwenden Sie das"), shiny::strong(i18n$t("Mausrad")), i18n$t("zum"), shiny::strong(i18n$t("Zoomen")), ".)"))),
-                         #written from ten places in step1_server via shinyjs::html().
-                         #A plain div, so it is not a registered output and never enters
-                         #the per-message manageHiddenOutputs() sweep.
-                         shiny::tags$div(id = shiny::NS(id, "zoomText"))
-              ),
-              shiny::column(1, align = "center",
-                            shiny::h4(i18n$t("ODER") )
-              ),
-              shiny::column(3, align = "center",
-              shiny::actionButton(inputId = NS(id, "loadSavedData"), label = shiny::HTML(text = paste0(i18n$t("Laden Sie gespeicherte Daten"), "<br/>", i18n$t("aus dieser App")," <strong>(.RData)</strong>") ), class = "btn-lg", type = "default")
-              )
-              ),
-
-              shiny::fluidRow(
-                shiny::column(2),
-                shiny::column(3, align = "center",
-                       shinyjs::useShinyjs(),
-                       shinyjs::hidden(
-                         shiny::actionButton(shiny::NS(id, "confirmButton1"), label = i18n$t("Best\u00E4tigen Datei"), class = "btn-success btn-lg")
-                       )),
-                shiny::column(2, align = "center",
-                              shinyjs::hidden(
-                                shiny::actionButton(shiny::NS(id, "attrButton"), label = i18n$t("Download: Naherholungskarte [.tif]"), class = "btn-warning")
-                              )
-                ),
-                shiny::column(3, align = "center",
-                       shinyjs::hidden(
-                         shiny::actionButton(shiny::NS(id, "confirmButton2"), label = i18n$t("Best\u00E4tigen Bereich"), class = "btn-success btn-lg")
-
-                       )),
-                shiny::column(2)
-
-              ),
 
             # fluidRow(
             #
@@ -129,7 +100,29 @@ vftDbg("UI1")
             #be on a tall monitor; the stylesheet overrides it.
             shiny::fluidRow(class = "vft-grow",
               shiny::column(12, align = "center",
-                     leaflet::leafletOutput(shiny::NS(id, "areaSelectMap"), height = 600),
+                     shiny::div(class = "vft-mapframe",
+                       leaflet::leafletOutput(shiny::NS(id, "areaSelectMap"), height = 600)
+                     )
+              )
+            ),
+
+            #ACTIONS, under the map like every other step's: the download
+            #first, the confirm last. All three start hidden and step1_server
+            #shows them once there is an outline - the file's confirm for an
+            #upload, the area's for a drawing - so until then the bar takes no
+            #height at all (see .vft-actions in R/ui_theme.R).
+            shiny::div(class = "vft-actions",
+              shinyjs::hidden(
+                shiny::actionButton(shiny::NS(id, "attrButton"), class = "vft-btn",
+                                    label = vftBtnLabel("download", i18n$t("Download: Naherholungskarte [.tif]")))
+              ),
+              shinyjs::hidden(
+                shiny::actionButton(shiny::NS(id, "confirmButton1"), class = "vft-btn-primary",
+                                    label = vftBtnLabel("check", i18n$t("Bestätigen Datei")))
+              ),
+              shinyjs::hidden(
+                shiny::actionButton(shiny::NS(id, "confirmButton2"), class = "vft-btn-primary",
+                                    label = vftBtnLabel("check", i18n$t("Bestätigen Bereich")))
               )
             ),
             fluidRow(

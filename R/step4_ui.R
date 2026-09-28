@@ -1,10 +1,8 @@
-#### Step 1 UI - determine area ####
+#### Step 4 UI - correct the target areas by hand ####
 step4_ui <- function(id, i18n){
 vftDbg("UI5")
       #vft-fit-page + vft-grow on the map row below: the map takes whatever the
-      #heading rows above and the confirm/reset/download row below do not use,
-      #so it runs down to the buttons instead of stopping 200px short of them.
-      #See R/layout_helpers.R.
+      #head above and the action bar below do not use. See R/layout_helpers.R.
       shiny::fluidPage(class = "vft-fit-page",
         #activate translation for this ui
         shiny.i18n::usei18n(i18n),
@@ -23,64 +21,49 @@ vftDbg("UI5")
           shiny::actionButton(inputId = shiny::NS(id, "infoButton4"), label = "")
         ),
 
-        shiny::fluidRow(
+        vftHead(i18n$t("Zielgebiete manuell korrigieren:"),
+                vftSub(i18n$t("Klicken Sie auf ein Zielgebiet, um es zu entfernen."), " ",
+                       i18n$t("Klicken Sie mehrmals auf ein leeres Areal, um ein neues zu erstellen.")),
+                vftTip(i18n$t("Tipp: Jede einzelne Fläche sollte ein spezifisches Erholungsziel darstellen."))),
+
+        shiny::fluidRow(class = "vft-grow",
           shiny::column(12, align = "center",
-                 shiny::h3(strong(i18n$t("Zielgebiete manuell korrigieren:")))
+                        #cut mode: a red frame round the map, so the mode is
+                        #visible where the clicks go. Moved between the two
+                        #classes by the cutButton observer in step4_server.R.
+                        shinyjs::inlineCSS(list(.cutModeOn = "border: 3px solid #c62828;")),
+                        shinyjs::inlineCSS(list(.cutModeOff = "border: 1px solid #d6d9d8;")),
+
+                        #mapFrame carries the cut-mode border, so it is the
+                        #box that has to be full height - the map fills it,
+                        #and the border comes off the map rather than making
+                        #the page taller in cut mode.
+                        shiny::div(id= "mapFrame", class = "cutModeOff vft-grow-fill vft-step4-frame",
+                 shinycssloaders::withSpinner(  leaflet::leafletOutput(shiny::NS(id, "finalAOIMap"), height = 500), type = 3, color = VFT_TEAL, color.background = "white" )
+                        )
           )
         ),
-        shiny::fluidRow(
-          shiny::column(4),
-          shiny::column(4, align = "center",
-                        shiny::h5(i18n$t("Klicken Sie auf ein Zielgebiet, um es zu entfernen.")),
-                        shiny::h5(i18n$t("Klicken Sie mehrmals auf ein leeres Areal, um ein neues zu erstellen.")),
-                        shiny::h5(style = "color:#8f0404;font-weight:bold", i18n$t("Tipp: Jede einzelne Fläche sollte ein spezifisches Erholungsziel darstellen."))
-          ),
-          shiny::column(4, align = "left",
-                        shinyWidgets::materialSwitch(
-                          inputId = shiny::NS(id, "cutButton"),
-                          label = i18n$t("Polygonschnitt-Modus"),
-                          value = FALSE,
-                          status = "danger"
-                        )
-          ) ),
 
-              shiny::fluidRow(class = "vft-grow",
-                shiny::column(12, align = "center",
-                              shinyjs::useShinyjs(),
-                              shinyjs::inlineCSS(list(.cutModeOn = "border-color: red; border-style: solid; border-width:5px;")),
-                              shinyjs::inlineCSS(list(.cutModeOff = "border-color: black; border-style: solid; border-width:0px;")),
+        #ACTIONS: the mode switch and the secondary buttons first, the button
+        #that finishes the step last. The switch is a plain checkbox styled as
+        #one (vftRailRow, R/ui_theme.R): input$cutButton is TRUE/FALSE as it
+        #was from the materialSwitch it replaces.
+        shiny::div(class = "vft-actions",
+          shiny::tags$label(
+            class = "vftRailRow vft-switch-pill",
+            shiny::tags$input(id = shiny::NS(id, "cutButton"), type = "checkbox", class = "vftRailCheck"),
+            shiny::span(class = "vftGlyph", vftIcon("scissors")),
+            shiny::span(class = "vftRailLabel", i18n$t("Polygonschnitt-Modus")),
+            shiny::span(class = "vftSw")),
+          shiny::actionButton(shiny::NS(id, "resetButton"), class = "vft-btn",
+                              label = vftBtnLabel("reset", i18n$t("Reset"))),
+          shiny::actionButton(shiny::NS(id, "aoiButton"), class = "vft-btn",
+                              label = vftBtnLabel("download", i18n$t("Download: Zielgebiete [.gpkg]"))),
+          shiny::actionButton(shiny::NS(id, "confirmButton4"), class = "vft-btn-primary",
+                              label = vftBtnLabel("check", i18n$t("Bestätigen")))
+        ),
 
-                              #mapFrame carries the cut-mode border, so it is the
-                              #box that has to be full height - the map fills it,
-                              #and the 5px red border in cut mode comes off the
-                              #map rather than making the page 10px taller.
-                              shiny::div(id= "mapFrame", class = "cutModeOff vft-grow-fill",
-                       shinycssloaders::withSpinner(  leaflet::leafletOutput(shiny::NS(id, "finalAOIMap"), height = 500), type = 3, color = "#069869", color.background = "white" )
-                              )
-                       )
-              ),
-              shiny::div(style = "height: 10px"),
-              shiny::fluidRow(
-                shiny::column(12, align = "center", style = "display:table-cell; vertical-align: middle; ",
-                       shiny::actionButton(shiny::NS(id, "confirmButton4"), label = i18n$t("Bestätigen"), class = "btn-success btn-lg"),
-
-                       shiny::actionButton(shiny::NS(id, "resetButton"), label = i18n$t("Reset"), class = "btn-warning btn-lg"),
-                       shiny::actionButton(shiny::NS(id, "aoiButton"), label = i18n$t("Download: Zielgebiete [.gpkg]"), class = "btn-warning"),
-                       )
-              ),
-              shiny::div(style = "height: 20px"),
-        shiny::fluidRow(
-          shiny::column(12, align = "center", style = "display:table-cell; vertical-align: middle; ",
-                        shinyjs::useShinyjs(),
-
-                        shinyjs::hidden( shiny::downloadButton(NS(id, "downloadAOI")) )
-
-
-
-          )
-        )
-
-
+        shinyjs::hidden( shiny::downloadButton(shiny::NS(id, "downloadAOI")) )
 )
 
 }

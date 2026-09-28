@@ -64,6 +64,11 @@ app_ui <- function(){
   #R/layout_helpers.R.
   vftFitHeightCSS(),
 
+  #one look for all six step pages: the teal accent, the page heads, the two
+  #kinds of button, the switch rows and the newVersions/step 5 workspace. Into
+  #<head>, ahead of every step's own stylesheet - see R/ui_theme.R.
+  vftThemeCSS(),
+
   shiny::tabsetPanel(id = "tabs", type = "hidden",
 
                      shiny::tabPanel( "tab_step1",

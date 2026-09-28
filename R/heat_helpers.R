@@ -471,7 +471,8 @@ heatBinChoices <- function(i18n = NULL){
 #'
 #' A heat map costs seconds in a daemon, so every one computed on the
 #' newVersions page is kept for the scenario it describes, one slot per time of
-#' day, and the scenario's card shows an icon for each one that still applies.
+#' day, and the scenario's card shows an icon for every time of day - in colour
+#' for each map that still applies, greyed for the rest.
 #'
 #' `store[[card]] = list(rev = <int>, maps = list(<bin> = entry))`, keyed by the
 #' card's `inputId_select`: it survives a rename, where a position does not
@@ -576,21 +577,23 @@ heatBinIconSVG <- function(bin){
 
 #' The strip of heat icons at the foot of a scenario card.
 #'
-#' One round button per bin in `bins`; `shown` is the bin on the map, if it is
-#' this card's. All the clicks go to ONE input, `ns("heatIconClick")`, carrying
-#' the card and the bin - a per-card input would bring back the trap where
-#' removeUI() leaves a card's input value behind for the next visit's observer.
-#' The strip is always emitted, empty or not, so the browser has something to
-#' replace when a map arrives or goes stale.
+#' One round button per time of day, always all of them: `bins` are the ones
+#' holding a valid map, and the rest are drawn greyed (`vftHeatNone`) - a click
+#' on one of those computes it. `shown` is the bin on the map, if it is this
+#' card's. All the clicks go to ONE input, `ns("heatIconClick")`, carrying the
+#' card and the bin - a per-card input would bring back the trap where removeUI()
+#' leaves a card's input value behind for the next visit's observer.
 heatIconsTag <- function(card, bins, shown = NULL, i18n = NULL, ns = identity){
   labels <- stats::setNames(names(heatBinChoices(i18n)), HEAT_BINS)
   input  <- ns("heatIconClick")
   shiny::tags$div(
     class = "vftHeatIcons", `data-card` = card,
-    lapply(bins, function(b){
+    lapply(HEAT_BINS, function(b){
       shiny::tags$button(
         type  = "button",
-        class = paste(c("vftHeatIcon", if(identical(b, shown)) "vftHeatShown"), collapse = " "),
+        class = paste(c("vftHeatIcon",
+                        if(!b %in% bins) "vftHeatNone",
+                        if(identical(b, shown)) "vftHeatShown"), collapse = " "),
         title = labels[[b]],
         `data-bin` = b,
         onclick = sprintf(paste0("event.stopPropagation(); Shiny.setInputValue('%s', ",

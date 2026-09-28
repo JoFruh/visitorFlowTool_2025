@@ -99,14 +99,21 @@ cat("\n=== 7. the icon strip ===\n")
 ns <- shiny::NS("newVersions")
 t0 <- heatIconsTag("versionBtn2", character(0), ns = ns)
 h0 <- as.character(t0)
-ok("an empty strip is still emitted, keyed by card",
+ok("a card with no maps still gets every bin, all greyed, keyed by card",
    grepl('class="vftHeatIcons"', h0) && grepl('data-card="versionBtn2"', h0) &&
-     !grepl("vftHeatIcon\\b\"", h0) && !grepl("<button", h0))
+     lengths(regmatches(h0, gregexpr("<button", h0))) == 3 &&
+     lengths(regmatches(h0, gregexpr("vftHeatIcon vftHeatNone\"", h0))) == 3)
 h1 <- as.character(heatIconsTag("versionBtn2", c("morning", "afternoon"), shown = "afternoon", ns = ns))
-ok("one button per bin", lengths(regmatches(h1, gregexpr("<button", h1))) == 2)
+ok("one button per bin, computed or not", lengths(regmatches(h1, gregexpr("<button", h1))) == 3)
+ok("only the uncomputed bin is greyed",
+   lengths(regmatches(h1, gregexpr("vftHeatNone", h1))) == 1 &&
+     grepl('vftHeatIcon vftHeatNone"[^>]*data-bin="midday"', h1))
 ok("only the shown bin is marked",
    lengths(regmatches(h1, gregexpr("vftHeatShown", h1))) == 1 &&
      grepl('vftHeatIcon vftHeatShown"[^>]*data-bin="afternoon"', h1))
+ok("the bins keep their order whatever order they are held in",
+   identical(regmatches(h1, gregexpr('data-bin="[a-z]+"', h1))[[1]],
+             sprintf('data-bin="%s"', HEAT_BINS)))
 ## htmltools writes the attribute's quotes as &#39;, which the browser decodes
 h1q <- gsub("&#39;", "'", h1, fixed = TRUE)
 ok("clicks go to the one namespaced input",

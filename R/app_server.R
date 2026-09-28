@@ -1000,6 +1000,15 @@ app_server <- function(input, output, session){
       vftGoToStep(r, "step3", session)
     }, ignoreInit = TRUE)
 
+    #...and the offers a click on one of its disabled controls makes, for the
+    #steps that have no counter of their own. Same `check = FALSE` reasoning.
+    shiny::observeEvent(newVersionsReturn$stepWanted(), {
+      want <- newVersionsReturn$stepWanted()
+      if(is.null(want$step) || !want$step %in% names(VFT_STEPS)) return(invisible(NULL))
+      vftDbg(paste0("From new versions, go to ", want$step))
+      vftGoToStep(r, want$step, session)
+    }, ignoreInit = TRUE)
+
     shiny::observeEvent(newVersionsReturn$confirm(), {
 
       vftDbgCat(paste0("newVersionsReturn$trigger_1() ", newVersionsReturn$trigger_1()))

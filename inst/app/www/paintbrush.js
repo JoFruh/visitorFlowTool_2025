@@ -807,7 +807,7 @@
 
   /* The first cell since the last flush makes the painted card's stored heat
    * maps stale, and the server will say so - but only once this flush lands,
-   * up to FLUSH_IDLE after the stroke ends. So the card's heat icons go now.
+   * up to FLUSH_IDLE after the stroke ends. So the card's heat icons grey now.
    * The server's reply replaces the strip and is the one that counts.
    * The card is found by position, which is what state.version is: the cards
    * are in scenario order, while `.selected` is never taken off a card that

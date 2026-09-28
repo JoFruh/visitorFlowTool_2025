@@ -989,13 +989,13 @@ step1_server <- function(id, i18n,
           shiny::actionButton(
             inputId = NS(id, "oldAttrButton"),
             label = shiny::HTML(as.character(i18n()$t("<b>alte</b> Naherholungskarte<br>(Kienast et al., 2012)"))),
-            class = "btn-warning"
+            class = "vft-btn"
 
           ),
           shiny::actionButton(
             inputId = NS(id, "newAttrButton"),
             label = shiny::HTML(as.character(i18n()$t("<b>neue</b> Naherholungskarte<br>aus diesem Tool"))),
-            class = "btn-success btn-lg"
+            class = "vft-btn-primary"
           ),
           shiny::fluidRow(align = "left",style = "margin-left:20px;margin-right:20px;",
                           shiny::h6(shiny::HTML("Kienast, F., Degenhardt, B., Weilenmann, B., Wäger, Y. and Buchecker, M.(2012)'GIS-assisted mapping of landscape suitability for nearby recreation, <em>Landscape and Urban Planning</em>.")))),

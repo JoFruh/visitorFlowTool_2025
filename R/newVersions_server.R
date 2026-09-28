@@ -99,6 +99,9 @@ newVersions_server <- function(id, networkList, i18n, currentLang, isFirstRun,
     conflictKey   <- shiny::reactiveVal(NULL)
     SMcolors      <- NULL
     shp_PA        <- NULL
+    #this page's own clip of the protected areas and the perimeter it was cut
+    #for, used only when step 5 has not supplied one. See section 1a of enter().
+    paCache       <- new.env(parent = emptyenv())
     finalPolygons <- NULL
     versionsUI    <- list()
     DULN          <- NULL
@@ -217,7 +220,7 @@ newVersions_server <- function(id, networkList, i18n, currentLang, isFirstRun,
         label = NULL,
         inline = TRUE,
         choiceNames = lapply(names(choices), function(n)
-          shiny::tagList(nvIcon(ctxIcons[[as.character(choices[[n]])]]), shiny::span(n))),
+          shiny::tagList(vftIcon(ctxIcons[[as.character(choices[[n]])]]), shiny::span(n))),
         choiceValues = unname(unlist(choices)),
         selected = selectedChoice
       )
@@ -1445,6 +1448,12 @@ applyPaintGates <- function(){
   live    <- canEdit && !heatOn
   session$sendCustomMessage("set-paint-readonly", list(readonly = !canEdit))
   session$sendCustomMessage("set-paint-blocked",  list(blocked  = heatOn))
+  #HEAT MODE: with a map up, every brush control below is shut, and a panel of
+  #greyed buttons only says "not now" without saying why. So the panel shows
+  #the heat controls alone, centred (.vftHeatMode in newVersions_ui.R), and
+  #the rest comes back when the map goes. The same height either way, so the
+  #map above does not resize.
+  shinyjs::toggleClass(id = "paintColorButtonsDiv", class = "vftHeatMode", condition = heatOn)
   #the height swatches gate with everything else, or they stay live on the
   #read-only Original and while the heat read-out is on - a click that silently
   #re-arms the brush behind a surface that says painting is refused
@@ -2018,13 +2027,13 @@ sendHeatIcons <- function(cards = NULL) shiny::isolate({
 })
 
 #"Hitze berechnen" or "Hitze anzeigen". The button holds both labels (so the
-#client translates them) and the vftHeatHasMap class picks one: shown when the
-#SELECTED card has a valid map at the chosen time of day, or when a map is up
-#at all - then the button is held down and "anzeigen" is what it is doing.
+#client translates them) and the vftHeatHasMap class picks one: "anzeigen" when
+#the SELECTED card has a valid map at the chosen time of day. While a map is up
+#the button is held down (.paintToolActive, showHeat()) and the CSS shows its
+#third label, "Hitze ausblenden", over either - that is what a click does then.
 heatLabelSync <- function() shiny::isolate({
   card <- heatCardKey(r$position)
-  has  <- isTRUE(r$heatOn) ||
-    !is.null(heatStoreGet(heatStore, card, heatCurrentBin(), heatAoiKey()))
+  has  <- !is.null(heatStoreGet(heatStore, card, heatCurrentBin(), heatAoiKey()))
   shinyjs::toggleClass("heatSwitch", "vftHeatHasMap", condition = has)
   invisible(NULL)
 })
@@ -2131,6 +2140,10 @@ heatWorking <- function(busy){
     shinyjs::enable("heatSwitch")
     shinyjs::enable("heatBin")
   }
+  #the cards' heat icons start jobs too, so they are shut with the rest. By
+  #selector: the card column's ids are not namespaced
+  shinyjs::toggleClass(selector = "#topPlaceHolder_newVersion", class = "vftHeatBusy",
+                       condition = isTRUE(busy))
   invisible(NULL)
 }
 
@@ -2198,6 +2211,11 @@ computeHeat <- function(card, done = function(entry) invisible(NULL)){
   heatBusy <<- TRUE
   t0 <- Sys.time()
   heatWorking(TRUE)
+  #...and the icon it will fill pulses until then. Every way out of the job
+  #replaces the card's strip (sendHeatIcons()), which is what takes this off.
+  shinyjs::addClass(selector = sprintf('.vftHeatIcons[data-card="%s"] .vftHeatIcon[data-bin="%s"]',
+                                       card, bin),
+                    class = "vftHeatPending")
 
   settle <- function(entry){
     heatBusy <<- FALSE
@@ -2223,6 +2241,7 @@ computeHeat <- function(card, done = function(entry) invisible(NULL)){
   }, seed = TRUE, progress = progress) %...>% (function(packed){
     if(is.null(packed)){
       message("heat: no land cover for this area - nothing to compute from")
+      sendHeatIcons(card)
       settle(NULL)
     }else{
       h <- terra::unwrap(packed$heat)
@@ -2243,6 +2262,7 @@ computeHeat <- function(card, done = function(entry) invisible(NULL)){
     }
   }) %...!% (function(e){
     vftAsyncError(progress, "Hitzeberechnung")(e)
+    sendHeatIcons(card)
     settle(NULL)
   })
 
@@ -2315,7 +2335,8 @@ shiny::observeEvent(input$heatBin, {
   #goes at once rather than at the end of the job - the alternative is to leave
   #midday on the map under a label that says afternoon for as long as the
   #recompute takes, which is the exact confusion this observer exists to avoid.
-  #The card keeps its red border; no icon is lit until the new map exists.
+  #The card keeps its red border, and the new bin's icon, still grey, gets the
+  #red ring and the pulse of a job in flight.
   clearHeat()
   heatShown <<- list(card = card, bin = bin)
   sendHeatIcons(card)
@@ -2337,14 +2358,15 @@ shiny::observeEvent(input$heatBin, {
   })
 }, ignoreInit = TRUE)
 
-# A HEAT ICON ON A CARD: draw that card's map at that time of day, or take it
-# down if it is the one already up.
+# A HEAT ICON ON A CARD: draw that card's map at that time of day, computing it
+# first if the icon is a grey one, or take it down if it is the one already up.
 #
 # The selected card does not change. Painting is refused while heat is on, so
 # nothing on the page acts on the selection while a map is up, and selecting
 # would re-render the map for nothing. The select is moved to the icon's bin
 # first, through r$heatBin, so that its observer finds the value unchanged when
-# the update comes back and leaves the map alone.
+# the update comes back and leaves the map alone - and so that computeHeat(),
+# which reads the bin from there, computes the one that was clicked.
 shiny::observeEvent(input$heatIconClick, {
   msg  <- input$heatIconClick
   card <- msg$card
@@ -2357,15 +2379,39 @@ shiny::observeEvent(input$heatIconClick, {
     hideHeat()
     return(NULL)
   }
-  entry <- heatStoreGet(heatStore, card, bin, heatAoiKey())
-  if(is.null(entry)){
-    #went stale since the strip was drawn - redraw it without this icon
-    sendHeatIcons(card)
-    return(NULL)
-  }
   r$heatBin <- bin
   shiny::updateRadioButtons(inputId = "heatBin", selected = bin)
-  showHeat(card, bin, entry)
+  entry <- heatStoreGet(heatStore, card, bin, heatAoiKey())
+  if(!is.null(entry)){
+    showHeat(card, bin, entry)
+    return(NULL)
+  }
+
+  #Not computed yet - a grey icon, or one gone stale since the strip was drawn.
+  #A map already up is for another card or bin, and the select now names this
+  #bin, so it goes at once, as in the time-of-day observer, and the red border
+  #moves to the card being computed. Heat stays on for the duration.
+  wasOn <- isTRUE(shiny::isolate(r$heatOn)) && !is.null(heatShown)
+  if(wasOn){
+    prev <- heatShown$card
+    clearHeat()
+    if(!identical(prev, card)){
+      shinyjs::removeClass(prev, "vftHeatCard")
+      shinyjs::addClass(card, "vftHeatCard")
+    }
+    heatShown <<- list(card = card, bin = bin)
+    sendHeatIcons(c(prev, card))
+  }
+  computeHeat(card, function(entry){
+    #a re-render during the job (a card switch) turned heat off: an icon click
+    #made while it was on does not turn it back on behind the user's back
+    stillOn <- isTRUE(shiny::isolate(r$heatOn))
+    if(!is.null(entry) && (!wasOn || stillOn)){
+      showHeat(card, bin, entry)
+    }else if(wasOn && stillOn){
+      hideHeat()
+    }
+  })
 }, ignoreInit = TRUE)
 
 
@@ -2470,7 +2516,7 @@ observeEvent(input$paintCells, {
       wrote <- TRUE
     }
     #this scenario's stored heat maps now describe a design that no longer
-    #exists: stale, their icons gone, and what the Heat switch reads to decide
+    #exists: stale, their icons greyed, and what the Heat switch reads to decide
     #whether it has to recompute. Kept rather than dropped - see heatStoreReset().
     if(wrote){
       card <- heatCardKey(pos)
@@ -2812,8 +2858,8 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
       #`provisional`: the default name seedNewVersion() gave the card, which the
       #user may still replace - see versionLabel() and the rename observer.
       #`heatBins`: the time-of-day bins this scenario holds a valid heat map for,
-      #drawn as icons at the card's foot - baked in, for the same reason as the
-      #border. The strip goes in even when empty; sendHeatIcons() replaces it.
+      #drawn in colour at the card's foot (the other bins greyed) - baked in, for
+      #the same reason as the border. sendHeatIcons() replaces the strip.
       appendVersion <- function(name, inputId_removal, inputId_select, id_ui_name, isStart = TRUE,
                                 selected = FALSE, provisional = FALSE, heatBins = character(0)){
 
@@ -5398,7 +5444,10 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
           #show ziegebiete when switch is turned on
           if(input$showAOI == 1 ){
 
-            if( !is.null(shp_PA)){
+            #guard on what is drawn. This used to test shp_PA, which only worked
+            #because both came from step 5; the Hitzeminderung door now has
+            #shp_PA (enter(), section 1a) but no areas of interest.
+            if( !is.null(finalPolygons)){
 
 
               #show PA
@@ -5813,6 +5862,249 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
           if(on) drawUsage(proxy, src)
         }, ignoreInit = TRUE)
 
+        # A CLICK ON A DISABLED CONTROL ####
+        #
+        #A greyed control used to answer a click with nothing, which says that
+        #something is missing but not what, or where to get it. A disabled
+        #element receives no click event at all, so the browser half (the
+        #vft-why-disabled script in newVersions_ui.R) listens one level up and
+        #reports which disabled control was under the pointer, as
+        #input$disabledClick. This observer decides what that click gets, from
+        #the same state that disabled the control:
+        #  - something another step produces is missing: say what, and offer to
+        #    go there (the same offer smAskCreate() makes for the matrix switch)
+        #  - the Original: say why it takes no paint
+        #  - the other paint level: flip the level switch and arm the material
+        #  - a job in flight (the heat model, the Original's conflict search,
+        #    the map loading): nothing - a spinner or a progress bar already
+        #    says why, and it passes by itself
+        #Controls shut by a heat map on screen are not here: while one is up the
+        #paint panel shows the heat controls alone (vftHeatMode, set in
+        #applyPaintGates()), so there is nothing disabled left to click.
+        #
+        #The text goes through vftTrText() with the German as the key, so a row
+        #missing from the translation CSVs degrades to German.
+
+        #what "Ja" does in the modal on screen, or NULL. One Ja/Nein pair of
+        #observers for every offer, for the reason given at aoiCreateYes: a
+        #per-modal pair left armed by a dismissed modal answers the next one.
+        whyAction <- NULL
+
+        #"go to this step": a rising count app_server turns into the navigation,
+        #like smCreate and aoiCreate. For steps with no counter of their own.
+        stepWanted <- shiny::reactiveVal(NULL)
+        askStep <- function(step){
+          function() stepWanted(list(step = step, n = (shiny::isolate(stepWanted())$n %||% 0L) + 1L))
+        }
+
+        #The modal. `paras` are German keys, one paragraph each. With a `yes`
+        #label and action it is an offer; without, a plain explanation.
+        whyModal <- function(title, paras, yes = NULL, action = NULL,
+                             no = "Nein, hier bleiben"){
+          tr <- function(k) vftTrText(i18n(), k)
+          whyAction <<- action
+          footer <- if(is.null(action)){
+            shiny::actionButton(session$ns("whyNo"), tr("OK!"), class = "btn-primary")
+          }else{
+            shiny::tagList(
+              shiny::actionButton(session$ns("whyNo"), tr(no)),
+              shiny::actionButton(session$ns("whyYes"), tr(yes), class = "btn-primary"))
+          }
+          shiny::showModal(shiny::modalDialog(
+            title = tr(title),
+            lapply(paras, function(p) shiny::tags$p(tr(p))),
+            footer = footer, easyClose = is.null(action)
+          ), session = session)
+          invisible(NULL)
+        }
+
+        shiny::observeEvent(input$whyYes, {
+          v <- input$whyYes
+          if(is.null(v) || v == 0) return(invisible(NULL))
+          shiny::removeModal(session = session)
+          act <- whyAction
+          whyAction <<- NULL
+          if(is.function(act)) act()
+        }, ignoreInit = TRUE)
+
+        shiny::observeEvent(input$whyNo, {
+          v <- input$whyNo
+          if(is.null(v) || v == 0) return(invisible(NULL))
+          shiny::removeModal(session = session)
+          whyAction <<- NULL
+        }, ignoreInit = TRUE)
+
+        #To step 5 by the confirm button rather than a bare navigation: the
+        #button's handlers publish this page's scenarios to the app before step
+        #5's enter() reads them (see the confirm observer in app_server), and a
+        #bare vftGoToStep() from here would hand step 5 the list as it was
+        #before this visit.
+        goStep5 <- function() shinyjs::click("newVersionsConfirmButton")
+
+        #No path network on this page: the Hitzeminderung door, which opens on
+        #the perimeter alone. The network comes with the Zielgebiete - drawn in
+        #step 3, confirmed in step 4, whose confirm merges it into these
+        #scenarios - so the offer is whichever of the two is next.
+        whyNoNetwork <- function(why){
+          if(!aoiReady()){
+            whyModal("Wegnetz nicht vorhanden",
+                     c(why, paste0("Das Wegnetz entsteht mit den Zielgebieten: in Schritt 3 ",
+                                   "bestimmt, in Schritt 4 bearbeitet und bestätigt.")),
+                     yes = "Ja, zu Schritt 3",
+                     action = function() aoiCreate(shiny::isolate(aoiCreate()) + 1L))
+          }else{
+            whyModal("Wegnetz nicht vorhanden",
+                     c(why, paste0("Die Zielgebiete sind bestimmt, aber noch nicht in ",
+                                   "Schritt 4 bestätigt - erst dessen Bestätigung bringt ",
+                                   "das Wegnetz in diese Szenarien.")),
+                     yes = "Ja, zu Schritt 4", action = askStep("step4"))
+          }
+        }
+
+        whyNoSM <- function(why){
+          whyModal("Sensitivitätsmatrix nicht vorhanden",
+                   c(why, paste0("Für dieses Gebiet wurde noch keine Sensitivitätsmatrix ",
+                                 "erstellt - Schritt 2 (Sensibilität) wurde übersprungen.")),
+                   yes = "Ja, zu Schritt 2",
+                   action = function() smCreate(shiny::isolate(smCreate()) + 1L))
+        }
+
+        CONFLICT_WHY <- paste0("Konflikte sind die Stellen, an denen eine hohe Sensibilität ",
+                               "der Biodiversität und eine starke simulierte Wegnutzung ",
+                               "zusammenkommen.")
+
+        whyConflicts <- function(){
+          if(vftIsCanvasList(r$networkList)) return(whyNoNetwork(CONFLICT_WHY))
+          if(is.null(SM_pres)) return(whyNoSM(CONFLICT_WHY))
+          nl  <- r$networkList
+          pos <- r$position
+          if(is.null(nl) || is.null(pos) || !length(pos) || pos > length(nl)) return(invisible(NULL))
+          sc  <- nl[[pos]]
+          cf  <- sc$conflicts
+          yes <- "Ja, Szenarien bestätigen und zu Schritt 5"
+          if(is.null(sc$pathUsage)){
+            key    <- usageCardKey(pos)
+            edited <- !is.null(key) && !is.null(usageStash[[key]])
+            whyModal("Keine Konflikte für dieses Szenario",
+                     c(CONFLICT_WHY,
+                       if(edited) "Dieses Szenario wurde seit seiner letzten Simulation bearbeitet."
+                       else "Dieses Szenario wurde noch nicht simuliert.",
+                       paste0("Simulieren Sie es in Schritt 5 und suchen Sie dort die ",
+                              "Konflikte - danach lassen sie sich hier anzeigen.")),
+                     yes = yes, action = goStep5)
+          }else if(is.list(cf) && !is.null(cf$hotspots) &&
+                   isTRUE(all.equal(cf$smKey, conflictKey()))){
+            #searched, on this simulation and this matrix, and nothing found
+            whyModal("Keine Konflikte für dieses Szenario",
+                     "Die Konfliktsuche in Schritt 5 hat für dieses Szenario keinen Konflikt gefunden.")
+          }else{
+            whyModal("Keine Konflikte für dieses Szenario",
+                     c(CONFLICT_WHY,
+                       if(is.list(cf) && !is.null(cf$hotspots))
+                         "Die Sensitivitätsmatrix wurde seit der letzten Konfliktsuche geändert."
+                       else "Für dieses Szenario wurde in Schritt 5 noch keine Konfliktsuche durchgeführt.",
+                       "Suchen Sie die Konflikte in Schritt 5 - danach lassen sie sich hier anzeigen."),
+                     yes = yes, action = goStep5)
+          }
+        }
+
+        whyConflictsOrig <- function(){
+          if(conflictOrigBusy()) return(invisible(NULL))
+          if(vftIsCanvasList(r$networkList)) return(whyNoNetwork(CONFLICT_WHY))
+          if(is.null(SM_pres)) return(whyNoSM(CONFLICT_WHY))
+          orig <- originalScenario()
+          if(is.null(orig$pathUsage)){
+            whyModal("Keine Konflikte im Original",
+                     c(CONFLICT_WHY,
+                       paste0("Das Original wurde noch nicht simuliert. Simulieren Sie es in ",
+                              "Schritt 5 - die Konflikte sucht diese Seite danach selbst.")),
+                     yes = "Ja, Szenarien bestätigen und zu Schritt 5", action = goStep5)
+          }else{
+            #the only other way this button goes dark: searched, nothing found
+            whyModal("Keine Konflikte im Original",
+                     "Die Konfliktsuche hat im Original keinen Konflikt gefunden.")
+          }
+        }
+
+        whyUsage <- function(){
+          why <- "Die Wegnutzung ist das Ergebnis der Simulation in Schritt 5."
+          if(vftIsCanvasList(r$networkList)) return(whyNoNetwork(why))
+          whyModal("Keine Wegnutzung vorhanden",
+                   c(why, paste0("Weder dieses Szenario noch das Original wurde bisher ",
+                                 "simuliert. Simulieren Sie sie in Schritt 5 - danach ",
+                                 "lässt sich die Wegnutzung hier anzeigen.")),
+                   yes = "Ja, Szenarien bestätigen und zu Schritt 5", action = goStep5)
+        }
+
+        #A paint control that is disabled with no heat map up is shut for one of
+        #two reasons: the Original is selected, or it belongs to the other level.
+        whyPaint <- function(btn){
+          message("WHYDBG enter ", btn, " heatOn=", format(r$heatOn), " canEdit=", format(r$paintCanEdit))
+          if(isTRUE(r$heatOn)) return(invisible(NULL))
+          if(!isTRUE(r$paintCanEdit)){
+            return(whyModal("Das Original ist schreibgeschützt",
+                            c(paste0("Das Original ist der heutige Zustand, mit dem alle ",
+                                     "Szenarien verglichen werden, und kann nicht bemalt werden."),
+                              paste0("Wählen Sie rechts ein eigenes Szenario aus oder ",
+                                     "erstellen Sie ein neues.")),
+                            yes = "Neues Szenario erstellen",
+                            action = function() shinyjs::click("addVersionButton"),
+                            no = "OK!"))
+          }
+          #THE OTHER LEVEL. The switch is moved for the user, and the clicked
+          #material becomes the level's remembered one first, so that the
+          #paintLevel observer - which re-arms the level's remembered material -
+          #arms this one. The update comes back from the browser as an ordinary
+          #change of the switch, so the buttons, the brush and the map's level
+          #styling all follow exactly as they would for a click on the switch.
+          k <- match(btn, PAINT_BUTTONS$inputId)
+          if(is.na(k)) return(invisible(NULL))
+          level <- PAINT_BUTTONS$level[k]
+          slot  <- lastColorButtonSlot(level)
+          if(is.null(slot)) return(invisible(NULL))
+          canopy <- identical(level, "canopy")
+          message("WHYDBG btn=", btn, " level=", level, " canopy=", canopy, " paintLevel=", format(input$paintLevel), " heatOn=", format(r$heatOn), " canEdit=", format(r$paintCanEdit))
+          if(identical(canopy, isTRUE(input$paintLevel))) return(invisible(NULL))
+          r[[slot]] <- btn
+          shiny::updateCheckboxInput(session = session, inputId = "paintLevel", value = canopy)
+          invisible(NULL)
+        }
+
+        PAINT_GATED <- c(PAINT_BUTTONS$inputId, paste0("paintHeight_", PAINT_HEIGHT_IDS),
+                         "paintLevel", "paintEraser", "paintReset", "paintImport")
+
+        obsDisabledClick <- shiny::observeEvent(input$disabledClick, {
+          msg <- input$disabledClick
+          ctl <- as.character(msg$id %||% "")
+          pre <- session$ns("")
+          if(startsWith(ctl, pre)) ctl <- substring(ctl, nchar(pre) + 1L)
+          vftDbg(paste0("NEWVERSIONS: click on disabled ", ctl))
+
+          if(ctl %in% PAINT_GATED)               return(whyPaint(ctl))
+          if(identical(ctl, "showConflicts"))     return(whyConflicts())
+          if(identical(ctl, "showConflictsOrig")) return(whyConflictsOrig())
+          if(identical(ctl, "showUsage"))         return(whyUsage())
+          if(identical(ctl, "newVersionsConfirmButton")){
+            #otherwise it is only shut while the map loads
+            if(vftIsCanvasList(r$networkList))
+              whyNoNetwork(paste0("Die Szenarien werden in Schritt 5 simuliert, und ",
+                                  "dafür braucht es ein Wegnetz."))
+            return(invisible(NULL))
+          }
+          if(identical(ctl, "contextChoice") && identical(as.character(msg$value), "4") &&
+             isTRUE(r$paintAreaTooLarge)){
+            whyModal("Gebiet zu groß für die Hitzeminderung",
+                     c(paste0("Die Hitzeminderung malt auf einer Landbedeckung im ",
+                              "Meterraster, und für ein Gebiet dieser Größe lässt sie ",
+                              "sich nicht aufbauen."),
+                       "In Schritt 1 können Sie ein kleineres Gebiet wählen."),
+                     yes = "Ja, zu Schritt 1", action = askStep("step1"))
+          }
+          #anything else - the heat controls, the cards, the context control
+          #while the map loads - is a job in flight, and says so already
+          invisible(NULL)
+        }, ignoreInit = TRUE)
+
       # CONFIRM NEW VERSIONS ####
 
       obsConfirm <- shiny::observeEvent( input$newVersionsConfirmButton, {
@@ -5926,6 +6218,24 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
       shape         <<- .rx$shape()
       minThresh     <<- .rx$minThresh()
       selectedVersion <<- .rx$selectedVersion()
+
+      #--- 1a. the protected areas, when step 5 has not clipped them.
+      #
+      #The app's r$shp_PA is step 5's copy (vftMirror in app_server.R), derived
+      #in step 5's enter(). The Hitzeminderung door opens on the perimeter
+      #alone, so a visit through it arrives with NULL and the "Schutzgebiete"
+      #switch drew nothing. The layer is a pure function of the perimeter
+      #(vftProtectedAreas(), R/data_paths.R, ~0.10s), so derive it here from the
+      #same input - once per perimeter, as step 5 does - and let step 5's copy
+      #win whenever there is one.
+      if(is.null(shp_PA) && !is.null(shape)){
+        if(!identical(paCache$shape, shape)){
+          paCache$shape <- shape
+          paCache$shp_PA <- vftTime("newVersions:protectedAreas",
+                                    vftProtectedAreas(shape))
+        }
+        shp_PA <<- paCache$shp_PA
+      }
 
       #--- 1b. HEAT-ONLY MODE: the baseline scenario.
       #
@@ -6150,6 +6460,10 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
                 #page earlier.
                 smCreate  = shiny::reactive(smCreate()),
                 aoiCreate = shiny::reactive(aoiCreate()),
+                #the same for any other step, as list(step, n): the offers a
+                #click on a disabled control makes (see "A CLICK ON A DISABLED
+                #CONTROL") - step 4 for the network, step 1 for a smaller area
+                stepWanted = shiny::reactive(stepWanted()),
                 #which of this page's contexts is showing, for the nav bar: it
                 #rings "Hitzeminderung" rather than "Neue Versionen" on context
                 #4, and the two are the same tab and the same module, so the
