@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 30" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Banner "Sitzung speichern" icon. Same 24x30 box and same 18x18 disk as
+       session_load.svg, so the two swap without the disk changing size; here
+       the disk is centred (y 6..24). -->
+  <path d="M19 24H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+  <polyline points="17 24 17 16 7 16 7 24"/>
+  <polyline points="7 6 7 11 15 11"/>
+</svg>

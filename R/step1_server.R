@@ -1,6 +1,25 @@
 
 # Define server logic
 
+#' Evaluate `expr` with a throw-away, off-screen graphics device current.
+#'
+#' tmap 4 asks `graphics::par("fin")` for an aspect ratio even in view mode, so
+#' `tmap_leaflet()` opened the session's default device as a side effect: an
+#' empty "R Graphics" window (or the VS Code plot pane) popping up on launch,
+#' Rplots.pdf when non-interactive. A null PDF answers the question and is
+#' closed again, and the device that was current before is put back.
+#' @noRd
+vftOffscreenDevice <- function(expr){
+  prev <- grDevices::dev.cur()
+  grDevices::pdf(NULL)
+  dev <- grDevices::dev.cur()
+  on.exit({
+    grDevices::dev.off(dev)
+    if(prev > 1) grDevices::dev.set(prev)
+  }, add = TRUE)
+  expr
+}
+
 #' Step 1 - choose the area of interest.
 #'
 #' FIRST-TOUCH SINGLETON (Stage 5). Built once, at session start, and reused for
@@ -559,7 +578,7 @@ step1_server <- function(id, i18n,
         outline <- sf::st_as_sf(sf::st_transform(outline, "epsg:4326"))
         bb <- sf::st_bbox(outline)
         #map with saved shape
-        tmap::tmap_leaflet(
+        vftOffscreenDevice(tmap::tmap_leaflet(
           tmap::tm_shape(countryshape) +
             tmap::tm_borders(col = "darkgreen", lwd = 3, zindex = 405) ,
           # +
@@ -567,7 +586,7 @@ step1_server <- function(id, i18n,
           options = leaflet::leafletOptions(doubleClickZoom = FALSE,
                                             zoomSnap = 0.05, zoomDelta = 0.05,
                                             wheelPxPerZoomLevel = 60),
-          in.shiny = TRUE) |>
+          in.shiny = TRUE)) |>
           leaflet::addMapPane("layer1", zIndex = 410)|> leaflet::addMapPane("layer2", zIndex = 420)|> leaflet::addMapPane("layer3", zIndex = 450) |>
           leaflet::clearGroup("eraseable")|>
           leaflet::addGeoJSON(geojson = geojsonsf::sf_geojson( outline ),
@@ -588,13 +607,13 @@ step1_server <- function(id, i18n,
       }else{
 
         #if no shape exists, do original (empty) map
-        tmap::tmap_leaflet(
+        vftOffscreenDevice(tmap::tmap_leaflet(
           tmap::tm_shape(countryshape) +
             tmap::tm_borders(col = "darkgreen", lwd = 3, zindex = 405) ,
           options = leaflet::leafletOptions(doubleClickZoom = FALSE,
                                             zoomSnap = 0.05, zoomDelta = 0.05,
                                             wheelPxPerZoomLevel = 60),
-          in.shiny = TRUE) |>
+          in.shiny = TRUE)) |>
           leaflet::addMapPane("layer1", zIndex = 410)|> leaflet::addMapPane("layer2", zIndex = 420)|> leaflet::addMapPane("layer3", zIndex = 450)|>
           leaflet::addProviderTiles(
             leaflet::providers$OpenStreetMap,

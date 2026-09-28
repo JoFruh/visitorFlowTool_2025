@@ -25,7 +25,7 @@ step2_ui <- function(id, i18n){
              shiny::h4(i18n$t("Arten ausw\u00E4hlen/abw\u00E4gen") )
       ),
       shiny::column(2, align = "center",
-             shiny::h4(i18n$t("UND/ODER"))
+       #       shiny::h4(i18n$t("UND/ODER"))
       ),
       shiny::column(5, align = "center",
              shiny::h4(i18n$t("Gruppen ausw\u00E4hlen"))

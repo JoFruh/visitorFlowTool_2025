@@ -411,6 +411,23 @@ vftStepNav <- function(i18n = NULL){
                   navTr("Besucherlenkungs-Tool: ", "Besucherlenkungs-Tool"))
   langTip  <- navTr(":nav_lang:", "Sprache")
   saveTip  <- navTr(":nav_save:", "Sitzung speichern")
+  loadTip  <- navTr(":nav_load:", "Sitzung laden")
+
+  #the session control: a large icon over its own label, as one button.
+  #`vft-nav-session--save` / `--load` pick the icon; the bar's
+  #`vft-nav-onstep1` class picks which of the two is displayed (see the CSS).
+  sessionBtn <- function(inputId, kind, txt){
+    withData(
+      shiny::actionButton(
+        inputId = inputId,
+        label   = shiny::tagList(
+          shiny::tags$span(class = "vft-nav-session-icon"),
+          withData(shiny::tags$span(class = "vft-nav-session-lab", txt[["de"]]),
+                   "data-i18n-", txt)),
+        class   = paste0("vft-nav-session vft-nav-session--", kind),
+        title   = txt[["de"]]),
+      "data-tip-", txt)
+  }
 
   shiny::tagList(
     shiny::tags$style(shiny::HTML("
@@ -521,19 +538,28 @@ vftStepNav <- function(i18n = NULL){
          With `flex:1 1 auto` on the centre instead, shrink is distributed in
          proportion to each zone's base width, so the buttons - much the widest
          zone - would take about four fifths of it and ellipsise first. */
-      /* a flex row, because the save icon sits beside the title rather than in
-         the right-hand icon stack - saving is the one action in this bar that
-         is about the session as a whole, and the user asked for it next to the
-         name of the tool. */
       #vftNav .vft-nav-left  { flex:0 1 auto; min-width:0; display:flex;
-                               align-items:center;
-                               gap:calc(var(--nav-sep) * 0.7); }
+                               align-items:center; }
       #vftNav .vft-nav-title { font-size:var(--nav-title); font-weight:700;
                                line-height:1.1; margin:0;
                                overflow-wrap:break-word; }
       #vftNav .vft-nav-center { flex:1 0 auto; min-width:0; display:flex;
                                 align-items:center; justify-content:center;
                                 gap:var(--nav-sep); }
+      /* ---- the session control, between the title and the buttons -------
+         The first and last children of .vft-nav-center: the session zone on
+         the left and an empty spacer of the same flex on the right. The two
+         share the centre's free space equally, so the buttons stay centred in
+         the centre zone exactly as before, and the save/load control sits in
+         the middle of the gap between the title and the first button. */
+      #vftNav .vft-nav-session-zone,
+      #vftNav .vft-nav-session-spacer { flex:1 1 0; min-width:0; display:flex;
+                                        align-items:center; justify-content:center; }
+      /* save everywhere except step 1, load on step 1 - one class on the bar,
+         written by vftNavBarServer() in R/navigation.R. It ships WITH the
+         class, since every session starts on step 1. */
+      #vftNav.vft-nav-onstep1       .vft-nav-session--save { display:none; }
+      #vftNav:not(.vft-nav-onstep1) .vft-nav-session--load { display:none; }
       #vftNav .vft-nav-right { flex:0 0 auto; display:flex; align-items:center;
                                gap:calc(var(--nav-sep) * 0.7); }
       #vftNav .vft-nav-group { display:flex; gap:var(--nav-gap); min-width:0; }
@@ -695,10 +721,41 @@ vftStepNav <- function(i18n = NULL){
          markup where the rest of the bar's colours are. Written with %22 for
          its own quotes so the whole thing fits inside url('...') with no
          escaping. */
-      #vftNav .vft-nav-save { flex:0 0 auto; opacity:0.92;
-        background-image:url('data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23ffffff%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z%22/%3E%3Cpolyline points=%2217 21 17 13 7 13 7 21%22/%3E%3Cpolyline points=%227 3 7 8 15 8%22/%3E%3C/svg%3E'); }
-      #vftNav .vft-nav-save:hover,
-      #vftNav .vft-nav-save:focus { opacity:1; }
+      /* One button, icon over label. :hover/:focus/:active restated for the
+         same bootstrap reason as .vft-nav-icon above. The icon is half again
+         the size of the help/info icons: it is the only control in its zone. */
+      #vftNav .vft-nav-session,
+      #vftNav .vft-nav-session:hover,
+      #vftNav .vft-nav-session:focus,
+      #vftNav .vft-nav-session:active { flex:0 0 auto; display:flex;
+        flex-direction:column; align-items:center;
+        gap:calc(var(--nav-icon) * 0.12);
+        padding:0; border:none; background-color:transparent; box-shadow:none;
+        color:#ffffff; opacity:0.92; }
+      #vftNav .vft-nav-session:hover,
+      #vftNav .vft-nav-session:focus { opacity:1; }
+      #vftNav .vft-nav-session .action-label { display:flex; flex-direction:column;
+                                               align-items:center;
+                                               gap:calc(var(--nav-icon) * 0.12); }
+      /* 24 x 30, the viewBox both SVGs share: the disk is the same 18 x 18 in
+         each, and the load icon's arrow uses the extra height above its disk. */
+      #vftNav .vft-nav-session-icon { display:block;
+        width:calc(var(--nav-icon) * 1.45); height:calc(var(--nav-icon) * 1.45 * 1.25);
+        background-size:contain; background-repeat:no-repeat;
+        background-position:center; }
+      #vftNav .vft-nav-session-lab { font-size:calc(var(--nav-font) * 0.9);
+                                     font-weight:700; line-height:1.1;
+                                     white-space:nowrap; }
+      #vftNav .vft-nav-session--save .vft-nav-session-icon {
+        /*background-image:url('data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23ffffff%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z%22/%3E%3Cpolyline points=%2217 21 17 13 7 13 7 21%22/%3E%3Cpolyline points=%227 3 7 8 15 8%22/%3E%3C/svg%3E'); }*/
+        background-image:url('www/session_save.svg'); }
+
+      /* the load icon: the same disk, lower and shorter, with its top edge
+         open in the middle and a large arrow leaving through the gap, upwards
+         - the file coming out of the disk. */
+      #vftNav .vft-nav-session--load .vft-nav-session-icon {
+        /*background-image:url('data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23ffffff%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M9 10H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7l-4-4h-2%22/%3E%3Cpolyline points=%2217 23 17 18 7 18 7 23%22/%3E%3Cpath d=%22M12 15V1.5%22/%3E%3Cpolyline points=%227.5 6 12 1.5 16.5 6%22/%3E%3C/svg%3E'); }*/
+        background-image:url('www/session_load.svg'); }
 
       /* ZG definieren | ZG bearbeiten | Naherholung simulieren | Szenarien
          erstellen, plugged into each other like
@@ -971,6 +1028,8 @@ vftStepNav <- function(i18n = NULL){
         #vftNav { flex-wrap:wrap; height:auto;
                   padding-top:8px; padding-bottom:8px; row-gap:8px; }
         #vftNav .vft-nav-center { order:3; flex:1 0 100%; justify-content:flex-start; }
+        #vftNav .vft-nav-session-zone,
+        #vftNav .vft-nav-session-spacer { flex:0 0 auto; }
         #vftNav .vft-nav-left   { flex:1 1 auto; }
       }
 
@@ -1026,17 +1085,22 @@ vftStepNav <- function(i18n = NULL){
     #`vft-nav-folded` from parse: the bar opens showing four choices, not seven.
     #vftNavBarServer() is the only thing that ever removes it. See the fold CSS
     #above and VFT_NAV_FOLD in R/steps.R.
-    shiny::tags$div(id = "vftNav", class = "vft-nav-folded",
+    #`vft-nav-onstep1` from parse too: every session starts on step 1, where
+    #the session control offers Load rather than Save. vftNavBarServer() moves it.
+    shiny::tags$div(id = "vftNav", class = "vft-nav-folded vft-nav-onstep1",
       shiny::tags$div(class = "vft-nav-left",
         withData(shiny::tags$div(class = "vft-nav-title", titleTxt[["de"]]),
-                 "data-i18n-", titleTxt),
-        #### the explicit save ####
+                 "data-i18n-", titleTxt)
+      ),
+      shiny::tags$div(class = "vft-nav-center",
+        #### the explicit save, and on step 1 the load ####
         #
-        #Next to the name of the tool rather than in the icon stack on the
-        #right, because it is the one control in this bar that acts on the
-        #session as a whole rather than on the step being shown.
+        #Between the name of the tool and the step buttons rather than in the
+        #icon stack on the right, because it is the one control in this bar
+        #that acts on the session as a whole rather than on the step being
+        #shown.
         #
-        #An actionButton, not a downloadButton: pressing it opens a dialog that
+        #Save: an actionButton, not a downloadButton: pressing it opens a dialog that
         #asks for a name, and the real download link lives in that dialog's
         #footer (see vftStateServer() in R/state_browser.R). A web page cannot
         #choose a folder, so the browser's own save dialog is where the file
@@ -1047,13 +1111,16 @@ vftStepNav <- function(i18n = NULL){
         #and be fired by shinyjs::click() at two step confirmations. Automatic
         #saving is the browser snapshot's job now (R/state_browser.R); nothing
         #reaches the user's Downloads folder unless they ask for it.
-        withData(
-          shiny::actionButton(inputId = "saveButton", label = "",
-                              class = "vft-nav-icon vft-nav-save",
-                              title = saveTip[["de"]]),
-          "data-tip-", saveTip)
+        #
+        #Load: forwarded to step 1's own (hidden) loadSavedData button by
+        #vftNavBannerProxyServer() in R/navigation.R, so the upload dialog and
+        #everything after it stay step 1's.
+        shiny::tags$div(class = "vft-nav-session-zone",
+          sessionBtn("saveButton", "save", saveTip),
+          sessionBtn("loadButton", "load", loadTip)),
+        center,
+        shiny::tags$div(class = "vft-nav-session-spacer")
       ),
-      shiny::tags$div(class = "vft-nav-center", center),
       shiny::tags$div(class = "vft-nav-right",
         withData(
           shiny::tags$div(class = "vft-nav-lang", title = langTip[["de"]],

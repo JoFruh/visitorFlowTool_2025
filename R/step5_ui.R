@@ -31,8 +31,8 @@ STEP5_CSS <- "
    and the map together, so the rail's width is its left padding */
 .vft5-actions{ flex:0 0 auto; padding-left:216px; }
 
-/* the scenario list: a 2-column grid of square cards, the dashed '+' tile
-   first. The cards are insertUI'd into #placeholder_step5 (updateVersions()
+/* the scenario list: a 2-column grid of square cards, the teal 'Manage
+   scenarios' tile first. The cards are insertUI'd into #placeholder_step5 (updateVersions()
    in step5_server.R), each in a wrapper div with a 5px spacer either side, so
    #placeholder_step5 is display:contents, its wrappers are grid cells, and the
    spacers go. The card's 120px size is an inline style, hence !important. */
@@ -200,15 +200,17 @@ vftDbg("UI6")
               shiny::fluidRow(class = "vft-ws-listrow",
                 shiny::column(12, class = "vft-ws-list vft-vlist",
                        style = "border: 1px solid #d6d9d8; border-radius: 10px; vertical-align:middle; width: 200px; overflow-y: auto;",
-                  #NEW SCENARIOS: the first tile of the grid, which opens the
-                  #newVersions page. The cards follow it, insertUI'd into
-                  ##placeholder_step5 - see updateVersions() in step5_server.R.
+                  #MANAGE SCENARIOS: the first tile of the grid, which opens the
+                  #newVersions page. Filled teal, not the dashed '+' tile, which
+                  #on newVersions means 'add one scenario'. The cards follow it,
+                  #insertUI'd into #placeholder_step5 - see updateVersions() in
+                  #step5_server.R.
                   shiny::div(id = "topPlaceHolder",
                     shiny::tags$button(
                       id = ns("newVersionsButton"), type = "button",
-                      class = "vftB action-button vftAddCard",
-                      vftIcon("plus", 24),
-                      shiny::span(i18n$t("Neues Szenario"))),
+                      class = "vftB action-button vftManageCard",
+                      vftIcon("tools", 36),
+                      shiny::span(i18n$t("Szenarien verwalten"))),
                     shiny::div(id = "placeholder_step5")
                   )
                 )

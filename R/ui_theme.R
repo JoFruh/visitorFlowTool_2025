@@ -22,6 +22,7 @@ VFT_TEAL_TINT <- "#e3f0f0"
 #' An 18px stroke icon, drawn in currentColor so it follows the text colour.
 #' @noRd
 vftIcon <- function(name, size = 18){
+  if (name == "tools") return(vftToolsIcon(size))
   d <- switch(name,
     road     = '<path d="M5 20 9.5 4"/><path d="M19 20 14.5 4"/><path d="M12 5v2"/><path d="M12 11v2"/><path d="M12 17v2"/>',
     home     = '<path d="M3 11 12 4l9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-5h4v5"/>',
@@ -44,6 +45,33 @@ vftIcon <- function(name, size = 18){
   shiny::HTML(sprintf(paste0('<svg width="%d" height="%d" viewBox="0 0 24 24" fill="none" stroke="currentColor" ',
                              'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">%s</svg>'),
                       size, size, d))
+}
+
+#' A FILLED hammer crossed over a double-ended wrench (step 5's 'Manage
+#' scenarios' card), in currentColor. Its own 48-unit box, not vftIcon()'s
+#' 24-unit stroke one. Both tools are drawn upright - head up, handle down -
+#' and turned 45 degrees, the hammer's head to the top left, the wrench's to
+#' the top right. The mask cuts the wrench's two jaws and, where the hammer
+#' lies on it, a gap the hammer's outline plus 1.8 units wide: the tools stay
+#' apart without painting the card's colour, so hover and disabled still
+#' work. One mask id for every copy: they are identical, so whichever the
+#' browser resolves draws the same.
+#' @noRd
+vftToolsIcon <- function(size = 18){
+  hammer <- '<rect x="14" y="3" width="20" height="10" rx="2"/><rect x="21.5" y="11" width="5" height="33" rx="2.5"/>'
+  shiny::HTML(paste0(
+    '<svg width="', size, '" height="', size, '" viewBox="0 0 48 48" fill="currentColor" aria-hidden="true">',
+    '<defs><mask id="vftToolsGap" maskUnits="userSpaceOnUse" x="-4" y="-4" width="56" height="56">',
+    '<rect x="-4" y="-4" width="56" height="56" fill="white"/>',
+    '<g transform="rotate(45 24 24)" fill="black">',
+    '<path d="M21 -2H27V8A3 3 0 0 1 21 8Z"/><path d="M21 50H27V39A3 3 0 0 0 21 39Z"/></g>',
+    '<g transform="rotate(-45 24 24)" fill="black" stroke="black" stroke-width="3.6" stroke-linejoin="round">',
+    hammer, '</g></mask></defs>',
+    '<g transform="translate(1.5 1.9)">',
+    '<g mask="url(#vftToolsGap)"><g transform="rotate(45 24 24)">',
+    '<circle cx="24" cy="10" r="8"/><circle cx="24" cy="37" r="8"/>',
+    '<rect x="21.2" y="12" width="5.6" height="23" rx="2.8"/></g></g>',
+    '<g transform="rotate(-45 24 24)">', hammer, '</g></g></svg>'))
 }
 
 #' The small key in front of a map layer: what the layer looks like ON the
@@ -241,13 +269,22 @@ input.vftRailCheck{ position:absolute; opacity:0; width:1px; height:1px; margin:
 .vft-ws-side{ flex:0 0 220px; width:220px; }
 .vft-ws-side .vft-ws-list{ padding:0 10px; }
 
-/* the scenario list: a 2-column grid of square cards, the dashed '+' tile first */
+/* the scenario list: a 2-column grid of square cards, a tile that is not a scenario first */
 .vftAddCard{ width:100%; aspect-ratio:1 / 1; padding:4px; border:2px dashed #aab4b2;
   border-radius:10px; background:#f7f9f9; color:#006268; display:flex; flex-direction:column;
   align-items:center; justify-content:center; gap:4px; font-size:13px; font-weight:600;
   line-height:1.15; }
 .vftAddCard:hover{ border-color:#006268; background:#e3f0f0; }
 .vftAddCard:disabled{ opacity:.45; background:#f7f9f9; border-color:#aab4b2; }
+/* step 5's first tile opens newVersions, where the scenarios are made - it is
+   not itself 'add a scenario', so it is a filled teal card and not the dashed
+   '+' tile newVersions uses for that. Icon in the middle, label at the foot. */
+.vftManageCard{ width:100%; aspect-ratio:1 / 1; padding:8px 4px 9px; border:0; border-radius:10px;
+  background:#006268; color:#ffffff; display:flex; flex-direction:column; align-items:center;
+  font-size:13px; font-weight:600; line-height:1.15; text-align:center; }
+.vftManageCard > svg{ flex:1 1 auto; min-height:0; }
+.vftManageCard:hover{ background:#004e53; }
+.vftManageCard:disabled{ opacity:.45; background:#006268; }
 .vftConfirmBtn{ display:inline-flex; align-items:center; justify-content:center; gap:8px;
   width:180px; height:60px; padding:0 6px; border:0; border-radius:10px; background:#006268;
   color:#ffffff; font-size:16px; font-weight:700; white-space:normal; line-height:1.15; }

@@ -1282,21 +1282,66 @@ lastColorButtonSlot <- function(level){
 #`force` re-sends the color to the browser even when the button is already the
 #selected one - needed when the level switch flips, since the newly active level's
 #remembered button is usually unchanged but the brush still has to be re-pointed at it.
+#
+#While the eraser is on, the material is still recorded and armed - the level
+#switch changes it, and switching the eraser off returns to it - but it is not
+#ringed and its height bar stays hidden, because only one tool is ever shown as
+#active. A click on a material button goes through pickPaint(), which switches
+#the eraser off first.
 setPaintColor <- function(session, r, inputId, id, level = "ground", force = FALSE){
   if(!force && identical(r$selectedPaintButton, inputId)) return(invisible(NULL))
+  erasing <- isTRUE(shiny::isolate(r$erasing))
 
   if(!is.null(r$selectedPaintButton) && r$selectedPaintButton != inputId){
     shinyjs::removeClass(r$selectedPaintButton, "colorBtnSelected")
     shinyjs::addClass(r$selectedPaintButton, "colorBtnNotSelected")
   }
-  shinyjs::removeClass(inputId, "colorBtnNotSelected")
-  shinyjs::addClass(inputId, "colorBtnSelected")
+  if(!erasing){
+    shinyjs::removeClass(inputId, "colorBtnNotSelected")
+    shinyjs::addClass(inputId, "colorBtnSelected")
+  }
   r$selectedPaintButton <- inputId
 
   slot <- lastColorButtonSlot(level)
   if(!is.null(slot)) r[[slot]] <- inputId
 
   armBrush(session, r, id)
+  #armBrush() shows the material's height bar; the eraser keeps it down
+  if(erasing) showHeightBar(r, NULL, NULL)
+  invisible(NULL)
+}
+
+#A click on a material button: the user wants to paint, so the eraser goes off.
+pickPaint <- function(inputId, id, level = "ground"){
+  if(isTRUE(shiny::isolate(r$erasing))) setEraser(FALSE)
+  setPaintColor(session, r, inputId, id, level = level)
+}
+
+# ERASER: one tool among the materials, not a mode on top of them.
+#
+# Switching it on un-rings the selected material and hides its height bar;
+# switching it off (the eraser clicked again) rings that material again and
+# re-shows the bar. The material stays armed in the browser throughout - the
+# erase flag simply takes precedence there - so no colour is re-sent. The
+# browser owns the actual rubbing out.
+setEraser <- function(on){
+  r$erasing <- on
+  shinyjs::toggleClass("paintEraser", "paintToolActive", condition = on)
+  btn <- shiny::isolate(r$selectedPaintButton)
+  if(!is.null(btn)){
+    shinyjs::toggleClass(btn, "colorBtnSelected",    condition = !on)
+    shinyjs::toggleClass(btn, "colorBtnNotSelected", condition = on)
+  }
+  if(on){
+    showHeightBar(r, NULL, NULL)
+  }else{
+    #re-arming the same material only redraws its height bar: armBrush() finds
+    #the id already armed and sends nothing
+    matId <- PAINT_BUTTONS$id[match(btn, PAINT_BUTTONS$inputId)]
+    if(length(matId) == 1L && !is.na(matId)) armBrush(session, r, matId)
+  }
+  session$sendCustomMessage("set-paint-erase", list(erasing = on))
+  invisible(NULL)
 }
 
 #WHICH MATERIAL IS SELECTED AND WHICH ID IS ARMED ARE NOT THE SAME THING.
@@ -1469,31 +1514,31 @@ applyPaintGates <- function(){
 }
 
 shiny::observeEvent(input$paintColor_grass, {
-  setPaintColor(session, r, "paintColor_grass", 1)
+  pickPaint("paintColor_grass", 1)
 })
 shiny::observeEvent(input$paintColor_bush, {
-  setPaintColor(session, r, "paintColor_bush", 2)
+  pickPaint("paintColor_bush", 2)
 })
 shiny::observeEvent(input$paintColor_artificial, {
-  setPaintColor(session, r, "paintColor_artificial", 3)
+  pickPaint("paintColor_artificial", 3)
 })
 shiny::observeEvent(input$paintColor_natural, {
-  setPaintColor(session, r, "paintColor_natural", 4)
+  pickPaint("paintColor_natural", 4)
 })
 shiny::observeEvent(input$paintColor_water, {
-  setPaintColor(session, r, "paintColor_water", 5)
+  pickPaint("paintColor_water", 5)
 })
 shiny::observeEvent(input$paintColor_canopyArtificial, {
-  setPaintColor(session, r, "paintColor_canopyArtificial", 6, level = "canopy")
+  pickPaint("paintColor_canopyArtificial", 6, level = "canopy")
 })
 shiny::observeEvent(input$paintColor_canopyTree, {
-  setPaintColor(session, r, "paintColor_canopyTree", 7, level = "canopy")
+  pickPaint("paintColor_canopyTree", 7, level = "canopy")
 })
 #fills the ground and canopy rasters at once; selecting it leaves both levels'
 #remembered materials alone, so flipping the switch returns to the last real
 #ground/canopy material rather than staying on the block
 shiny::observeEvent(input$paintColor_block, {
-  setPaintColor(session, r, "paintColor_block", 8, level = "both")
+  pickPaint("paintColor_block", 8, level = "both")
 })
 
 #THE HEIGHT SWATCHES. One observer per step of every ramp, generated from the
@@ -1526,6 +1571,8 @@ for(hid in PAINT_HEIGHT_IDS){
       cur <- PAINT_BUTTONS$id[match(shiny::isolate(r$selectedPaintButton),
                                     PAINT_BUTTONS$inputId)]
       if(length(cur) != 1L || is.na(cur) || paintBaseId(cur) != baseId) return(NULL)
+      #the bar is hidden while the eraser is on, for the same reason
+      if(isTRUE(shiny::isolate(r$erasing))) return(NULL)
 
       ch <- shiny::isolate(r$paintHeightChoice)
       ch[[as.character(baseId)]] <- thisId
@@ -2426,21 +2473,10 @@ obs_paintBlocked <- shiny::observeEvent(input$paintBlocked, {
     size = "s"))
 }, ignoreInit = TRUE)
 
-# ERASER: a toggle, not a material.
-#
-# It deliberately does not touch r$paintEraser's remembered colour, so switching
-# the eraser off returns to whatever was being painted before. The browser owns
-# the actual rubbing out; all that happens here is the mode flag and the button's
-# held-down state.
+# ERASER: toggles; see setEraser() for why the material is un-ringed rather than
+# forgotten.
 shiny::observeEvent(input$paintEraser, {
-  erasing <- !isTRUE(shiny::isolate(r$erasing))
-  r$erasing <- erasing
-  if(erasing){
-    shinyjs::addClass("paintEraser", "paintToolActive")
-  }else{
-    shinyjs::removeClass("paintEraser", "paintToolActive")
-  }
-  session$sendCustomMessage("set-paint-erase", list(erasing = erasing))
+  setEraser(!isTRUE(shiny::isolate(r$erasing)))
 }, ignoreInit = TRUE)
 
 # RESET: drop every stroke on this version, revealing the land cover underneath.
@@ -6065,6 +6101,8 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
           canopy <- identical(level, "canopy")
           message("WHYDBG btn=", btn, " level=", level, " canopy=", canopy, " paintLevel=", format(input$paintLevel), " heatOn=", format(r$heatOn), " canEdit=", format(r$paintCanEdit))
           if(identical(canopy, isTRUE(input$paintLevel))) return(invisible(NULL))
+          #a material was picked, so the eraser goes off, as in pickPaint()
+          if(isTRUE(r$erasing)) setEraser(FALSE)
           r[[slot]] <- btn
           shiny::updateCheckboxInput(session = session, inputId = "paintLevel", value = canopy)
           invisible(NULL)

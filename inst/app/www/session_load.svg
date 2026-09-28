@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 30" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Banner "Sitzung laden" icon. Same 24x30 box and same 18x18 disk as
+       session_save.svg, placed 4 units lower (y 10..28) to leave room for the
+       arrow above it. The disk's top edge is open between x 7.5 and 15.5, where
+       the arrow leaves it. -->
+  <path d="M7.5 10H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V15l-5-5h-0.5"/>
+  <polyline points="17 28 17 20 7 20 7 28"/>
+  <!-- the arrow: one filled shape, tip at the top of the box -->
+  <polygon points="12 0.75 18.5 7 14.25 7 14.25 17 9.75 17 9.75 7 5.5 7"
+           fill="#ffffff" stroke-width="1"/>
+</svg>

@@ -269,6 +269,29 @@ try(visitorFlowTool:::vftProtectedAreasCached(), silent = TRUE)
 tmap::tmap_mode('view')
 
 
+# No graphics device outside the app's own outputs.
+#
+# renderPlot() and the download handlers open their own png/pdf devices
+# explicitly, so none of them consults getOption("device"). Only a call that
+# draws or queries par() with no device open does - and that is always a side
+# effect: tmap_leaflet()'s par("fin") put an empty "R Graphics" window (or the
+# VS Code plot pane) up on every launch. Such calls now get an off-screen null
+# PDF, and the calls that led there are logged so the source can be fixed where
+# it is (see vftOffscreenDevice() in step1_server.R). The user's own default
+# comes back when the app stops.
+local({
+  oldDevice <- options(device = function(...){
+    calls <- vapply(utils::head(sys.calls(), -1),
+                    function(cl) substr(paste(deparse(cl, nlines = 1), collapse = ""), 1, 80),
+                    character(1))
+    message("visitorFlowTool: a graphics device was requested outside an output; ",
+            "using an off-screen one. Calls:\n  ", paste(calls, collapse = "\n  "))
+    grDevices::pdf(NULL)
+  })
+  shiny::onStop(function() options(oldDevice))
+})
+
+
 # Persistent on-disk cache for basemap tiles. maptiles::get_tiles() caches individual
 # XYZ tiles here, so re-entering a step or overlapping study areas (across the 2-5
 # concurrent sessions in this process) reuse downloaded tiles instead of re-hitting the

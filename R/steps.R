@@ -124,8 +124,8 @@ VFT_NAV_GROUPS <- list("step1", "step2",
 #   Gebiet waehlen | Sensibilitaet der Biodiversitaet |
 #   Naherholung simulieren | Hitzeminderung
 #
-# Clicking the folded button unfolds the chain and enters its first reachable
-# member (step 3 in practice). It folds back only when step 1 commits a NEW
+# Clicking the folded button unfolds the chain and enters the furthest step the
+# user has got to (step 3 on a first walk, step 5 once steps 3 and 4 are done). It folds back only when step 1 commits a NEW
 # outline - that write discards everything downstream, so the walk starts again.
 #
 # Nothing about this is an output. Both the folded button and the four chevrons
@@ -148,7 +148,7 @@ VFT_NAV_FOLD_ID <- "vftNav_sim"
 #' step5's, i.e. "Naherholung simulieren" - the umbrella name for what the
 #' whole group does, and a `:nav_step5:` row the translation CSVs already
 #' carry, so folding the bar needs no new i18n string. The button is NOT step 5: clicking it enters
-#' vftNavFoldTarget(), which is normally step 3.
+#' vftNavFoldTarget(): step 3, 4 or 5, whichever the user has got as far as.
 VFT_NAV_FOLD_LABEL <- "step5"
 
 #' Which hidden per-module input each step's banner controls actually are.
@@ -433,24 +433,40 @@ vftStepReachable <- function(r, step){
   all(vapply(missing, function(k) vftKeyDerivable(r, k), logical(1)))
 }
 
-#' The first member of the folded group this session could actually enter.
+#' The furthest simulation step this session could actually enter.
 #'
 #' Two answers in one: it is where the folded button navigates to, and - through
 #' `is.null()` on the result - whether that button is enabled at all. One
 #' function so those two can never disagree, the way vftIsCanvasList() is one
 #' function for its two callers.
 #'
-#' In practice this is step 3 the moment the perimeter exists: step 3 needs
-#' `shape` and `DULN_all`, and the second is derivable from the first, so
-#' "reachable" here is exactly the user's "once step 1 is complete". Later
-#' members are candidates only for a build whose VFT_NAV list leaves step 3 out.
+#' The button is labelled "Naherholung simulieren", so it goes as far towards
+#' step 5 as the session's data allows, and to a sub-step only when that
+#' sub-step's end result is still missing:
+#'
+#'   - step 5 once step 4 has produced its scenarios (`networkList`);
+#'   - else step 4 once step 3 has set (or skipped) the threshold (`minThresh`);
+#'   - else step 3, which is reachable the moment the perimeter exists.
+#'
+#' "Furthest reachable" says exactly that because neither `minThresh` nor
+#' `networkList` has a provider: a human produces each of them in its step, so
+#' step 4 and step 5 are reachable only once steps 3 and 4 have really been
+#' through. It used to be the FIRST reachable member, which sent a user with a
+#' finished simulation back to step 3 to click through two steps they had done.
+#'
+#' newVersions is not a simulation step - it has a button of its own in the
+#' unfolded chain - so it is only the fallback for a build whose VFT_NAV list
+#' leaves steps 3 to 5 out.
 #'
 #' Reads `r`, so calling it inside an observe takes a dependency on those keys -
 #' which is what makes the folded button light up on its own, the same way every
 #' other button in the bar does.
 vftNavFoldTarget <- function(r, steps = vftNavSteps()){
   cand <- VFT_NAV_FOLD[VFT_NAV_FOLD %in% steps]
-  for(s in cand) if(vftStepReachable(r, s)) return(s)
+  sim  <- setdiff(cand, "newVersions")
+  for(s in rev(sim)) if(vftStepReachable(r, s)) return(s)
+  if("newVersions" %in% cand && vftStepReachable(r, "newVersions"))
+    return("newVersions")
   NULL
 }
 

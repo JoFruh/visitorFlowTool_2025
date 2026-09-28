@@ -96,6 +96,13 @@ vftNavBannerProxyServer <- function(r, input, session = shiny::getDefaultReactiv
     shinyjs::click(id = shiny::NS(step, VFT_BANNER_PROXY[[step]]$info))
   }, ignoreInit = TRUE)
 
+  #Load session: always step 1's, since the banner only shows it there. Its
+  #upload dialog and the restore behind it are step 1's own loadSavedData
+  #observer, unchanged - the button it used to be is just hidden now.
+  shiny::observeEvent(input$loadButton, {
+    shinyjs::click(id = shiny::NS("step1", "loadSavedData"))
+  }, ignoreInit = TRUE)
+
   invisible(NULL)
 }
 
@@ -844,6 +851,8 @@ vftNavBarServer <- function(r, input, session = shiny::getDefaultReactiveDomain(
   sentHitze <- NULL
   sentFold  <- NULL
   current   <- NULL
+  #the bar ships with `vft-nav-onstep1` (vftStepNav()), so this starts TRUE
+  onStep1   <- TRUE
 
   #### folded or unfolded ####
   #
@@ -870,8 +879,9 @@ vftNavBarServer <- function(r, input, session = shiny::getDefaultReactiveDomain(
   #below. Computed once - VFT_NAV_FOLD is a constant.
   foldIds <- vftNavInputId(VFT_NAV_FOLD)
 
-  #Clicking the stand-in button unfolds the chain AND enters its first reachable
-  #member, which is step 3 in every ordinary session. Two things at once because
+  #Clicking the stand-in button unfolds the chain AND enters the furthest step
+  #the user has got to - step 3 on a first walk, step 5 once steps 3 and 4 have
+  #produced their results (vftNavFoldTarget() in R/steps.R). Two things at once because
   #a disclosure that only discloses would leave the user to make a second choice
   #they have already made: they asked for the simulation half of the tool.
   #
@@ -1020,8 +1030,8 @@ vftNavBarServer <- function(r, input, session = shiny::getDefaultReactiveDomain(
     #The stand-in button for the folded group. Live when ANY member of the group
     #could be entered - vftNavFoldTarget() in R/steps.R, which is the same
     #question as "where would clicking it go", asked once so the two cannot
-    #disagree. In practice that is step 3, so this lights up the moment step 1
-    #confirms. Outside the loop: it is not an answer about `s`, and it is not one
+    #disagree. Step 3 is reachable as soon as the perimeter exists, so this
+    #lights up the moment step 1 confirms. Outside the loop: it is not an answer about `s`, and it is not one
     #of VFT_STEPS.
     if(any(VFT_NAV_FOLD %in% steps)){
       okFold <- !is.null(vftNavFoldTarget(r, steps)) && !busy
@@ -1052,6 +1062,16 @@ vftNavBarServer <- function(r, input, session = shiny::getDefaultReactiveDomain(
         shinyjs::removeClass(id = current, class = "vft-nav-current")
       shinyjs::addClass(id = now, class = "vft-nav-current")
       current <<- now
+    }
+
+    #Load session on step 1, Save session everywhere else: one class on the
+    #bar, sent only when it changes. NULL step = before the first navigation,
+    #which is step 1.
+    step1 <- is.null(r$navStep) || identical(r$navStep, "step1")
+    if(!identical(step1, onStep1)){
+      if(step1) shinyjs::addClass(id = "vftNav", class = "vft-nav-onstep1")
+      else      shinyjs::removeClass(id = "vftNav", class = "vft-nav-onstep1")
+      onStep1 <<- step1
     }
   })
 

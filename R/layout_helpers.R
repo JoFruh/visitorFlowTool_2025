@@ -181,12 +181,12 @@ vftFitHeightCSS <- function(){
       object-fit: contain;
     }
 
-    /* ---- step 1: the three ways in, as a compact row of cards ---------- */
-    /* Upload an outline, draw one, or load a saved session - three cards
-       with an 'ODER' between them, their text set small: at the app's default
-       heading sizes this block took ~150px of a screen whose whole point is the
-       map under it. The cards share one height (stretch), and the load card
-       centres its single button. */
+    /* ---- step 1: the two ways in, as a compact, centred row of cards --- */
+    /* Upload an outline or draw one - two cards with an 'ODER' between them,
+       centred on the page, their text set small: at the app's default heading
+       sizes this block took ~150px of a screen whose whole point is the map
+       under it. The cards share one height (stretch). Loading a saved session
+       is the banner's load button now (vftStepNav() in R/app_ui.R). */
     .vft-step1-options{
       display: flex;
       align-items: stretch;
@@ -215,9 +215,6 @@ vftFitHeightCSS <- function(){
       color: #1f2624;
     }
     .vft-step1-opt-head svg{ flex: 0 0 auto; color: #006268; }
-    .vft-step1-opt-load{ flex: 0 0 auto; justify-content: center; }
-    /* two lines, split where the label's own <br> splits it */
-    .vft-step1-opt-load .btn{ white-space: nowrap; }
     .vft-step1-or{
       align-self: center;
       font-size: 11px;
