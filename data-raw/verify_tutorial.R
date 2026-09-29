@@ -35,6 +35,8 @@ for (k in VFT_TUTORIAL_TOURS)
      identical(as.integer(tours[[k]]), VFT_TUTORIAL_HINTS[[k]]))
 keys <- c(unlist(lapply(VFT_TUTORIAL_TOURS, function(k)
           sprintf(":tut_%s_%d:", k, seq_len(VFT_TUTORIAL_HINTS[[k]])))),
+          unlist(lapply(names(VFT_TUTORIAL_VARIANTS), function(k)
+          sprintf(":tut_%s_%s:", k, VFT_TUTORIAL_VARIANTS[[k]]))),
           ":tut_next:", ":tut_stop:", ":tut_offer:", ":tut_start:", ":tut_help_title:")
 ok("every key has an English fallback", all(keys %in% names(VFT_TUTORIAL_FALLBACK)))
 
@@ -88,6 +90,20 @@ if (!nzchar(tables) || !dir.exists(tables)) {
   ok("hint 1 carries its <em> in every language", all(grepl("<em>.+</em>", firsts)))
   ok("the tours array survives JSON as an array",
      grepl("\"step1\":\\[", as.character(jsonlite::toJSON(pay$de, auto_unbox = TRUE))))
+  alts <- vapply(pay, function(p) p$alts$step5[["6b"]], character(1))
+  ok("step 5's variant texts are there, and differ by language",
+     length(unique(alts)) == 3 && !any(grepl("^:", alts)))
+  ok("...and reach the browser as an object keyed '6b', '9b'",
+     grepl("\"alts\":\\{\"step5\":\\{\"6b\":\"[^\"]+\",\"9b\":",
+           as.character(jsonlite::toJSON(pay$fr, auto_unbox = TRUE))))
+  ok("'Biodiversity Sensitivity' carries its dark-red class",
+     all(grepl("<em class=vftTutBio>", vapply(pay, function(p) p$tours$step5[6], ""))))
+  s2 <- lapply(pay, function(p) as.character(p$tours$step2))
+  ok("step 2: thirteen translated strings in every language",
+     all(vapply(s2, function(s) length(s) == 13 && all(nzchar(s)) && !any(grepl("^:.*:$", s)), NA)) &&
+     !any(unlist(s2[c("de", "fr")]) %in% unlist(VFT_TUTORIAL_FALLBACK)))
+  ok("step 2: the step's name and 'Amphibians' teal and larger (<b><em>)",
+     all(vapply(s2, function(s) all(grepl("<b><em>.+</em></b>", s[c(1, 4)])), NA)))
 }
 
 cat("\n=== 4. a missing row falls back, it never shows a key ===\n")
@@ -125,8 +141,12 @@ testServer(function(input, output, session) {
      identical(modals, "step1") && length(clicks) == 0)
   session$userData$r$navStep <- "step2"
   session$setInputs(helpButton = 2)
-  ok("on step 2 (no tour yet) it still opens step 2's own help",
-     identical(modals, "step1") && identical(clicks, "step2-helpButton2"),
+  ok("on step 2 it raises step 2's tutorial modal",
+     identical(modals, c("step1", "step2")) && length(clicks) == 0)
+  session$userData$r$navStep <- "newVersions"
+  session$setInputs(helpButton = 3)
+  ok("on Neue Versionen (no tour yet) it still opens the page's own help",
+     identical(modals, c("step1", "step2")) && identical(clicks, "newVersions-helpButton6"),
      paste(clicks, collapse = ","))
 })
 utils::assignInNamespace("click", realClick, "shinyjs")

@@ -8,6 +8,11 @@
  *   <br>   a new line
  *   <b>    an emphasised word, in the app's teal
  *   <em>   a word in bold, one size larger, in the text's own colour
+ *   <em class=vftTutAoi>, <em class=vftTutBio>   the same, in the areas of
+ *          interest's green / the biodiversity sensitivity's dark red
+ *   <b><em>   teal and one size larger (a teal button's name: confirm)
+ *   <em class=vftTutGrey>   dark grey and one size larger (reset)
+ *   <i class=vftTutScissors></i>   step 4's scissors button, as an icon
  * ------------------------------------------------------------------ */
 
 :root {
@@ -23,6 +28,10 @@
   --vftTut-accent-text: #ffffff;
   /* the areas of interest: the border step 5 draws them with (R "green4") */
   --vftTut-aoi: #008b00;
+  /* the biodiversity sensitivity: dark red */
+  --vftTut-bio: #8b0000;
+  /* a secondary button's name (reset): the dark grey of its label */
+  --vftTut-grey: #4a4f4e;
 
   /* the text card */
   --vftTut-card-bg: #ffffff;
@@ -166,6 +175,32 @@
 /* <em class="vftTutAoi">: the term "areas of interest", in their map colour */
 .vftTutorialText .vftTutAoi {
   color: var(--vftTut-aoi);
+}
+
+/* <em class="vftTutBio">: the term "biodiversity sensitivity" */
+.vftTutorialText .vftTutBio {
+  color: var(--vftTut-bio);
+}
+
+/* <em class="vftTutGrey">: a grey-labelled button's name (reset). A teal
+   button's is <b><em>. */
+.vftTutorialText .vftTutGrey {
+  color: var(--vftTut-grey);
+}
+
+/* <i class="vftTutScissors"></i>: step 4's scissors button as polydraw.js
+   draws it on the map - a dark red ring on white. An icon of its own class
+   because the CSV reader drops the quotes an inline <svg> would need. */
+.vftTutorialText .vftTutScissors {
+  display: inline-block;
+  box-sizing: border-box;
+  width: 1.45em;
+  height: 1.45em;
+  margin: 0 0.1em;
+  vertical-align: -0.4em;
+  border: 2px solid var(--vftTut-bio);
+  border-radius: 50%;
+  background: #ffffff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238b0000' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='6' cy='6' r='3'/%3E%3Ccircle cx='6' cy='18' r='3'/%3E%3Cpath d='M20 4 8.1 15.9'/%3E%3Cpath d='M14.5 14.5 20 20'/%3E%3Cpath d='M8.1 8.1 12 12'/%3E%3C/svg%3E") center / 62% no-repeat;
 }
 
 .vftTutorialCentered .vftTutorialText {

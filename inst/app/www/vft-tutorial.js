@@ -331,12 +331,16 @@
   // the species the weight hints use: VU, Emerald and priority 1, so every
   // icon hint 7 talks about is on its row
   var TOAD = 'Bombina variegata';
-  // the group list is rebuilt as the step settles - "all species" is ticked
-  // 1.5 s after the species scan (step2_server.R) - so hint 4 only opens its
-  // window once the checkbox has held still this long
+  // the group boxes are reset as the step settles - "all species" is ticked
+  // 1.5 s after the species scan (step2_server.R), which clears them - so hint
+  // 4 only opens its window once the checkbox has been there this long
   var SETTLE = 2000;
 
   var SPECIES = '#step2-speciesCheckbox';
+
+  // Arriving from step 1, the ring can reach step 2 while step 1's page is
+  // still showing: wait for step 2's own page (as step3NotYet() does)
+  function step2NotYet() { return !shown(document.getElementById('step2-SDMmap')); }
 
   // a window on el, cut to what its scrolling container shows
   function clipped(el, box, pad, key, hit) {
@@ -504,6 +508,222 @@
     return !!el && el.classList.contains('recalculating');
   }
 
+  /* ------------------------- step 4's hints ------------------------- */
+
+  function step4Map() { return getMap('step4-finalAOIMap'); }
+
+  // Arriving from step 3, the ring is on step 4 while its areas are still
+  // being generated and step 3's page is still showing: wait for the map.
+  function step4NotYet() {
+    var el = document.getElementById('step4-finalAOIMap');
+    var map = step4Map();
+    return !shown(el) || el.classList.contains('recalculating') || !map || !map._loaded;
+  }
+
+  // the layers of one of the map's groups (leaflet's layerManager)
+  function groupLayers(map, group) {
+    var g = map && map.layerManager && map.layerManager.getLayerGroup(group, false);
+    var out = [];
+    if (g) { g.eachLayer(function (l) { out.push(l); }); }
+    return out;
+  }
+
+  // How many areas the map shows. .vftDrawAOI() (step4_server.R) redraws them
+  // all as one GeoJSON layer, one feature per area.
+  function areaCount() {
+    var n = 0;
+    groupLayers(step4Map(), 'eraseable').forEach(function (l) {
+      if (l.eachLayer) { l.eachLayer(function () { n++; }); } else { n++; }
+    });
+    return n;
+  }
+
+  // The step-1 outline and the areas of interest, as one window clipped to the
+  // map. The areas, too: step 3 finds them in a wide band round the outline,
+  // so a window on the outline alone leaves most of them out of reach. Its
+  // margin takes the scissors button (30 px) on a point placed just outside an
+  // area - boundsWindow()'s would cut it in half. The whole map when there is
+  // nothing to frame.
+  function areasWindow() {
+    var map = step4Map();
+    if (!map || !map._loaded || !window.L) { return []; }
+    var c = map.getContainer();
+    var cr = elRect(c, 0);
+    if (!cr) { return []; }
+    var b = null;
+    groupLayers(map, 'perimeter').concat(groupLayers(map, 'eraseable')).forEach(function (l) {
+      var lb = l.getBounds && l.getBounds();
+      if (lb && lb.isValid()) { b = b ? b.extend(lb) : L.latLngBounds(lb.getSouthWest(), lb.getNorthEast()); }
+    });
+    var r = cr;
+    if (b) {
+      var nw = map.latLngToContainerPoint(b.getNorthWest());
+      var se = map.latLngToContainerPoint(b.getSouthEast());
+      r = intersect({ l: cr.l + nw.x - 24, t: cr.t + nw.y - 24,
+                      r: cr.l + se.x + 24, b: cr.t + se.y + 24 }, cr);
+    }
+    return r ? [{ key: 'areas', rect: r, hit: [c] }] : [];
+  }
+
+  // A cut that split an area: polydraw.js sends the line as step4-polyCut and
+  // R redraws the pieces. Counted from the moment it is sent, so a line that
+  // missed every area, or only cut a slit into one, does not count.
+  function watchCut(ctx) {
+    ctx.jq('shiny:inputchanged', function (e) {
+      if (e.name === 'step4-polyCut') { ctx.base = areaCount(); ctx.cut = true; }
+    });
+  }
+
+  function cutSplitArea(ctx) { return !!ctx.cut && areaCount() > ctx.base; }
+
+  // A new area closed and drawn. Merging it into the areas it touches may
+  // leave fewer of them, so this waits for R to be done instead of counting.
+  function watchNewArea(ctx) {
+    ctx.jq('shiny:inputchanged', function (e) {
+      if (e.name === 'step4-polyDrawn') { ctx.drawn = true; ctx.idle = false; }
+    });
+    ctx.jq('shiny:idle', function () { if (ctx.drawn) { ctx.idle = true; } });
+  }
+
+  function newAreaDrawn(ctx) { return !!ctx.drawn && !!ctx.idle; }
+
+  /* ------------------------- step 5's hints ------------------------- */
+
+  var LAUNCH = '#step5-launchSim';
+  var CARDS = '#placeholder_step5 .btn';
+  var SIM_QUIET = 5000;   // a simulation never seen running counts as done after, ms
+  var BAR_WAIT = 4000;    // hint 2 waits this long for its first progress bar, ms
+
+  function step5Map() { return getMap('step5-mapAreaLeaflet'); }
+
+  // Entering step 5 from the nav bar, the ring moves before the page shows
+  function step5NotYet() { return !shown(document.querySelector(LAUNCH)); }
+
+  // several targets as one hint's windows
+  function each() {
+    var fns = Array.prototype.slice.call(arguments);
+    return function (ctx) {
+      return fns.reduce(function (out, fn) { return out.concat(fn(ctx)); }, []);
+    };
+  }
+
+  // the progress bars, bottom right (vftProgressPair() in R/async_helpers.R):
+  // the path data's download, the preparation, then the simulation
+  function progressBars() {
+    return Array.prototype.filter.call(
+      document.querySelectorAll('#shiny-notification-panel .shiny-notification'), shown);
+  }
+
+  function progressTarget(ctx) {
+    var r = union(progressBars().map(function (el) { return elRect(el, 4); }));
+    if (r) { ctx.barSeen = true; }
+    return r ? [{ key: 'progress', rect: r }] : [];
+  }
+
+  function launchBusy() {
+    var b = document.querySelector(LAUNCH);
+    return !!b && b.disabled;
+  }
+
+  // the "no simulation yet" picture is off the map
+  function step5MapShown() {
+    return !shown(document.getElementById('step5-mapPlaceholder')) && !!step5Map();
+  }
+
+  function watchSim(ctx) { ctx.t0 = performance.now(); }
+
+  // hidden until the first bar is up - the path data may take a moment
+  function noBarYet(ctx) {
+    return !ctx.barSeen && !progressBars().length && performance.now() - ctx.t0 < BAR_WAIT;
+  }
+
+  // The launch button is disabled from the click until the result is drawn
+  // (obsEvent_sim in step5_server.R), and the bars are gone with it. Busy has
+  // to be seen first: the hint may start before the click's round trip.
+  function simDone(ctx) {
+    if (launchBusy() || progressBars().length) { ctx.busySeen = true; return false; }
+    if (!step5MapShown()) { return false; }
+    return !!ctx.busySeen || performance.now() - ctx.t0 > SIM_QUIET;
+  }
+
+  // the perimeter: the thick black outline plotPathUsage() draws round it
+  function outlineTarget() {
+    var map = step5Map();
+    if (!map || !window.L) { return []; }
+    var b = null;
+    map.eachLayer(function (l) {
+      if (!b && l instanceof L.Polygon && l.options.color === 'black' && l.options.fill === false) {
+        b = l.getBounds();
+      }
+    });
+    return b && b.isValid() ? boundsWindow(step5Map, b, 'outline')() : [];
+  }
+
+  // a switch row of the layers card: its label, switch and all
+  function switchRow(id) {
+    return function () {
+      var input = document.getElementById(id);
+      var row = input && input.closest('label');
+      var r = shown(row) && elRect(row, 3);
+      return r ? [{ key: id, rect: r, hit: [row] }] : [];
+    };
+  }
+
+  // switched on by the user
+  function watchSwitch(id) {
+    return function (ctx) {
+      ctx.on(document, 'change', function (e) {
+        if (e.target && e.target.id === id && e.target.checked) { ctx.flag = true; }
+      }, true);
+    };
+  }
+
+  // Whether this area has a sensitivity matrix: enter() in step5_server.R
+  // marks the switch
+  function smMissing() {
+    var el = document.getElementById('step5-SMcheckbox');
+    return !(el && el.classList.contains('vftSmReady'));
+  }
+
+  // the scenario column: its title and the list of cards under it
+  function scenarioColumn() {
+    var col = document.querySelector('.vft-scencol');
+    var parts = col ? [col.querySelector('h4'), col.querySelector('.vft-ws-listrow')] : [];
+    var r = union(parts.filter(shown).map(function (el) { return elRect(el, 4); }));
+    return r ? [{ key: 'scenarios', rect: r }] : [];
+  }
+
+  // The card the map shows has `selected` and no `notSelected` - the server
+  // adds notSelected to the card it leaves without taking selected off
+  function isSelected(card) {
+    return card.classList.contains('selected') && !card.classList.contains('notSelected');
+  }
+
+  function cardList() { return Array.prototype.slice.call(document.querySelectorAll(CARDS)); }
+
+  // a card other than the one shown - past the original if there is one
+  function otherCard() {
+    var cards = cardList();
+    var free = cards.filter(function (c) { return !isSelected(c); });
+    return free.filter(function (c) { return c !== cards[0]; })[0] || free[0] || null;
+  }
+
+  function onlyOriginal() { return cardList().length < 2; }
+
+  // picked once, so the window does not jump once it is selected
+  function watchOtherCard(ctx) {
+    ctx.card = otherCard();
+    centreIn(ctx.card, ctx.card && ctx.card.closest('.vft-ws-list'));
+    ctx.on(window, 'click', function (e) {
+      if (ctx.card && e.target && ctx.card.contains(e.target)) { ctx.flag = true; }
+    }, true);
+  }
+
+  function otherCardTarget(ctx) {
+    var card = ctx.card;
+    return clipped(card, card && card.closest('.vft-ws-list'), 4, 'card');
+  }
+
   /* ------------------------------ tours ----------------------------- */
   // targets: the windows. advance(ctx): polled every frame, true moves on.
   // enter(ctx): runs as the hint starts; ctx.on()/ctx.jq() listeners go with
@@ -518,7 +738,11 @@
   //   sits on instead of beside the windows. wide: a wider card, for a hint
   //   with little height to spare.
   // hold(ctx): true keeps the hint hidden. center: the text is centred.
-  // Texts are texts.tours[<key>][<index>].
+  // end: the tour ends once this hint is done, whatever comes after it.
+  // variant(): asked once as the hint starts; a name it returns lays
+  //   variants[name] over the hint, and its text is the alternative one.
+  // Texts are texts.tours[<key>][<index>]; a variant's are
+  // texts.alts[<key>][<hint number><name>], e.g. alts.step5['6b'].
 
   var TOURS = {
     step1: [
@@ -573,6 +797,7 @@
     step2: [
       { // 1 - this step's button in the nav bar
         targets: sel('#vftNav_step2', 4),
+        hold: step2NotYet,
         look: true
       },
       { // 2 - the other steps: one window per group of the bar, step 2's left out
@@ -674,6 +899,104 @@
         advance: flagged,
         pass: '#shiny-modal'
       }
+    ],
+
+    step4: [
+      { // 1 - this sub-step's button, once step 4's map is up
+        targets: sel('#vftNav_step4', 4),
+        hold: step4NotYet,
+        look: true
+      },
+      { // 2 - cut an area in two with the scissors
+        targets: areasWindow,
+        enter: watchCut,
+        advance: cutSplitArea,
+        wide: true,
+        escPass: true
+      },
+      { // 3 - draw a new area
+        targets: areasWindow,
+        enter: watchNewArea,
+        advance: newAreaDrawn,
+        wide: true,
+        escPass: true
+      },
+      { // 4 - back to the areas step 3 made
+        targets: sel('#step4-resetButton'),
+        enter: watchClick('#step4-resetButton'),
+        advance: flagged
+      },
+      { // 5 - confirm. The tour ends with the tap, and step 5's tour follows.
+        // Confirming over later steps' work first asks whether to discard it:
+        // that modal takes taps too.
+        targets: sel('#step4-confirmButton4'),
+        enter: watchClick('#step4-confirmButton4'),
+        advance: flagged,
+        pass: '#shiny-modal'
+      }
+    ],
+
+    step5: [
+      { // 1 - launch the simulation. A failure's modal can be dismissed.
+        targets: sel(LAUNCH),
+        hold: step5NotYet,
+        enter: watchClick(LAUNCH),
+        advance: flagged,
+        pass: '#shiny-modal'
+      },
+      { // 2 - the progress bars, until the result is on the map
+        targets: progressTarget,
+        enter: watchSim,
+        hold: noBarYet,
+        advance: simDone,
+        pass: '#shiny-modal'
+      },
+      { // 3 - the path usage, framed by the area's outline
+        targets: outlineTarget,
+        look: true
+      },
+      { // 4 - the recreationist types and the map layers
+        targets: each(sel('.vft5-rail .vft5-agent', 4),
+                      sel('.vft5-rail .vftRailCard:nth-child(2)', 4)),
+        look: true
+      },
+      { // 5 - switch the starting points on
+        targets: switchRow('step5-startingCheckbox'),
+        enter: watchSwitch('step5-startingCheckbox'),
+        advance: flagged
+      },
+      { // 6 - a: switch the sensitivity matrix on. b: there is none to show
+        // (the switch would offer to go and make one) - read only
+        targets: switchRow('step5-SMcheckbox'),
+        enter: watchSwitch('step5-SMcheckbox'),
+        advance: flagged,
+        variant: function () { return smMissing() ? 'b' : null; },
+        variants: { b: { enter: null, advance: null, look: true } }
+      },
+      { // 7 - the export
+        targets: sel('#step5-imageButton'),
+        look: true
+      },
+      { // 8 - the scenario column
+        targets: scenarioColumn,
+        look: true
+      },
+      { // 9 - a: only the original - go and make a scenario; the tour ends
+        // there, and the next page's tour follows if it has one. b: select
+        // another one.
+        targets: sel('#step5-newVersionsButton'),
+        enter: watchClick('#step5-newVersionsButton'),
+        advance: flagged,
+        end: true,
+        variant: function () { return onlyOriginal() ? null : 'b'; },
+        variants: { b: { targets: otherCardTarget, enter: watchOtherCard, end: false } }
+      },
+      { // 10 - and simulate it
+        targets: sel(LAUNCH),
+        enter: watchClick(LAUNCH),
+        advance: flagged,
+        pass: '#shiny-modal'
+      }
     ]
   };
 
@@ -681,6 +1004,27 @@
     var t = texts && texts.tours && texts.tours[key];
     if (t == null) { return []; }
     return Array.isArray(t) ? t : [t];
+  }
+
+  // the text of the hint being shown, its variant's if it has one
+  function hintText() {
+    var alts = state.variant && texts && texts.alts && texts.alts[state.key];
+    var alt = alts && alts[(state.idx + 1) + state.variant];
+    return alt || tourTexts(state.key)[state.idx] || '';
+  }
+
+  // the hint as it plays: variants[name] laid over it, if variant() names one
+  function resolve(base) {
+    var name = null;
+    if (base.variant) {
+      try { name = base.variant() || null; } catch (e) { name = null; }
+    }
+    var over = name && base.variants && base.variants[name];
+    if (!over) { return { step: base, variant: null }; }
+    var step = {};
+    Object.keys(base).forEach(function (k) { step[k] = base[k]; });
+    Object.keys(over).forEach(function (k) { step[k] = over[k]; });
+    return { step: step, variant: name };
   }
 
   /* ----------------------------- overlay ---------------------------- */
@@ -723,9 +1067,9 @@
 
   function renderBox() {
     if (!state) { return; }
-    var step = hints()[state.idx];
+    var step = state.step;
     var t = texts || {};
-    var text = tourTexts(state.key)[state.idx] || '';
+    var text = hintText();
     var n = hints().length;
 
     state.box.classList.toggle('vftTutorialCentered', !!step.center);
@@ -754,7 +1098,7 @@
   function onNext() {
     var ctx = state && state.ctx;
     if (!ctx || ctx.busy || state.pause) { return; }
-    var step = hints()[state.idx];
+    var step = state.step;
     if (!step.onNext) { ctx.next = true; return; }
     ctx.busy = true;
     step.onNext(ctx, function () {
@@ -853,7 +1197,7 @@
   // Taps go through a window, but not in a hint that is only to read (unless
   // it is live), and only onto the window's own target (el: the element tapped)
   function inWindow(x, y, el) {
-    var step = hints()[state.idx];
+    var step = state.step;
     if (state.pause || (step.look && !step.live)) { return false; }
     return state.wins.some(function (w) {
       if (!contains(w.cur, x, y) && !contains(w.goal, x, y)) { return false; }
@@ -1005,7 +1349,7 @@
     // the card, and the language selector with its dropdown, whatever the hint
     if (closest('.vftTutorialBox')) { return true; }
     if (!modalOpen() && closest('#vftNav .vft-nav-lang')) { return true; }
-    var step = hints()[state.idx];
+    var step = state.step;
     if (step.pass && !state.pause && closest(step.pass)) { return true; }
     // a click from the keyboard has no position: judge it by its element
     if (e.type === 'click' && e.detail === 0 && el && el.getBoundingClientRect) {
@@ -1033,7 +1377,7 @@
   function onKey(e) {
     if (!state || e.key !== 'Escape') { return; }
     // drawing on the map: Escape takes the last vertex back (polydraw.js)
-    if (hints()[state.idx].escPass) { return; }
+    if (state.step.escPass) { return; }
     // stop the tour, and do not let the same key close a modal
     e.stopImmediatePropagation();
     e.preventDefault();
@@ -1076,7 +1420,10 @@
       off: function () { offs.forEach(function (f) { f(); }); offs = []; }
     };
 
-    var step = hints()[idx];
+    var hint = resolve(hints()[idx]);
+    state.step = hint.step;
+    state.variant = hint.variant;
+    var step = state.step;
     // a hint that may wait for its texts starts hidden
     if (step.hold) { setQuiet(true); }
     renderBox();
@@ -1106,16 +1453,16 @@
       state.pause = null;
       go(next, now);
     } else if (state.ctx && state.ctx.next) {
-      if (state.idx >= last) { finish(); return; }
+      if (state.idx >= last || state.step.end) { finish(); return; }
       go(state.idx + 1, now);
     }
 
-    var step = hints()[state.idx];
+    var step = state.step;
     var done = false;
     try { done = !!(step.advance && step.advance(state.ctx)); } catch (e) { done = false; }
     if (done) {
       if (state.ctx) { state.ctx.off(); }
-      if (state.idx >= last) { finish(); return; }
+      if (state.idx >= last || step.end) { finish(); return; }
       pauseBefore(state.idx + 1, now);
       return;
     }
@@ -1142,7 +1489,8 @@
     var ui = buildOverlay();
     state = {
       key: key, root: ui.root, canvas: ui.canvas, box: ui.box,
-      wins: [], langWins: [], data: {}, idx: 0, ctx: null, quiet: true, pause: null,
+      wins: [], langWins: [], data: {}, idx: 0, step: null, variant: null, ctx: null,
+      quiet: true, pause: null,
       moving: false, downOk: false, dimSig: null
     };
     readLook();
@@ -1226,7 +1574,7 @@
   };
   window.vftTutorialState = function () {
     var lang = texts ? texts.lang : null;
-    return state ? { key: state.key, idx: state.idx, quiet: state.quiet,
+    return state ? { key: state.key, idx: state.idx, variant: state.variant, quiet: state.quiet,
                      pause: !!state.pause, choice: state.data.choice || null, lang: lang }
                  : { key: null, chain: chain ? chain.from : null, lang: lang };
   };

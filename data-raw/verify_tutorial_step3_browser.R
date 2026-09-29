@@ -201,7 +201,7 @@ ok("the tap ends the tour", waitFor("!document.getElementById('vftTutorial')", 5
 ok("...stored as done", identical(stored(), "done"))
 ok("...and the app moves on to step 4", waitFor(ringIs("vftNav_step4"), 120))
 Sys.sleep(1.5)
-ok("step 4 has no tour yet, so none starts", is.null(tut()$key))
+ok("step 4's tour starts by itself", waitFor(atHint(1, "step4"), 120), paste(unlist(tut()), collapse = ","))
 
 cat(sprintf("\nscreenshots in %s\n", SHOTS))
 b$close()

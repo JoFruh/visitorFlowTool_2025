@@ -194,8 +194,8 @@ ok("Next sends the choice: the ring moves to step 2",
    waitFor("(function(){ var e = document.querySelector('#vftNav .vft-nav-current'); return !!e && e.id === 'vftNav_step2'; })()", 60))
 ok("the overlay is gone", !isTRUE(js("!!document.getElementById('vftTutorial')")))
 ok("the tour is stored as done", identical(stored(), "done"))
-Sys.sleep(1)
-ok("step 2 has no tour yet, so none starts", is.null(tut()$key))
+ok("step 2's tour follows by itself",
+   waitFor("(function(){ var s = vftTutorialState(); return s.key === 'step2' && !s.quiet; })()", 120))
 
 cat("\n=== 9. the help button's modal, and Escape ===\n")
 invisible(b$Page$reload())

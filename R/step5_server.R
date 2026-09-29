@@ -1292,7 +1292,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
           output$agentCheckbox_ui <- shiny::renderUI({
 
 
-            shiny::radioButtons(inputId = NS(id, "agentCheckbox"), label = "Agent type to display",
+            shiny::radioButtons(inputId = NS(id, "agentCheckbox"), label = "Type of recreationist",
                                 choices = c("all" = "1", "Walkers" = "2", "Cyclists" = "3", "Dog walkers" = "4", "Joggers" = "5") ,
                                 selected = 1)
           })
@@ -1372,7 +1372,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
           }else if(currentLang == "en"){
             output$agentCheckbox_ui <- shiny::renderUI({
 
-              shiny::radioButtons(shiny::NS(id, "agentCheckbox"), "Type d'agent à afficher",
+              shiny::radioButtons(shiny::NS(id, "agentCheckbox"), "Type of recreationist",
                                   choices = c("all" = "1", "Walkers" = "2", "Cyclists" = "3", "Dog Walkers" = "4", "Joggers" = "5") ,
                                   selected = 1
               )
@@ -1430,7 +1430,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
           }else if(currentLang == "en"){
             output$agentCheckbox_ui <- shiny::renderUI({
               shinyjs::disabled(
-                shiny::radioButtons(shiny::NS(id, "agentCheckbox"), "Agent type to display",
+                shiny::radioButtons(shiny::NS(id, "agentCheckbox"), "Type of recreationist",
                                     choices = c("all" = "1", "Walkers" = "2", "Cyclists" = "3", "Dog walkers" = "4", "Joggers" = "5") ,
                                     selected = 1
                 )
@@ -1617,6 +1617,11 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
 
 #observe usage ####
       obsUsage <- shiny::observeEvent(input$onlyAOIcheckbox, {
+        #both branches redraw the paths from the result; with none - the reset
+        #obsEvent_map makes for a scenario without a simulation - there is
+        #nothing to redraw, and getPassageTable() would error the session away
+        #(the same trap as obsAgentStart below)
+        if(is.null(r$result$pathUsage)) return(invisible(NULL))
         if(input$onlyAOIcheckbox == 1){
           proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet"
           )|>
@@ -1956,10 +1961,14 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
       }, ignoreInit = TRUE)
 
       #observe agent starting points ####
+      #The points are asked for only when switching ON with a result to take
+      #them from. Switching OFF also comes from the server: showing a scenario
+      #without a simulation resets every switch (obsEvent_map), r$result has no
+      #pathUsage then, and getStartingPoints() erroring in this observer closed
+      #the session.
       obsAgentStart <- shiny::observeEvent(input$startingCheckbox, {
-        startingPoints <- sf::st_coordinates(getStartingPoints())
-
-        if(input$startingCheckbox == TRUE){
+        if(isTRUE(input$startingCheckbox) && !is.null(r$result$pathUsage)){
+          startingPoints <- sf::st_coordinates(getStartingPoints())
           proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet"
           ) |> leaflet::addCircleMarkers(lng = startingPoints[,"X"], lat = startingPoints[,"Y"] , group = "startingPoints",
                                                    color = "red", fill = FALSE, stroke = TRUE, opacity = 1,
@@ -2775,6 +2784,10 @@ vftDbgCat("FINISHED TIFF\n")
       #absence - is what the download button reflects. The checkbox is not
       #touched here or anywhere: see applySMState().
       applySMState()
+      #...but it is marked: the tutorial's hint 6 (inst/app/www/vft-tutorial.js)
+      #asks the page whether there is a matrix to switch on
+      shinyjs::toggleClass(id = "SMcheckbox", class = "vftSmReady",
+                           condition = !is.null(SM_pres))
 
       #--- 2. tear down the previous visit's version cards and their observers.
       #One observer per card, created by updateVersions(), and the cards are
