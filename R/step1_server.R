@@ -341,14 +341,14 @@ step1_server <- function(id, i18n,
     #warning straight back.
     #
     #So the strip is composed rather than written. Every writer sets its own
-    #flag and calls this, which renders whatever is true at that moment, and
-    #both warnings can be on screen together - which for a large area drawn at a
-    #low zoom is exactly what should happen.
+    #flag and calls this, which renders whatever is true at that moment.
     #
     #The area warning has since moved out to its own element, #areaWarn, because
     #the browser now raises it too, on every pointer move while a ring is being
     #drawn, and a strip that R rewrites wholesale would have overwritten that.
-    #The strip still composes, so a third warning can join the zoom one here.
+    #Only one warning is ever on screen: while #areaWarn shows, CSS hides this
+    #strip (R/layout_helpers.R) without touching its text, so the zoom warning
+    #comes back by itself when the area warning goes.
     updateZoomText <- function(){
       parts <- character(0)
 
@@ -381,7 +381,12 @@ step1_server <- function(id, i18n,
     #one. Not said at all while the feature is switched off (HEAT_MITIGATION in
     #R/features.R) - it would warn about a door that is shut.
     #
-    #Two writers share the #areaWarn element, by class, and never its text
+    #A second, higher ceiling - AOI_SERVER_FACTOR times the first, see
+    #aoiTooLargeForServer() - has its own element, #areaHardWarn, and is on
+    #regardless of HEAT_MITIGATION. Past it the drawer also refuses vertices
+    #and closes. Only the highest warning reached is ever shown.
+    #
+    #Two writers share each warning element, by class, and never its text
     #(which is a translated tag in step1_ui, so it follows the language):
     #  - `vft-area-over`, set here: the outline in force is too large;
     #  - `vft-pd-live` / `vft-pd-over`, set by polydraw.js while a ring is being
@@ -409,6 +414,11 @@ step1_server <- function(id, i18n,
       r1$areaTooLarge <- paintAreaTooLarge(outline)
       shinyjs::toggleClass(id = "areaWarn", class = "vft-area-over",
                            condition = vftHeatEnabled() && isTRUE(r1$areaTooLarge))
+      #the server's ceiling, whatever the feature switch says. A drawn ring
+      #cannot get past it (polydraw.js refuses the vertex); this is for an
+      #upload, or an outline that was already in force
+      shinyjs::toggleClass(id = "areaHardWarn", class = "vft-area-over",
+                           condition = aoiTooLargeForServer(outline))
     })
 
 
@@ -490,7 +500,8 @@ step1_server <- function(id, i18n,
       #scissors here - step 1 keeps one outline, there is nothing to cut. The
       #area warning is live while drawing, when there is a feature to warn about.
       vftPolyDraw(map, session, cut = FALSE,
-                  areaWarn = if(vftHeatEnabled()) "areaWarn")
+                  areaWarn = if(vftHeatEnabled()) "areaWarn",
+                  hardWarn = "areaHardWarn")
     })
 
     # OBSERVERS ####

@@ -47,17 +47,22 @@ vftDbg("UI1")
                 shiny::div(class = "vft-card vft-step1-opt",
                   shiny::div(class = "vft-step1-opt-head", vftIcon("draw"), shiny::span(i18n$t("Zeichnen Sie ein Polygon auf der Karte."))),
                   vftSub(shiny::HTML(paste0(i18n$t("(Verwenden Sie das"), " ", shiny::strong(i18n$t("Mausrad")), " ", i18n$t("zum"), " ", shiny::strong(i18n$t("Zoomen")), ".)"))),
-                  #written from ten places in step1_server via shinyjs::html().
-                  #A plain div, so it is not a registered output and never enters
-                  #the per-message manageHiddenOutputs() sweep.
-                  shiny::tags$div(id = shiny::NS(id, "zoomText")),
                   #"too large for heat mitigation": never written, only shown
                   #and hidden by class - by step1_server for the outline in
                   #force, by polydraw.js for the ring being drawn. The rules
-                  #are in R/layout_helpers.R.
+                  #are in R/layout_helpers.R. One warning at a time, the most
+                  #serious wins, and CSS can only hide a LATER sibling (`~`) -
+                  #so the three stay in this order: server, heat, zoom.
+                  shiny::tags$div(id = shiny::NS(id, "areaHardWarn"), class = "vft-area-warn",
+                    shiny::tags$span(style = "color:#dd1717; font-size:medium; font-weight:bold;",
+                      i18n$t("Warnung: Ein so großes Gebiet würde die Stabilität des Servers gefährden. Wählen Sie ein kleineres Gebiet."))),
                   shiny::tags$div(id = shiny::NS(id, "areaWarn"), class = "vft-area-warn",
                     shiny::tags$span(style = "color:#dd1717; font-size:medium; font-weight:bold;",
-                      i18n$t("Warnung: Das gewählte Gebiet ist zu groß für die Hitzeminderungsplanung. Wenn Sie diese Funktion nutzen möchten, wählen Sie ein kleineres Gebiet.")))
+                      i18n$t("Warnung: Das gewählte Gebiet ist zu groß für die Hitzeminderungsplanung. Wenn Sie diese Funktion nutzen möchten, wählen Sie ein kleineres Gebiet."))),
+                  #written from ten places in step1_server via shinyjs::html().
+                  #A plain div, so it is not a registered output and never enters
+                  #the per-message manageHiddenOutputs() sweep.
+                  shiny::tags$div(id = shiny::NS(id, "zoomText"))
                 )
               ),
 

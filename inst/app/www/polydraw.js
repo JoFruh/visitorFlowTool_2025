@@ -20,8 +20,12 @@
  *
  * Live area check (step 1 only, opts.area): the bounding box the land cover
  * baseline would be built for is measured on every pointer move, over the
- * vertices plus the pointer, and the preview and a warning element turn red
- * past the ceiling. See areaOver().
+ * vertices plus the pointer, against two ceilings. Past the first (heat
+ * mitigation) the drawing turns red and a warning element shows. Past the
+ * second (the server's) it turns grey, another warning shows, and the drawing
+ * is BLOCKED: no vertex can be placed and the ring cannot be closed where
+ * either would leave it over. Taking vertices back still works - that, and
+ * moving the pointer back in, is the way out. See areaLevel().
  *
  * Attached by R through htmlwidgets::onRender (vftPolyDraw() in
  * R/polydraw_helpers.R). leaflet's renderValue() throws the old L.Map away and
@@ -40,7 +44,8 @@
   var LINE  = "#5ab4f0";   //light blue: edges, rubber band, vertices
   var FILL  = "#5ab4f0";
   var CUT   = "#8b0000";   //dark red: the scissors button and its dashed line
-  var WARN  = "#dd1717";   //the app's warning red: X buttons, an area past opts.area's ceiling
+  var WARN  = "#dd1717";   //the app's warning red: X buttons, an area past opts.area's first ceiling
+  var GREY  = "#8a8a8a";   //an area past the second: blocked
   var PANE     = "vftDrawPane";
   var PANE_TOP = "vftDrawTopPane";
   //consecutive vertices closer than this (screen px) are one vertex: what a
@@ -90,7 +95,13 @@
       ".vft-pd-drawing .vft-pd-rm { cursor: pointer; }" +
       ".vft-pd-drawing .vft-pd-rm.vft-pd-fresh { cursor: crosshair; }" +
       ".vft-pd-rm:not(.vft-pd-fresh):hover .vft-pd-dot { display: none; }" +
-      ".vft-pd-rm:not(.vft-pd-fresh):hover .vft-pd-x { display: flex; }";
+      ".vft-pd-rm:not(.vft-pd-fresh):hover .vft-pd-x { display: flex; }" +
+      //past the server's ceiling a click places nothing; the X still works
+      ".vft-pd-drawing.vft-pd-blocked, .vft-pd-drawing.vft-pd-blocked .leaflet-grab," +
+      " .vft-pd-drawing.vft-pd-blocked .vft-pd-first { cursor: not-allowed; }" +
+      //and the vertices go grey with the rest of the drawing
+      ".vft-pd-blocked .vft-pd-dot { background: " + GREY + "; }" +
+      ".vft-pd-blocked .vft-pd-first .vft-pd-dot { box-shadow: 0 0 0 1px " + GREY + "; }";
     var el = document.createElement("style");
     el.appendChild(document.createTextNode(css));
     (document.head || document.documentElement).appendChild(el);
@@ -130,7 +141,7 @@
       fresh: -1,          //index of the vertex just placed, which shows no X yet
       freshEl: null,
       removedAt: 0,       //Date.now() of the last X click
-      over: false,        //the live area check's last answer
+      level: 0,           //the live area check's last answer, see areaLevel()
       dblWasEnabled: false, dblTimer: null
     };
     states[el.id] = s;
@@ -147,8 +158,12 @@
     map.on("mouseout", function () { s.cursor = null; updateBand(s); });
     //the second click of a double-click normally lands on the vertex the first
     //one placed and closes the ring there; this catches the one that missed it
-    map.on("dblclick", function () {
+    //this catches the one that missed it. Past the server's ceiling the first
+    //click placed nothing, and the ring must not close on the vertices it had
+    //before - that is not the shape the user was pointing at.
+    map.on("dblclick", function (e) {
       if (Date.now() - s.removedAt < AFTER_REMOVE_MS) return;
+      if (e.latlng && blocked(s, s.pts.concat([e.latlng]))) return;
       if (s.pts.length >= 3) finish(s);
     });
   }
@@ -171,6 +186,8 @@
     if (!e.latlng) return;
     if (clicks(e) > 1 && Date.now() - s.removedAt < AFTER_REMOVE_MS) return;
     if (s.pts.length === 0 && onPolygon(s, e)) return;
+    //asked of the click's own position, not of the last pointer move
+    if (blocked(s, s.pts.concat([e.latlng]))) return;
     addVertex(s, e.latlng);
   }
 
@@ -238,6 +255,9 @@
   }
 
   function finish(s) {
+    //every close goes through here; vertices that could only be placed while
+    //under the ceiling cannot make a ring over it, but this is the last word
+    if (blocked(s, s.pts)) return;
     var pts = dedupe(s, s.pts);
     if (pts.length < 3) { s.pts = pts; s.fresh = -1; render(s); return; }
     send(s, "polyDrawn", pts);
@@ -250,7 +270,7 @@
     s.group.clearLayers();
     s.band = s.preview = s.edges = s.cutLine = null;
     L.DomUtil.removeClass(s.map.getContainer(), "vft-pd-drawing");
-    setWarning(s, false, false);
+    setWarning(s, false, 0);
     //not at once: the dblclick that follows a closing click would otherwise
     //zoom the map on its way out
     if (s.dblWasEnabled) {
@@ -298,10 +318,10 @@
 
     //the layers are rebuilt here, so they start in the colour the area check
     //last settled on; setWarning() only restyles on a change of answer
-    var col = s.over ? WARN : LINE;
+    var col = levelColour(s.level);
     s.preview = L.polygon([], {
       pane: PANE, interactive: false, stroke: false,
-      fill: true, fillColor: s.over ? WARN : FILL, fillOpacity: 0.25
+      fill: true, fillColor: s.level ? col : FILL, fillOpacity: 0.25
     }).addTo(s.group);
 
     if (cutArmed(s)) {
@@ -371,7 +391,7 @@
       s.band.setLatLngs([]);
       s.preview.setLatLngs(pts.length >= 3 ? pts : []);
     }
-    setWarning(s, true, areaOver(s.opts.area, s.cursor ? pts.concat([s.cursor]) : pts));
+    setWarning(s, true, areaLevel(s.opts.area, s.cursor ? pts.concat([s.cursor]) : pts));
   }
 
   // ── the live area check ─────────────────────────────────────────────────────
@@ -389,15 +409,15 @@
     };
   }
 
-  /* Would the land cover baseline for this outline be past the ceiling?
-   * paintAreaTooLarge() in R/paintbrush_helpers.R, restated: the outline in
+  /* How many cells the land cover baseline for this outline would take:
+   * paintAreaTooLarge() in R/paintbrush_helpers.R, restated. The outline in
    * LV95, buffered by `buffer` m, its bounding box snapped outwards to the
    * `res` grid, counted in cells. A buffer grows a bounding box by the buffer
    * on every side, so the buffer itself is never built. R measures the
    * finished outline again and has the last word; this only has to agree with
    * it away from the edge, to within the ~1 m of lv95(). */
-  function areaOver(a, pts) {
-    if (!a || !pts || !pts.length) return false;
+  function areaCells(a, pts) {
+    if (!a || !pts || !pts.length) return 0;
     var x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (var i = 0; i < pts.length; i++) {
       var q = lv95(pts[i]);
@@ -409,27 +429,52 @@
     var b = a.buffer || 0, r = a.res || 1;
     var w = Math.ceil((x1 + b) / r) - Math.floor((x0 - b) / r);
     var h = Math.ceil((y1 + b) / r) - Math.floor((y0 - b) / r);
-    return w * h > a.maxCells;
+    return w * h;
   }
 
-  /* The drawing's colour, and the page's warning element (opts.area.warn):
-   * `vft-pd-live` on it while a drawing is in progress, `vft-pd-over` while
-   * that drawing is past the ceiling. What the two mean for its visibility is
-   * the page's CSS - step 1 shows its own verdict on the finished outline only
-   * while nothing is being drawn (R/layout_helpers.R). */
-  function setWarning(s, live, over) {
+  /* 0 under both ceilings, 1 past the heat mitigation one (a.maxCells), 2 past
+   * the server's (a.hardCells). A ceiling R did not hand over is not checked -
+   * step 1 drops maxCells while heat mitigation is switched off. */
+  function areaLevel(a, pts) {
+    var n = areaCells(a, pts);
+    if (a && a.hardCells != null && n > a.hardCells) return 2;
+    if (a && a.maxCells  != null && n > a.maxCells)  return 1;
+    return 0;
+  }
+
+  /* The heat ceiling alone, as R's paintAreaTooLarge() answers it. */
+  function areaOver(a, pts) { return !!a && a.maxCells != null && areaCells(a, pts) > a.maxCells; }
+
+  /* Would a ring through these points be past the server's ceiling? */
+  function blocked(s, pts) { return areaLevel(s.opts.area, pts) === 2; }
+
+  function levelColour(level) { return level === 2 ? GREY : level === 1 ? WARN : LINE; }
+
+  /* The drawing's colour, the map's blocked state, and the page's two warning
+   * elements (opts.area.warn for level 1, opts.area.hardWarn for level 2):
+   * `vft-pd-live` on each while a drawing is in progress, `vft-pd-over` while
+   * the drawing has reached that element's level. What the classes mean for
+   * visibility is the page's CSS - step 1 shows one warning at a time, the
+   * highest (R/layout_helpers.R). */
+  function setWarning(s, live, level) {
     if (!s.opts.area) return;
-    if (over !== s.over) {
-      s.over = over;
-      var c = over ? WARN : LINE;
-      if (s.preview) s.preview.setStyle({ fillColor: over ? WARN : FILL });
+    if (level !== s.level) {
+      s.level = level;
+      var c = levelColour(level);
+      if (s.preview) s.preview.setStyle({ fillColor: level ? c : FILL });
       if (s.band)    s.band.setStyle({ color: c });
       if (s.edges)   s.edges.setStyle({ color: c });
+      L.DomUtil[level === 2 ? "addClass" : "removeClass"](s.map.getContainer(), "vft-pd-blocked");
     }
-    var el = s.opts.area.warn && document.getElementById(s.opts.area.warn);
+    tag(s.opts.area.warn, live, live && level >= 1);
+    tag(s.opts.area.hardWarn, live, live && level === 2);
+  }
+
+  function tag(id, live, over) {
+    var el = id && document.getElementById(id);
     if (!el) return;
     L.DomUtil[live ? "addClass" : "removeClass"](el, "vft-pd-live");
-    L.DomUtil[live && over ? "addClass" : "removeClass"](el, "vft-pd-over");
+    L.DomUtil[over ? "addClass" : "removeClass"](el, "vft-pd-over");
   }
 
   // ── from R and the keyboard ─────────────────────────────────────────────────
@@ -465,5 +510,6 @@
     Shiny.addCustomMessageHandler("vft-polydraw-cancel", function (m) { cancel(m.id); });
   }
 
-  window.vftPolyDraw = { attach: attach, cancel: cancel, areaOver: areaOver, lv95: lv95 };
+  window.vftPolyDraw = { attach: attach, cancel: cancel, areaOver: areaOver,
+                         areaLevel: areaLevel, areaCells: areaCells, lv95: lv95 };
 })();

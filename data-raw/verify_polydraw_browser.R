@@ -29,12 +29,16 @@ dir <- file.path(tempdir(), "polydraw_browser"); dir.create(dir, showWarnings = 
 map <- leaflet::leaflet(width = "800px", height = "600px", elementId = "t-map",
                         options = leaflet::leafletOptions(doubleClickZoom = FALSE)) |>
   leaflet::setView(8.54, 47.37, 13)
-map <- vftPolyDraw(map, list(ns = function(x) paste0("t-", x)), areaWarn = "aw")
+map <- vftPolyDraw(map, list(ns = function(x) paste0("step1-", x)), areaWarn = "areaWarn",
+                   hardWarn = "areaHardWarn")
 page <- tagList(
   tags$script(HTML("window.sent = []; window.Shiny = { setInputValue: function(n, v){ window.sent.push([n, v]); } };")),
   tags$script(HTML(paste(readLines(file.path(dirname(R), "inst/app/www/polydraw.js"), encoding = "UTF-8"), collapse = "\n"))),
   tags$input(id = "box", type = "text"),
-  tags$div(id = "t-aw", "warning"),
+  vftFitHeightCSS(),                     #the app's own rules for the three warnings
+  tags$div(id = "step1-areaHardWarn", class = "vft-area-warn", "server warning"),
+  tags$div(id = "step1-areaWarn", class = "vft-area-warn", "area warning"),
+  tags$div(id = "step1-zoomText", "zoom warning"),
   map)
 save_html(page, file.path(dir, "index.html"), libdir = "lib")
 
@@ -124,25 +128,81 @@ ok("a double-click on an X removes one vertex and adds none", nV() == 3)
 ok("...and closes nothing", nSent() == 2)
 key("Escape", 27); key("Escape", 27); key("Escape", 27)
 
-cat("\n=== 3. the live area warning ===\n")
-aw <- function() js("document.getElementById('t-aw').className")
-fill <- function() js("(function(){ var p = document.querySelector('#t-map .leaflet-vftDraw-pane path[fill]');
-                     return p ? p.getAttribute('fill') : null; })()")
-ok("nothing drawn, nothing on the warning", identical(aw(), ""))
+cat("\n=== 3. the live area warnings ===\n")
+cls <- function(id) js(sprintf("document.getElementById('%s').className.replace('vft-area-warn', '').trim()", id))
+aw <- function() cls("step1-areaWarn")
+hw <- function() cls("step1-areaHardWarn")
+fill <- function() tolower(js("(function(){ var p = document.querySelector('#t-map .leaflet-vftDraw-pane path[fill]');
+                     return p ? p.getAttribute('fill') : null; })()"))
+blockedMap <- function() js("document.getElementById('t-map').classList.contains('vft-pd-blocked')")
+#which warnings are on screen: "server", "area", "zoom", joined by "+", or "none"
+showing <- function() js("(function(){
+  var on = [['server', 'step1-areaHardWarn'], ['area', 'step1-areaWarn'], ['zoom', 'step1-zoomText']]
+    .filter(function(w){ return getComputedStyle(document.getElementById(w[1])).display !== 'none'; })
+    .map(function(w){ return w[0]; });
+  return on.length ? on.join('+') : 'none'; })()")
+setR <- function(id, on) invisible(js(sprintf(
+  "document.getElementById('%s').classList.%s('vft-area-over')", id, if (on) "add" else "remove")))
+
+ok("nothing drawn, nothing on the warnings", identical(aw(), "") && identical(hw(), ""))
+ok("...so the zoom warning shows alone", identical(showing(), "zoom"))
+setR("step1-areaWarn", TRUE)
+ok("R's heat verdict on the outline in force replaces the zoom warning", identical(showing(), "area"))
+setR("step1-areaHardWarn", TRUE)
+ok("R's server verdict replaces both", identical(showing(), "server"))
+setR("step1-areaHardWarn", FALSE)
+ok("...and the heat one comes back when it goes", identical(showing(), "area"))
+setR("step1-areaWarn", FALSE)
+ok("...and then the zoom one", identical(showing(), "zoom"))
+
+setR("step1-areaWarn", TRUE)
 click(300, 300)
 move(350, 350)
-ok("a small ring is live but not over", identical(aw(), "vft-pd-live"))
-ok("...and drawn blue", identical(tolower(fill()), "#5ab4f0"))
-invisible(js("(function(){ var m = HTMLWidgets.find('#t-map').getMap(); m.setZoom(10, {animate: false}); })()"))
-Sys.sleep(0.3)
-move(300, 300); move(790, 590)           #~ 13 x 10 km at zoom 10
-ok("the pointer pulled out past the ceiling raises it", grepl("vft-pd-over", aw()))
-ok("...and turns the preview red", identical(tolower(fill()), "#dd1717"))
-move(310, 310)
-ok("back in, it drops again", !grepl("vft-pd-over", aw()) && identical(tolower(fill()), "#5ab4f0"))
-move(790, 590)
+ok("a small ring is live but not over", identical(aw(), "vft-area-over vft-pd-live"))
+ok("...which hides the old outline's warning: the zoom one is back", identical(showing(), "zoom"))
+ok("...and drawn blue", identical(fill(), "#5ab4f0"))
 key("Escape", 27)
-ok("ending the drawing clears both classes", identical(aw(), ""))
+setR("step1-areaWarn", FALSE)
+
+#at zoom 10 one pixel is ~104 m here; every ring below starts at (300, 300)
+invisible(js("void HTMLWidgets.find('#t-map').getMap().setZoom(10, {animate: false})"))
+Sys.sleep(0.3)
+click(300, 300)
+move(380, 360)                            #~8.3 x 6.2 km: past the heat ceiling only
+ok("pulled out past the heat ceiling, its warning shows", grepl("vft-pd-over", aw()) && !grepl("vft-pd-over", hw()))
+ok("...alone: it replaces the zoom warning", identical(showing(), "area"))
+ok("...the preview turns red", identical(fill(), "#dd1717"))
+ok("...and nothing is blocked", !isTRUE(blockedMap()))
+move(310, 310)
+ok("back in, it drops again", !grepl("vft-pd-over", aw()) && identical(fill(), "#5ab4f0"))
+ok("...and the zoom warning returns", identical(showing(), "zoom"))
+
+move(600, 500)                            #~31 x 21 km: past the server's too
+ok("past the server's ceiling, its warning shows", grepl("vft-pd-over", hw()))
+ok("...alone: it replaces the heat one", identical(showing(), "server"))
+ok("...the preview turns grey", identical(fill(), "#8a8a8a"))
+ok("...and the map is blocked", isTRUE(blockedMap()))
+click(600, 500)
+ok("a click out there places no vertex", nV() == 1)
+move(380, 360); click(380, 360)
+ok("back under it, a click does", nV() == 2 && !isTRUE(blockedMap()))
+click(300, 380)
+ok("...and another", nV() == 3)
+n0 <- nSent()
+move(600, 500)
+dbl(600, 500)
+ok("a double-click past the server's ceiling neither places nor closes", nV() == 3 && nSent() == n0)
+key("Backspace", 8)
+ok("taking vertices back still works while blocked", nV() == 2 && isTRUE(blockedMap()))
+move(300, 380); click(300, 380)
+move(320, 320); move(300, 300)
+ok("with the pointer on the first vertex the ring is under again", !isTRUE(blockedMap()))
+click(300, 300)
+ok("...and it closes", nSent() == n0 + 1 && lastN() == 3 && nV() == 0)
+ok("closing clears every live class and the block",
+   identical(aw(), "") && identical(hw(), "") && !isTRUE(blockedMap()))
+ok("...leaving the zoom warning", identical(showing(), "zoom"))
+Sys.sleep(0.6)
 
 cat("\n=== 4. step 4's scissors ===\n")
 #the same map, re-attached as step 4 attaches it: attach() on a map it already

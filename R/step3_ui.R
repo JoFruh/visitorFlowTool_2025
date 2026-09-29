@@ -1,4 +1,4 @@
-#### Step 3 UI - define the target areas ####
+#### Step 3 UI - define the areas of interest ####
 step3_ui <- function(id, i18n){
 vftDbg("UI4")
       shiny::fluidPage(
@@ -17,7 +17,7 @@ vftDbg("UI4")
           shiny::actionButton(inputId = shiny::NS(id, "infoButton3"), label = "")
         ),
 
-        #what a target area is, then what to do here, then the tip - three
+        #what an area of interest is, then what to do here, then the tip - three
         #paragraphs that used to be six headings in three sizes
         vftHead(i18n$t("Bestimmen der Zielgebiete"),
                 vftSub(i18n$t("Ein Zielgebiet ist ein Areal, das für Naherholungssuchende von Interesse sein kann."), " ",

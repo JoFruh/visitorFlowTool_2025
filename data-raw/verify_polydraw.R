@@ -184,6 +184,14 @@ js1 <- w1$jsHooks$render[[1]]$code
 ok("areaWarn hands the browser the ceiling and the namespaced element",
    grepl('"maxCells":4e+07|"maxCells":40000000', js1) && grepl('"warn":"step1-areaWarn"', js1, fixed = TRUE))
 ok("...and without it there is no live check", !grepl('"area"', js, fixed = TRUE))
+ok("the server's ceiling is AOI_SERVER_FACTOR (3) times the heat one",
+   identical(lim$hardCells, 3 * lim$maxCells) && identical(AOI_SERVER_FACTOR, 3))
+w2 <- vftPolyDraw(leaflet::leaflet(), list(ns = function(x) paste0("step1-", x)), hardWarn = "areaHardWarn")
+js2 <- w2$jsHooks$render[[1]]$code
+ok("hardWarn alone: the server's ceiling and element, no heat ceiling",
+   grepl('"hardWarn":"step1-areaHardWarn"', js2, fixed = TRUE) && grepl('"hardCells"', js2, fixed = TRUE) &&
+     !grepl('"maxCells"', js2, fixed = TRUE))
+ok("areaWarn alone carries no server ceiling", !grepl('"hardCells"', js1, fixed = TRUE))
 
 if (requireNamespace("V8", quietly = TRUE)) {
   ctx <- V8::v8()
@@ -191,8 +199,9 @@ if (requireNamespace("V8", quietly = TRUE)) {
   ctx$eval("var window = {}; var document = { createElement: function(){ return { appendChild: function(){} }; },
             createTextNode: function(){ return {}; }, head: { appendChild: function(){} },
             addEventListener: function(){} };")
-  pd <- system.file("app/www/polydraw.js", package = "visitorFlowTool")
-  if (!nzchar(pd)) pd <- file.path(dirname(R), "inst/app/www/polydraw.js")
+  #the working copy, never the installed package's: that is whatever was
+  #installed last, and would test yesterday's script against today's R
+  pd <- file.path(dirname(R), "inst/app/www/polydraw.js")
   ctx$source(pd)
   ctx$assign("lim", lim)
 
@@ -230,6 +239,26 @@ if (requireNamespace("V8", quietly = TRUE)) {
   }
   ok("browser and R agree on every outline 20 m or more from the ceiling", wrongFar == 0)
   ok("...and on most within 3 m of it", agree >= total - 4, sprintf("(%d of %d)", agree, total))
+
+  #the same at the server's ceiling: areaLevel() == 2 against aoiTooLargeForServer()
+  jsLevel <- function(p, a = lim) {
+    ctx$assign("ring", data.frame(lng = p$lng, lat = p$lat)); ctx$assign("a", a)
+    ctx$get("window.vftPolyDraw.areaLevel(a, ring)")
+  }
+  hardCrossing <- sqrt(lim$hardCells) - 2 * lim$buffer
+  wrongFar <- 0
+  for (origin in list(c(2600000, 1200000), c(2700000, 1180000))) {
+    for (d in c(-200, -20, 20, 200)) {
+      p <- square(origin[1], origin[2], hardCrossing + d)
+      if ((jsLevel(p) == 2) != aoiTooLargeForServer(vftPolyDrawSf(p))) wrongFar <- wrongFar + 1
+    }
+  }
+  ok("...and at the server's ceiling, 20 m or more from it", wrongFar == 0)
+  mid <- square(2600000, 1200000, (crossing + hardCrossing) / 2)
+  ok("between the two ceilings is level 1", jsLevel(mid) == 1)
+  ok("...past the second, level 2", jsLevel(square(2600000, 1200000, hardCrossing + 200)) == 2)
+  ok("...and with no heat ceiling (switched off) level 0 between them",
+     jsLevel(mid, lim[c("hardCells", "buffer", "res")]) == 0)
   ok("the pointer counts: a small ring does not warn", !jsOver(ring(8.585, 47.355, 8.595, 47.365)))
   ok("...a ring pulled out 10 km does", jsOver(list(lng = c(8.585, 8.595, 8.72), lat = c(47.355, 47.355, 47.45))))
   ok("no limit, no warning", !ctx$get("window.vftPolyDraw.areaOver(null, [{lng: 6, lat: 46}, {lng: 10, lat: 47.5}])"))

@@ -417,7 +417,7 @@ step4_server <- function(id, minThresh, i18n, currentLang,
         #### the step-1 perimeter ####
         #
         #Every other step that shows a map draws the outline the user settled on
-        #in step 1; this one did not, so the target areas floated with nothing to
+        #in step 1; this one did not, so the areas of interest floated with nothing to
         #place them against. Same treatment as step 5 gives it - black, weight 5,
         #no fill, pane "layer2" - so the two maps read as the same area. st_zm()
         #because an uploaded shapefile may carry a Z dimension leaflet will not

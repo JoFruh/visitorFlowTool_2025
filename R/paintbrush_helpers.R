@@ -369,6 +369,21 @@ paintAreaTooLarge <- function(aoi, buffer_m = 250, max_cells = 40e6,
   n > max_cells
 }
 
+#' How many times paintAreaTooLarge()'s ceiling an area of interest may reach
+#' before it is too large for the server itself, not just for heat mitigation.
+AOI_SERVER_FACTOR <- 3
+
+#' Is this area too large for the server's stability?
+#'
+#' The same measure as paintAreaTooLarge() - buffered, grid-snapped bounding
+#' box in cells - at AOI_SERVER_FACTOR times its ceiling. One measure for both
+#' warnings, so the second is always strictly the larger of the two, and the
+#' browser's restatement (areaCells() in polydraw.js) serves both. Unlike the
+#' heat warning this one does not depend on HEAT_MITIGATION.
+aoiTooLargeForServer <- function(aoi){
+  paintAreaTooLarge(aoi, max_cells = AOI_SERVER_FACTOR * eval(formals(paintAreaTooLarge)$max_cells))
+}
+
 #' Seed a version's paint layers from the national land cover.
 #'
 #' Returns list(ground, canopy) of SpatRasters on the paint grid, or NULL if the

@@ -565,6 +565,18 @@ if(is.null(r$updateNetworkPlot)){
       #vftPrepareThen()'s callback bumps.)
       r$updateNetworkPlot()
 
+      #EVERYTHING BELOW IS ISOLATED. The two counters above are the whole of
+      #this render's dependencies; every caller that wants a redraw bumps one
+      #of them. A stray reactive read further down re-renders the map behind
+      #the user's back, and the translator is one: shiny.i18n keeps the
+      #language in a per-session reactive, and `isolate(i18n())$t(...)`
+      #isolates only the call that FETCHES the translator - the t() after it
+      #reads the language live. The context 4 branch translates the plan
+      #import labels and the underground tooltips that way, so every language
+      #change rebuilt the whole Hitzeminderung map. What depends on the
+      #language is refreshed in place instead (langChangeObs).
+      shiny::isolate({
+
       # print(paste0("contextchoice:",input$contextChoice))
 
 
@@ -1185,6 +1197,14 @@ if(is.null(r$updateNetworkPlot)){
           vftScenarioConflicts(originalScenario(), conflictKey()) else NULL)
         if(!is.null(conflictsOrigNow)) map <- addConflictOrigCircles(map, conflictsOrigNow)
 
+        #THE RAIL'S MAP LAYERS ####
+        #Whatever the "Kartenebenen" switches have on, drawn into this map for
+        #the conflicts' reason - they used to be proxy-only, so a card or
+        #context switch left the switch on over an empty map. Their pane on
+        #every map, as the usage pane below, because the switches draw through
+        #a proxy onto whatever instance this render made. See "RAIL LAYERS".
+        map <- railLayersOnRender(map, paintContext)
+
         #THE PATH USAGE ####
         #The pane on EVERY map, whether the overlay is on or not: the button
         #draws through a proxy onto whatever instance this render made, and
@@ -1253,6 +1273,8 @@ if(is.null(r$updateNetworkPlot)){
       # }
 
       map
+
+      }) #isolate
 
     })
 
@@ -2735,6 +2757,12 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
   sendHeatIcons()
   #...and so are the underground outlines' hover labels
   if(isTRUE(shiny::isolate(input$contextChoice) == 4)) ugDraw()
+  #...and the map's legends. The map itself is not redrawn for a language
+  #change (see the isolate() in output$versionMap), so they are re-issued
+  #in place: both carry a layerId and replace themselves.
+  railLegend(leaflet::leafletProxy("versionMap"))
+  if(!is.null(usageDrawn))
+    usageLegend(leaflet::leafletProxy("versionMap"), sub("^.* ", "", usageDrawn))
 })
 ##Observe end of render ####
       #observe event when map finishes rendering
@@ -5427,106 +5455,195 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
                                     message = list(visible = isTRUE(as.logical(input$showMaterials))))
         })
 
-        # SHOW SENSITIVITY MATRIX ####
+        # RAIL LAYERS ####
+        #
+        #The "Kartenebenen" switches, drawn the way step 5 draws the same layers
+        #(its obsSM, obsAOI, obsAgentStart and obsPA) and named in the same
+        #"Formen:" legend (its vftMapLegends()). Step 5's agent-type filter,
+        #"Innerhalb Zielgebiete", parking and new residential areas are not
+        #offered on this page.
+        #
+        #Each layer is one add function used twice: by its switch, through a
+        #proxy, and by the render, which draws whatever is on into the map it
+        #builds (railLayersOnRender()). Drawn by the proxy alone, as they used to
+        #be, a card or context switch left the switch on over an empty map.
+        #
+        #Click-through, all of them (interactive = FALSE), like the conflict
+        #circles: this page is edited by clicking the map, and a filled polygon
+        #over the network swallows the click that makes a node and hands
+        #obsShapeClick a shape with no id.
+        #
+        #Their own pane, "railShapes": under the network as in step 5 (the paths
+        #are in layer1, 410), except on the Hitzeminderung context, where the
+        #land cover would cover them and they go over the canopy paint (425) -
+        #still under the underground outlines (428) and the heat surface (430).
+        #The matrix is not in it: it is an opaque raster, and over the paint it
+        #would hide what is being painted.
 
-        obsSM <-shiny::observeEvent(input$showSM, {
-          #show SM when switch is turned on (and there is a SM)
-          if(isTRUE(as.logical(input$showSM))){
-            if( !is.null(SM_pres)){
-              #show SM
-              leaflet::leafletProxy("versionMap" )%>%
-                leaflet::addRasterImage(x = smLeaflet(SM_pres), project = FALSE, colors = SMcolors, group = "SM", opacity = 0.7)
-            }else{
-              #### no matrix: the switch is an OFFER, not a display toggle ####
-              #
-              #What used to be here was a `return()` under a "TODO write error"
-              #- the switch moved, nothing appeared, and nothing said why. Step
-              #2 is skippable (see VFT_STEPS in R/steps.R), so this is a state
-              #a perfectly normal walk through the app reaches.
-              #
-              #Same behaviour as step 5's checkbox, which is where the user
-              #meets this offer first: the switch is put back BEFORE the modal
-              #goes up - there is nothing to draw either way - and "no" leaves
-              #it unchecked and clickable, so turning it on again asks again.
-              shiny::updateCheckboxInput(session = session,
-                                         inputId = "showSM", value = FALSE)
-              smAskCreate()
-              return(invisible(NULL))
-            }
+        railOn <- function(id) isTRUE(as.logical(shiny::isolate(input[[id]])))
 
-          }else{
-            #remove SM when switched is turned off
-            leaflet::leafletProxy("versionMap" )%>%
+        railShapeOptions <- function() leaflet::pathOptions(pane = "railShapes", interactive = FALSE)
 
-              leaflet::clearGroup(group = "SM")
+        addSMLayer <- function(map){
+          if(is.null(SM_pres)) return(map)
+          leaflet::addRasterImage(map, x = smLeaflet(SM_pres), project = FALSE, colors = SMcolors,
+                                  group = "SM", opacity = 0.7)
+        }
+
+        addAOILayer <- function(map){
+          if(!aoiReady()) return(map)
+          leaflet::addPolygons(map, data = finalPolygons, group = "AOI",
+                               weight = 3, color = "green", opacity = 0.3,
+                               fill = TRUE, fillColor = "green", fillOpacity = 0.1,
+                               options = railShapeOptions())
+        }
+
+        #one switch, three kinds of protected area, told apart by the stroke
+        PA_PAL <- leaflet::colorFactor(palette = c("#a2e08a", "#4a8636", "#105200"),
+                                       levels = c(3, 2, 1))
+        paPresent <- function() !is.null(shp_PA) && isTRUE(nrow(shp_PA) > 0)
+
+        addPALayer <- function(map){
+          if(!paPresent()) return(map)
+          leaflet::addPolygons(map, data = shp_PA, group = "PA",
+                               weight = 5, color = PA_PAL(shp_PA$PA_type), opacity = 1,
+                               fill = TRUE, fillColor = "white", fillOpacity = 0.2,
+                               options = railShapeOptions())
+        }
+
+        #The agents' starting points of the simulation the usage overlay shows -
+        #the selected scenario's own, the one it had before it was edited, or
+        #the Original's (usageSource()) - as an X/Y matrix, or NULL. Kept in
+        #that simulation's stash entry: the node scan is the one step 5 caches
+        #in getStartingPoints(), and it would otherwise run on every redraw.
+        startPoints <- function(){
+          src <- usageSource()
+          if(is.null(src)) return(NULL)
+          e <- usageStash[[src$key]]
+          if(is.null(e) || is.null(e$dp$startV)) return(NULL)
+          if(is.null(e$start)){
+            nt   <- dplyr::as_tibble(e$pu |> tidygraph::activate(nodes))
+            geom <- names(nt)[vapply(nt, function(col) inherits(col, "sfc"), logical(1))][1]
+            if(is.na(geom)) return(NULL)
+            g <- nt[[geom]][nt$nodeID %in% e$dp$startV]
+            if(!is.na(sf::st_crs(g)) && !isTRUE(sf::st_is_longlat(g))) g <- sf::st_transform(g, 4326)
+            e$start <- sf::st_coordinates(g)[, c("X", "Y"), drop = FALSE]
+            usageStash[[src$key]] <- e
           }
+          e$start
+        }
 
-        })
+        addStartLayer <- function(map){
+          xy <- startPoints()
+          if(is.null(xy) || !nrow(xy)) return(map)
+          leaflet::addCircleMarkers(map, lng = xy[, "X"], lat = xy[, "Y"], group = "startingPoints",
+                                    color = "red", fill = FALSE, stroke = TRUE, opacity = 1,
+                                    weight = 2, radius = 3, options = railShapeOptions())
+        }
 
-        obsPA <- shiny::observeEvent(input$showPA, {
-          #show SM when switch is turned on (and there is a SM)
-          if(input$showPA == 1 ){
-
-            if( !is.null(shp_PA)){
-
-              #prepare pal
-              pal <- leaflet::colorFactor(
-                palette = c("#a2e08a", "#4a8636", "#105200"),
-                levels = c(3, 2, 1)
-              )
-
-              #show PA
-              leaflet::leafletProxy("versionMap", data = shp_PA )%>%
-                leaflet::addPolygons(group = "PA", opacity = 1, color = ~pal(PA_type), weight = 5)%>%
-                leaflet::addLegend(layerId = "legend", title = "Zielgebiete:", position = "topright", labels = c("streng", "umfassend", "teilweise") , colors = c("#105200", "#4a8636", "#a2e08a"))
-            }else if(is.null(SM_pres)){
-              #write error precising that there is no SM or default SM is used
-              #TODO write error
-              return()
-            }
-          }else{
-            #remove SM when switched is turned off
-            leaflet::leafletProxy("versionMap" )%>%
-
-              leaflet::clearGroup(group = "PA")%>%
-              leaflet::removeControl(layerId = "legend")
+        #"Formen:" - step 5's legendShapeRows(), rows, images and words, for the
+        #layers that are on AND have something to draw. Plain text in the
+        #current language (vftTrText): langChangeObs re-issues it.
+        railLegend <- function(map){
+          tr   <- function(k) vftTrText(i18n(), k)
+          rows <- list()
+          add  <- function(img, label) rows[[length(rows) + 1L]] <<- c(img = img, label = tr(label))
+          if(railOn("showAOI") && aoiReady()) add("www/AOI.png", "Zielgebiete")
+          if(railOn("showStart") && !is.null(startPoints())) add("www/Start.png", "Agenten Ausgangspunkte")
+          if(railOn("showPA") && paPresent()){
+            #as.character: the gpkg column may come back numeric, character or factor
+            paTypes <- as.character(unique(shp_PA$PA_type))
+            if("1" %in% paTypes) add("www/PA_1.png", "Schutzgebiete – streng")
+            if("2" %in% paTypes) add("www/PA_2.png", "Schutzgebiete – umfassend")
+            if("3" %in% paTypes) add("www/PA_3.png", "Schutzgebiete – teilweise")
           }
+          if(inherits(map, "leaflet_proxy")) map <- leaflet::removeControl(map, "legendShapes")
+          if(!length(rows)) return(map)
+          leaflegend::addLegendImage(map, position = "topright", title = tr("Formen:"),
+                                     images = vapply(rows, `[[`, character(1), "img"),
+                                     labels = vapply(rows, `[[`, character(1), "label"),
+                                     labelStyle = "font-size: 15px; text-align: left",
+                                     layerId = "legendShapes")
+        }
+
+        #the render's half: the pane, every layer that is on, and the legend
+        railLayersOnRender <- function(map, paintContext){
+          map <- leaflet::addMapPane(map, "railShapes", zIndex = if(isTRUE(paintContext)) 426 else 408)
+          if(railOn("showSM"))    map <- addSMLayer(map)
+          if(railOn("showAOI"))   map <- addAOILayer(map)
+          if(railOn("showStart")) map <- addStartLayer(map)
+          if(railOn("showPA"))    map <- addPALayer(map)
+          railLegend(map)
+        }
+
+        #the switches' half: one layer off the map on screen, back on if its
+        #switch is, and the legend after it
+        railRedraw <- function(group, switchId, add){
+          proxy <- leaflet::leafletProxy("versionMap") %>% leaflet::clearGroup(group)
+          if(railOn(switchId)) proxy <- add(proxy)
+          railLegend(proxy)
+          invisible(NULL)
+        }
+
+        obsSM <- shiny::observeEvent(input$showSM, {
+          if(railOn("showSM") && is.null(SM_pres)){
+            #### no matrix: the switch is an OFFER, not a display toggle ####
+            #
+            #Step 2 is skippable (see VFT_STEPS in R/steps.R), so this is a
+            #state a perfectly normal walk through the app reaches. Same
+            #behaviour as step 5's checkbox, which is where the user meets this
+            #offer first: the switch is put back BEFORE the modal goes up -
+            #there is nothing to draw either way - and "no" leaves it unchecked
+            #and clickable, so turning it on again asks again.
+            shiny::updateCheckboxInput(session = session, inputId = "showSM", value = FALSE)
+            smAskCreate()
+            return(invisible(NULL))
+          }
+          railRedraw("SM", "showSM", addSMLayer)
         })
 
         obsAOI <- shiny::observeEvent(input$showAOI, {
-          #show ziegebiete when switch is turned on
-          if(input$showAOI == 1 ){
-
-            #guard on what is drawn. This used to test shp_PA, which only worked
-            #because both came from step 5; the Hitzeminderung door now has
-            #shp_PA (enter(), section 1a) but no areas of interest.
-            if( !is.null(finalPolygons)){
-
-
-              #show PA
-              leaflet::leafletProxy("versionMap", data = finalPolygons )%>%
-                leaflet::addPolygons(data = finalPolygons,
-                                     weight = 3,
-                                     color = "green",
-                                     fillColor = "green",
-                                     fill = TRUE,
-                                     stroke = TRUE,
-                                     options = leaflet::pathOptions(pane = "layer1"),
-                                     opacity = 1,
-                                     fillOpacity = 0.1,
-                                     group = "AOI")
-
-            }else if(is.null(SM_pres)){
-              #write error precising that there is no SM or default SM is used
-              #TODO write error
-              return()
-            }
-          }else{
-            #remove SM when switched is turned off
-            leaflet::leafletProxy("versionMap" )%>%
-
-              leaflet::clearGroup(group = "AOI")
+          #guard on what is drawn. This used to test shp_PA, which only worked
+          #because both came from step 5; the Hitzeminderung door now has
+          #shp_PA (enter(), section 1a) but no areas of interest.
+          if(railOn("showAOI") && !aoiReady()){
+            #No Zielgebiete yet: the switch is greyed (vftRailOff, set in
+            #enter()) but live, and answers as the matrix switch above does -
+            #put back first, then the offer to go and determine them.
+            shiny::updateCheckboxInput(session = session, inputId = "showAOI", value = FALSE)
+            whyModal("Zielgebiete nicht vorhanden",
+                     c(paste0("Die Zielgebiete werden in Schritt 3 bestimmt - für ",
+                              "dieses Gebiet wurden noch keine bestimmt."),
+                       "Möchten Sie sie jetzt bestimmen?"),
+                     yes = "Ja, zu Schritt 3",
+                     action = function() aoiCreate(shiny::isolate(aoiCreate()) + 1L))
+            return(invisible(NULL))
           }
+          railRedraw("AOI", "showAOI", addAOILayer)
+        })
+
+        obsStart <- shiny::observeEvent(input$showStart, {
+          #no simulation to take them from: greyed by obsStartState, live, and
+          #an offer like the two above
+          if(railOn("showStart") && is.null(startPoints())){
+            shiny::updateCheckboxInput(session = session, inputId = "showStart", value = FALSE)
+            whyStart()
+            return(invisible(NULL))
+          }
+          railRedraw("startingPoints", "showStart", addStartLayer)
+        }, ignoreInit = TRUE)
+
+        #Greyed while there is no simulation at all. A card switch is not this
+        #observer's to redraw - the render draws the new card's points.
+        obsStartState <- shiny::observe({
+          has <- !is.null(usageSource())
+          shinyjs::toggleClass(id = "showStart", class = "vftRailOff", condition = !has)
+          if(!has && railOn("showStart"))
+            shiny::updateCheckboxInput(session = session, inputId = "showStart", value = FALSE)
+        })
+
+        obsPA <- shiny::observeEvent(input$showPA, {
+          railRedraw("PA", "showPA", addPALayer)
         })
 
         # SHOW BIODIVERSITY-RECREATION CONFLICTS ####
@@ -5760,11 +5877,19 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
 
         #make the stash hold `pu` under `key`, keeping the built table if it
         #already does. identical() is a pointer check when nothing has copied
-        #the graph, which is the usual case.
-        usageStashPut <- function(key, pu){
+        #the graph, which is the usual case. `dp` is the same simulation's
+        #population (dayPop), for the starting points - see startPoints(). A
+        #NULL one keeps what the entry has: some edits drop dayPop too.
+        usageStashPut <- function(key, pu, dp = NULL){
           if(is.null(key) || is.null(pu)) return(invisible(NULL))
           old <- usageStash[[key]]
-          if(is.null(old) || !identical(old$pu, pu)) usageStash[[key]] <- list(pu = pu, layer = NULL)
+          if(is.null(old) || !identical(old$pu, pu)){
+            usageStash[[key]] <- list(pu = pu, dp = dp, layer = NULL, start = NULL)
+          }else if(!is.null(dp) && !identical(old$dp, dp)){
+            old$dp <- dp
+            old$start <- NULL
+            usageStash[[key]] <- old
+          }
           invisible(NULL)
         }
 
@@ -5775,7 +5900,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
           heatStoreDrop(usageStash, setdiff(ls(usageStash, all.names = TRUE), keys))
           nl <- r$networkList
           for(i in seq_along(nl)){
-            if(i <= length(keys)) usageStashPut(keys[[i]], nl[[i]]$pathUsage)
+            if(i <= length(keys)) usageStashPut(keys[[i]], nl[[i]]$pathUsage, nl[[i]]$dayPop)
           }
         }
 
@@ -5787,13 +5912,13 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
           key <- usageCardKey(pos)
           if(is.null(key)) return(NULL)
           if(!is.null(nl[[pos]]$pathUsage)){
-            usageStashPut(key, nl[[pos]]$pathUsage)
+            usageStashPut(key, nl[[pos]]$pathUsage, nl[[pos]]$dayPop)
             return(list(key = key, kind = "own"))
           }
           if(!is.null(usageStash[[key]])) return(list(key = key, kind = "stale"))
           origKey <- usageCardKey(1)
           if(!is.null(nl[[1]]$pathUsage)){
-            usageStashPut(origKey, nl[[1]]$pathUsage)
+            usageStashPut(origKey, nl[[1]]$pathUsage, nl[[1]]$dayPop)
             return(list(key = origKey, kind = "original"))
           }
           NULL
@@ -6089,6 +6214,17 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
                    yes = "Ja, Szenarien bestätigen und zu Schritt 5", action = goStep5)
         }
 
+        #the starting points switch, turned on with no simulation behind it
+        whyStart <- function(){
+          why <- "Die Ausgangspunkte der Agenten sind ein Ergebnis der Simulation in Schritt 5."
+          if(vftIsCanvasList(r$networkList)) return(whyNoNetwork(why))
+          whyModal("Keine Ausgangspunkte vorhanden",
+                   c(why, paste0("Weder dieses Szenario noch das Original wurde bisher ",
+                                 "simuliert. Simulieren Sie sie in Schritt 5 - danach ",
+                                 "lassen sich die Ausgangspunkte hier anzeigen.")),
+                   yes = "Ja, Szenarien bestätigen und zu Schritt 5", action = goStep5)
+        }
+
         #A paint control that is disabled with no heat map up is shut for one of
         #two reasons: the Original is selected, or it belongs to the other level.
         whyPaint <- function(btn){
@@ -6277,6 +6413,12 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
       minThresh     <<- .rx$minThresh()
       selectedVersion <<- .rx$selectedVersion()
 
+      #the two rail switches whose data another step produces are greyed, not
+      #disabled, when it is missing: a click still reaches obsSM / obsAOI,
+      #which put the switch back and offer to go and make it.
+      shinyjs::toggleClass(id = "showSM",  class = "vftRailOff", condition = is.null(SM_pres))
+      shinyjs::toggleClass(id = "showAOI", class = "vftRailOff", condition = !aoiReady())
+
       #--- 1a. the protected areas, when step 5 has not clipped them.
       #
       #The app's r$shp_PA is step 5's copy (vftMirror in app_server.R), derived
@@ -6450,6 +6592,17 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
       #seedNewVersion() between the two: it needs applyFirstRun()'s reset of the
       #button numbering, and it names the card generateVersionButtons() selects.
       applyFirstRun()
+      #The paint memory is seeded by applyFirstRun() alone, and a session
+      #restored from a save that says "not a first run" skips it - the
+      #context 4 render then died on the NULL button in applyPaintLevelColor().
+      #So once per session regardless, with applyFirstRun()'s values.
+      if(is.null(r$lastSelectedGroundButton)){
+        r$lastSelectedGroundButton <- "paintColor_grass"
+        r$lastSelectedCanopyButton <- "paintColor_canopyTree"
+        r$selectedPaintButton      <- "paintColor_grass"
+        r$paintHeightChoice        <- vapply(vftHeightRamps(), function(rp) rp$default, numeric(1))
+        if(is.null(r$paintCanEdit)) r$paintCanEdit <- FALSE
+      }
       seeded <- seedNewVersion()
       #heat maps of cards that no longer exist, and the record of a map on a map
       #instance this visit is about to replace

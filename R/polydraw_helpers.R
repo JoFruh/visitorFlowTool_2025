@@ -21,26 +21,40 @@
 #' @param polyPane the pane R draws its clickable polygons in. A click on one of
 #'   those is left to R (it deletes the area) instead of starting a drawing.
 #' @param areaWarn the module-local id of an element to warn in while the ring
-#'   being drawn is past paintAreaTooLarge()'s ceiling, or NULL for no live
-#'   check. The browser measures the ring on every pointer move against the
-#'   ceiling handed over here (vftPolyDrawAreaLimit()), and tags the element
+#'   being drawn is past paintAreaTooLarge()'s ceiling, or NULL for no such
+#'   warning. The browser measures the ring on every pointer move against the
+#'   ceilings handed over here (vftPolyDrawAreaLimit()), and tags the element
 #'   `vft-pd-live` / `vft-pd-over`; the page's CSS decides what that shows.
-vftPolyDraw <- function(map, session, cut = FALSE, polyPane = "layer2", areaWarn = NULL){
+#' @param hardWarn the same for the server's ceiling (aoiTooLargeForServer()),
+#'   which does more than warn: past it the drawing turns grey and takes
+#'   neither a new vertex nor a close until it is back under.
+vftPolyDraw <- function(map, session, cut = FALSE, polyPane = "layer2",
+                        areaWarn = NULL, hardWarn = NULL){
   o <- list(ns = session$ns(""), cut = isTRUE(cut), polyPane = polyPane)
-  if(!is.null(areaWarn)) o$area <- c(vftPolyDrawAreaLimit(), list(warn = session$ns(areaWarn)))
+  if(!is.null(areaWarn) || !is.null(hardWarn)){
+    a <- vftPolyDrawAreaLimit()
+    #a ceiling without its element is not checked at all
+    if(is.null(areaWarn)) a$maxCells <- NULL else a$warn <- session$ns(areaWarn)
+    if(is.null(hardWarn)) a$hardCells <- NULL else a$hardWarn <- session$ns(hardWarn)
+    o$area <- a
+  }
   opts <- jsonlite::toJSON(o, auto_unbox = TRUE, digits = NA)
   htmlwidgets::onRender(map, sprintf(
     "function(el){ if(window.vftPolyDraw) window.vftPolyDraw.attach(el, this, %s); }", opts))
 }
 
-#' paintAreaTooLarge()'s ceiling, for polydraw.js's areaOver() to restate.
+#' The two ceilings, for polydraw.js's areaCells() to measure against:
+#' `maxCells` is paintAreaTooLarge()'s (heat mitigation), `hardCells`
+#' aoiTooLargeForServer()'s (the server).
 #'
 #' Read from paintAreaTooLarge()'s own defaults rather than written out again,
-#' so the live warning and the verdict on the finished outline cannot drift
-#' apart when the ceiling is moved.
+#' so the live warnings and the verdict on the finished outline cannot drift
+#' apart when a ceiling is moved.
 vftPolyDrawAreaLimit <- function(){
   f <- formals(paintAreaTooLarge)
-  list(maxCells = eval(f$max_cells), buffer = eval(f$buffer_m), res = PAINT_RES)
+  maxCells <- eval(f$max_cells)
+  list(maxCells = maxCells, hardCells = AOI_SERVER_FACTOR * maxCells,
+       buffer = eval(f$buffer_m), res = PAINT_RES)
 }
 
 #' Abandon a drawing in progress on `mapId` (a module-local output id).

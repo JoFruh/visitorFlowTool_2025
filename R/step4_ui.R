@@ -1,4 +1,4 @@
-#### Step 4 UI - correct the target areas by hand ####
+#### Step 4 UI - correct the areas of interest by hand ####
 step4_ui <- function(id, i18n){
 vftDbg("UI5")
       #vft-fit-page + vft-grow on the map row below: the map takes whatever the

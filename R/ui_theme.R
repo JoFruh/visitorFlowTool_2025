@@ -241,6 +241,11 @@ input.vftRailCheck{ position:absolute; opacity:0; width:1px; height:1px; margin:
 /* a disabled checkbox is invisible, so what dims is the row it sits in */
 .vftRailCheck:disabled ~ *{ opacity:.45; }
 .vftRailRow:has(> .vftRailCheck:disabled){ cursor:default; background:transparent; }
+/* greyed but LIVE: an overlay whose data another step produces. The click
+   still toggles the checkbox, and the server answers it with an offer to go
+   and produce it (newVersions' showSM / showAOI) - a [disabled] one could
+   not say what is missing. */
+.vftRailCheck.vftRailOff ~ *{ opacity:.45; }
 .vftSw{ position:relative; flex:0 0 36px; width:36px; height:20px; border-radius:10px;
   background:#c6cbc9; transition:background .2s; }
 .vftSw::after{ content:''; position:absolute; top:2px; left:2px; width:16px; height:16px;

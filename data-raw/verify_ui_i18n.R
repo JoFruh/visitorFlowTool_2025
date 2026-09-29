@@ -144,7 +144,7 @@ expect <- list(
          "Neu erstellen und verwerfen"),
   fr = c("Appliquer les nouvelles données ?", "Zones cibles", "2 versions enregistrées",
          "3 Définir les ZC", "Créer et supprimer"),
-  en = c("Apply the new data?", "Target areas", "2 saved versions", "3 Define AoIs",
+  en = c("Apply the new data?", "Areas of interest", "2 saved versions", "3 Define AoIs",
          "Create new and discard"))
 for (lg in LANGS) {
   miss <- expect[[lg]][!vapply(expect[[lg]], function(s) grepl(s, html[[lg]], fixed = TRUE), logical(1))]

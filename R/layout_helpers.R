@@ -229,13 +229,24 @@ vftFitHeightCSS <- function(){
     .vft-step1-opt .btn-file{ font-weight: 600; }
     #step1-zoomText:empty{ display: none; }
     #step1-zoomText{ font-size: 12px; line-height: 1.3; }
-    /* step 1's area warning. vft-area-over is R's verdict on the outline in
-       force; vft-pd-live / vft-pd-over are polydraw.js's on the ring being
-       drawn, and while one is being drawn only that verdict counts - the
-       outline in force is about to be replaced. */
+    /* step 1's two area warnings (server, heat mitigation). vft-area-over is
+       R's verdict on the outline in force; vft-pd-live / vft-pd-over are
+       polydraw.js's on the ring being drawn, and while one is being drawn
+       only that verdict counts - the outline in force is about to be
+       replaced. */
     .vft-area-warn{ display: none; line-height: 1.3; }
     .vft-area-warn.vft-area-over:not(.vft-pd-live),
     .vft-area-warn.vft-pd-live.vft-pd-over{ display: block; }
+    /* One warning at a time: a warning that shows hides every warning after
+       it - the heat one and the zoom strip under the server one, the zoom
+       strip under the heat one - and each comes back by itself when the one
+       above goes; only display changes, never text. The selectors are the two
+       above, so 'shown' has one definition, and they outrank them by one
+       class. Relies on the order server, heat, zoom in step1_ui.R. */
+    .vft-area-warn.vft-area-over:not(.vft-pd-live) ~ .vft-area-warn,
+    .vft-area-warn.vft-pd-live.vft-pd-over ~ .vft-area-warn,
+    .vft-area-warn.vft-area-over:not(.vft-pd-live) ~ #step1-zoomText,
+    .vft-area-warn.vft-pd-live.vft-pd-over ~ #step1-zoomText{ display: none; }
 
     /* ---- step 2: three columns of one height ---------------------------- */
     /* The species list, the plot and the group list are one visual band, so they

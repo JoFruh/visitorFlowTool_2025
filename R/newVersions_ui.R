@@ -355,9 +355,14 @@ vftDbg("UI6")
                 #this row with the paint dock (paintContext in the render)
                 shiny::div(id = ns("showMaterialsRow"), style = "display:none;",
                   vftSwitchRow(ns("showMaterials"), i18n$t("Materialien"), "mat", checked = TRUE)),
-                vftSwitchRow(ns("showSM"),  i18n$t("Sensitivitäts-Matrix"), "sm"),
-                vftSwitchRow(ns("showPA"),  i18n$t("Schutzgebiete"),        "pa"),
-                vftSwitchRow(ns("showAOI"), i18n$t("Zielgebiete"),          "aoi")
+                #step 5's layers and in step 5's order, less the ones that
+                #belong to a simulation run there (agent type, within areas of
+                #interest) or are edited on this page (parking, residential).
+                #See "RAIL LAYERS" in newVersions_server.R.
+                vftSwitchRow(ns("showSM"),    i18n$t("Sensitivitäts-Matrix"),   "sm"),
+                vftSwitchRow(ns("showAOI"),   i18n$t("Zielgebiete"),            "aoi"),
+                vftSwitchRow(ns("showStart"), i18n$t("Agenten Ausgangspunkte"), "start"),
+                vftSwitchRow(ns("showPA"),    i18n$t("Schutzgebiete"),          "pa")
               ),
               #CONFLICTS AND USAGE. The biodiversity-recreation conflicts step 5
               #found for the selected scenario, the Original's (searched for here
