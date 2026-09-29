@@ -185,20 +185,24 @@ newVersions_server <- function(id, networkList, i18n, currentLang, isFirstRun,
       #runs on every language change, and the perimeter cannot have moved
       #between two of those.
       tooLarge <- isTRUE(r$paintAreaTooLarge)
+      #the feature switched off altogether (HEAT_MITIGATION, R/features.R):
+      #greyed the same way, with no suffix - there is no reason to give beyond
+      #the modal a click on it raises (obsDisabledClick below)
+      heatOff  <- !vftHeatEnabled()
 
       #and the preset falls with it. The nav bar's Hitzeminderung button asks
       #for 4 directly and knows nothing about the area; honouring that here
       #would preselect the one option about to be disabled, which is the single
       #state the user cannot click their way out of.
-      if(tooLarge && identical(as.character(selectedChoice), "4")) selectedChoice <- 1
+      if((tooLarge || heatOff) && identical(as.character(selectedChoice), "4")) selectedChoice <- 1
 
       #the reason travels as part of the label, so it is attached to the option
       #it is about wherever the group is drawn
       heatLab <- switch(currentLang,
                         de = "Hitzeminderung",
-                        fr = "Attenuation de chaleur",
-                        en = "Attenuation de chaleur")
-      if(tooLarge){
+                        fr = "Atténuation de la chaleur",
+                        en = "Heat mitigation")
+      if(tooLarge && !heatOff){
         heatLab <- paste0(heatLab,
                           switch(currentLang,
                                  de = " (zu gro\u00dfes Gebiet)",
@@ -225,7 +229,7 @@ newVersions_server <- function(id, networkList, i18n, currentLang, isFirstRun,
         selected = selectedChoice
       )
 
-      if(!tooLarge) return(buttons)
+      if(!tooLarge && !heatOff) return(buttons)
 
       #shiny::radioButtons() can disable the whole group but not one choice of
       #it, so that one radio is disabled in the browser instead.
@@ -710,6 +714,8 @@ if(is.null(r$updateNetworkPlot)){
           session$sendCustomMessage(type = "set-paint-active", message = paintContext)
           if(paintContext) shinyjs::show(id = "paintColorButtonsDiv")
           else             shinyjs::hide(id = "paintColorButtonsDiv")
+          #the rail's Materialien switch belongs to the same context
+          shinyjs::toggle(id = "showMaterialsRow", condition = paintContext)
           #the cards' heat icons belong to this context alone. By selector: the
           #card column's ids are not namespaced. Leaving it takes a shown map's
           #red border and lit switch with it - the layer went with the old map.
@@ -5410,9 +5416,20 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
 
 
 
+        # SHOW MATERIALS ####
+
+        #Hitzeminderung only (the row is hidden elsewhere). Display only: the
+        #browser hides both paint panes and lets go of the pointer, and every
+        #stroke already made stays where it is. The state lives in paintbrush.js
+        #and survives the map's re-renders, as the switch does.
+        obsMaterials <- shiny::observeEvent(input$showMaterials, {
+          session$sendCustomMessage(type = "set-paint-visible",
+                                    message = list(visible = isTRUE(as.logical(input$showMaterials))))
+        })
+
         # SHOW SENSITIVITY MATRIX ####
 
-        obsSM <- shiny::observeEvent(input$showSM, {
+        obsSM <-shiny::observeEvent(input$showSM, {
           #show SM when switch is turned on (and there is a SM)
           if(isTRUE(as.logical(input$showSM))){
             if( !is.null(SM_pres)){
@@ -6130,6 +6147,9 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
             return(invisible(NULL))
           }
           if(identical(ctl, "contextChoice") && identical(as.character(msg$value), "4") &&
+             !vftHeatEnabled())
+            return(vftNotImplementedModal(session))
+          if(identical(ctl, "contextChoice") && identical(as.character(msg$value), "4") &&
              isTRUE(r$paintAreaTooLarge)){
             whyModal("Gebiet zu groß für die Hitzeminderung",
                      c(paste0("Die Hitzeminderung malt auf einer Landbedeckung im ",
@@ -6408,8 +6428,10 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
       #render drops the preset there: context 4 is disabled on an area too large
       #for a land cover baseline, and preselecting a disabled radio is the one
       #state the user cannot click their way out of.
+      #And the feature switch overrides everything (HEAT_MITIGATION in
+      #R/features.R): with it off, context 4 is greyed out as well.
       wantHeat <- (identical(as.character(shiny::isolate(r$vftContextPreset)), "4") ||
-                     !aoiReady()) && !isTRUE(r$paintAreaTooLarge)
+                     !aoiReady()) && !isTRUE(r$paintAreaTooLarge) && vftHeatEnabled()
       r$context         <- if(wantHeat) 4 else 1 #1 = infrastructure, 3 = housing/parking, 4 = heat mitigation
       r$oldContext      <- 0 #save prior context (0 = no context)
       #keeps track of specific edges and nodes across functions

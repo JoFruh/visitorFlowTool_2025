@@ -258,10 +258,17 @@ VFT_QUEUE_MAX_S <- 2 * 3600
 #' Keys are German, matching the `or` column of the translation CSVs, so a
 #' deployment whose CSVs have not been updated degrades to readable German rather
 #' than to a bare key.
+#'
+#' Through vftTrText(), never a bare `tr$t()`: once a step module has called
+#' usei18n(), `t()` returns a <span class="i18n"> TAG, and every caller here
+#' tests for a single string and falls back to the key otherwise - so the
+#' invalidation modal, the next-step modal and the state browser all showed
+#' German in every language, with the French and English rows sitting unused in
+#' the CSVs.
 .vftT <- function(session = NULL){
   tr <- tryCatch(session$userData$vftI18n, error = function(e) NULL)
   if(is.null(tr)) return(function(x) x)
-  function(x) tryCatch(tr$t(x), error = function(e) x)
+  function(x) vftTrText(tr, x)
 }
 
 #### Translating what a progress bar says ####

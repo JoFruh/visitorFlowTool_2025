@@ -351,6 +351,10 @@ vftDbg("UI6")
             shiny::div(class = "vft-ws-rail",
               shiny::div(class = "vftRailCard",
                 shiny::div(class = "vftRailHead", i18n$t("Kartenebenen")),
+                #the painted materials. Hitzeminderung only - the server shows
+                #this row with the paint dock (paintContext in the render)
+                shiny::div(id = ns("showMaterialsRow"), style = "display:none;",
+                  vftSwitchRow(ns("showMaterials"), i18n$t("Materialien"), "mat", checked = TRUE)),
                 vftSwitchRow(ns("showSM"),  i18n$t("Sensitivitäts-Matrix"), "sm"),
                 vftSwitchRow(ns("showPA"),  i18n$t("Schutzgebiete"),        "pa"),
                 vftSwitchRow(ns("showAOI"), i18n$t("Zielgebiete"),          "aoi")

@@ -116,6 +116,78 @@ step4_server <- function(id, minThresh, i18n, currentLang,
       cache$DULN_na
     }
 
+    #' DULN and area for hand-made areas (drawn, merged, split or holed).
+    #'
+    #' A sizeable portion of the most attractive ground counts: the mean of the
+    #' median of the best quarter of the cells and the median of all of them.
+    #' The one formula the draw, split and hole handlers each used to carry a
+    #' copy of.
+    .vftScoreAOI <- function(polys){
+      topQuarter <- function(x){
+        (stats::median(x[1:(length(x)/4 )], na.rm = TRUE) +
+           stats::median(x, na.rm = TRUE) ) / 2
+      }
+      values <- terra::extract(.vftDULNna(), polys) |> dplyr::arrange(dplyr::desc(walkNat))
+      meanValues <- values |> dplyr::group_by(ID) |> dplyr::summarise(mean = topQuarter(walkNat))
+      polys$DULN <- meanValues$mean[match(seq_len(nrow(polys)), meanValues$ID)]
+      if(any(is.na(polys$DULN))){vftDbgCat("WARNING step4: poly$DULN is NA after extraction\n")}
+      polys$area <- as.numeric(sf::st_area(polys))
+      polys
+    }
+
+    #' Redraw every area from r$polygonsList.
+    .vftDrawAOI <- function(){
+      map <- leaflet::leafletProxy(leafletMapID) |>
+        leaflet::clearGroup("eraseable")
+      if(inherits(r$polygonsList, "sf") && nrow(r$polygonsList) > 0){
+        map |> leaflet::addGeoJSON(geojson = geojsonsf::sf_geojson(r$polygonsList),
+                                   stroke = TRUE,
+                                   weight = 5,
+                                   color = "black",
+                                   fill = TRUE,
+                                   fillColor = "green",
+                                   opacity = 1,
+                                   group = "eraseable",
+                                   options = leaflet::pathOptions(pane = "layer2"))
+      }
+      invisible(map)
+    }
+
+    #' Cut every area the two-point `line` touches (step 4's scissors button).
+    #'
+    #' Per area: a line that crosses it from edge to edge splits it in two (or
+    #' more); one that does not - it ends inside, or runs wholly inside - cuts
+    #' a 10 m slit along itself instead, which is the hole the old cut mode
+    #' made. The replacement pieces get new ids and a fresh score.
+    #'
+    #' Decided per area rather than once for the whole cut, so a line that
+    #' crosses one area and ends inside the next splits the first and slits the
+    #' second.
+    .vftCutAOI <- function(line){
+      polys <- r$polygonsList
+      if(!inherits(polys, "sf") || nrow(polys) == 0) return(invisible(FALSE))
+      hit <- which(lengths(sf::st_intersects(polys, line)) > 0)
+      if(length(hit) == 0) return(invisible(FALSE))
+
+      slit <- sf::st_transform(sf::st_buffer(sf::st_transform(line, "epsg:2056"), 10, endCapStyle = "FLAT"),
+                               "epsg:4326")
+      pieces <- lapply(hit, function(i){
+        target <- polys[i, ]
+        splt <- sf::st_collection_extract(lwgeom::st_split(target, line), "POLYGON")
+        out <- if(nrow(splt) > 1) splt else sf::st_as_sf(sf::st_difference(target, slit))
+        sf::st_geometry(out) <- "polygons"
+        out[!sf::st_is_empty(out), ]
+      })
+      pieces <- do.call(rbind, pieces)
+
+      firstId <- max(polys$id) + 1
+      pieces$id <- seq.int(from = firstId, length.out = nrow(pieces))
+      if(nrow(pieces) > 0) pieces <- .vftScoreAOI(pieces)
+
+      r$polygonsList <- rbind(polys[-hit, ], pieces[, names(polys)])
+      invisible(TRUE)
+    }
+
     # if(r$needHelp == TRUE){
     #
     #   shinyjs::delay(1500,{
@@ -172,35 +244,20 @@ step4_server <- function(id, minThresh, i18n, currentLang,
     #inputs - so they belong out here, created once for the session. Same
     #reasoning as the note on the missing $destroy() calls in R/step3_server.R.
     #
-    #r$obsCutMode stays inside plotMap(): that one IS per-visit, because it
-    #clears leaflet groups the map has just re-created, and enter() destroys it
-    #by name.
+    #The drawing handlers (r$obsPolyDrawn, r$obsPolyCut) stay inside plotMap()
+    #with the eraser, and enter() destroys them by name.
 
     #the id of the one map this module draws. Hoisted out of plotMap() so the
     #reset observer below can still reach it.
     leafletMapID <- "finalAOIMap"
 
     shiny::observeEvent(input$resetButton, {
+      #and any drawing still in progress - it was begun on the areas being
+      #thrown away
+      vftPolyDrawCancel(leafletMapID)
       if(!is.null(r$startingPolygons)){
         r$polygonsList <- r$startingPolygons
-
-        #replot polygons
-        map <- leaflet::leafletProxy(leafletMapID )|>
-          leaflet::clearGroup("eraseable")
-        if(!is.null(nrow(r$startingPolygons)) ){
-          map |> leaflet::addGeoJSON(
-            geojson = geojsonsf::sf_geojson(r$startingPolygons),
-            stroke = TRUE,
-            weight = 5,
-            color = "black",
-            fill = TRUE,
-            fillColor = "green",
-            opacity = 1,
-            group = "eraseable",
-            options = leaflet::pathOptions(pane = "layer2")
-          )
-        }
-        map
+        .vftDrawAOI()
       }
     }, ignoreInit = TRUE, ignoreNULL = TRUE)
 
@@ -248,16 +305,15 @@ step4_server <- function(id, minThresh, i18n, currentLang,
                            h4(shiny::HTML(i18n()$t("Hier können Sie die Zielgebiete <b>manuell korrigieren</b>."))),
                            h3(),
                            h4(shiny::HTML(i18n()$t("Dies geschieht auf die gleiche Weise wie in Schritt 1:"))),
-                           h5(shiny::HTML(i18n()$t("Sie klicken einfach auf die Karte und dann auf den roten Punkt, um die Korrektur vorzunehmen."))),
+                           h5(shiny::HTML(i18n()$t("Sie klicken einfach auf die Karte, um Punkte zu setzen, und schliessen die Fläche mit einem Klick auf den ersten Punkt (oder einem Doppelklick) ab."))),
+                           h5(shiny::HTML(i18n()$t("Mit <b>Esc</b> oder der <b>Rücktaste</b> entfernen Sie den zuletzt gesetzten Punkt. Um einen anderen Punkt zu entfernen, fahren Sie mit der Maus darüber und klicken Sie auf das <b>X</b>."))),
                            h3(),
                            h4(shiny::HTML(i18n()$t("<b>Drei Unterschiede:</b>"))),
                            h4(shiny::HTML(i18n()$t("<b>1)</b> Sie können Zielgebiete entfernen, indem Sie sie anklicken."))),
                            h4(shiny::HTML(i18n()$t("<b>2)</b> Sie können bestehende Zielgebiete <b>erweitern</b>, indem Sie ein <b>neues</b> Zielgebiet daüber hinaus ihnen erstellen."))),
                            shiny::img(src = "www/combineAreas.png", style = "height:75px"),
-                           h4(shiny::HTML(i18n()$t("<b>3)</b> Sie können <b>Polygone ausschneiden</b>, indem Sie den <b>Polygonschnitt-Modus</b> aktivieren! (oben rechts)"))),
-                           h5(shiny::HTML(i18n()$t("In diesem Modus macht ein <b>erster</b> Klick ein <b>Kreuz</b>, der <b>zweite Klick</b> zieht eine Linie vom Kreuz aus und <b>schneidet so entstandene Polygone</b>."))),
-
-                           shiny::img(src = "www/cutClicks.png", style = "height:75px")
+                           h4(shiny::HTML(i18n()$t("<b>3)</b> Sie können <b>Zielgebiete zerschneiden</b>: Setzen Sie <b>zwei Punkte</b> und klicken Sie auf die <b>Schere</b> am zweiten Punkt."))),
+                           h5(shiny::HTML(i18n()$t("Durchquert die Linie ein Zielgebiet vollständig, wird es <b>geteilt</b>. Sonst wird entlang der Linie ein <b>schmaler Streifen</b> herausgeschnitten.")))
 
 
         )
@@ -381,7 +437,9 @@ step4_server <- function(id, minThresh, i18n, currentLang,
           )
         }
 
-        map
+        #the drawer: vertices, rubber band and area preview in the browser, and
+        #the scissors button on a two-vertex line. See R/polydraw_helpers.R.
+        vftPolyDraw(map, session, cut = TRUE)
 
       }))
 
@@ -412,482 +470,92 @@ step4_server <- function(id, minThresh, i18n, currentLang,
 
       numberOfPolygons = "multi"
 
-      finalPolygons2 <- NULL
+      #### MAP DRAWING ####
+      #
+      #The vertices are placed and drawn by inst/app/www/polydraw.js; nothing
+      #here runs until a drawing is finished. That replaced a click-by-click
+      #protocol - a map click per vertex, a red marker to click again to close,
+      #and a separate cut mode with its own cross marker - whose state lived in
+      #r$mapPoints, r$markerWasClicked, r$cutMarkerExists and r$shapeWasClicked.
 
-      #### MAP CLICK FUNCTIONALITY ####
-      #(copy content of PolygonCreator and PolygonErase functions)
-
-      ##### PolygonCreator ####
-      #populate global variable
+      #make sure the working set exists
       if(is.null(r$polygonsList) ){
         r$polygonsList <- r$startingPolygons
       }
-      #container for all vertices of a polygon that is to be created
-      mapPoints <-sf::st_sfc(crs = 4326) #empty list of generated sf points
 
-      #variable to help avoid creating markers at the same time as a polygon is finalised by clicking on a marker.
-      markerWasClicked <- FALSE
-
-      #populate given list container with variables called by the observed reactives.
-      #This allows an outside variable to communicate between leaflet map and the reactives of this function.
-      r$mapPoints <- mapPoints
-      r$markerWasClicked <- markerWasClicked
-
-      mapMarkerClick <- paste0(leafletMapID, "_marker_click")
-      mapClick <- paste0(leafletMapID, "_click")
-
-      #CUT MODE turned on ####
-      r$obsCutMode <- shiny::observeEvent(input$cutButton, {
-        #reset everything
-        r$cutMarkerExists <- FALSE
-        r$markerWasClicked <- FALSE
-        r$shapeWasClicked <- FALSE
-        #remove points
-        r$mapPoints <- sf::st_sfc(crs = 4326)
-
-        #toggle border between cut mode ON and OFF
-        if(input$cutButton == TRUE){
-          shinyjs::removeClass(id = "mapFrame", "cutModeOff", asis = TRUE)
-
-          shinyjs::addClass(id = "mapFrame", "cutModeOn", asis = TRUE)
-        }else{
-          shinyjs::removeClass(id = "mapFrame", "cutModeOn", asis = TRUE)
-
-          shinyjs::addClass(id = "mapFrame", "cutModeOff", asis = TRUE)
+      ##### a closed ring ####
+      #Merged with every area it touches, so drawing over the edge of an area
+      #extends it, then scored.
+      r$obsPolyDrawn <- shiny::observeEvent(input$polyDrawn, {
+        poly <- vftPolyDrawSf(input$polyDrawn)
+        if(is.null(poly)) return(invisible(NULL))
+        #a ring that crosses itself: keep the area it encloses rather than
+        #refusing it. Repaired in LV95: under s2, st_make_valid() hands a
+        #bow-tie back as the same invalid loop, and st_union() below dies on it.
+        if(!isTRUE(all(sf::st_is_valid(poly)))){
+          fixed <- sf::st_transform(sf::st_make_valid(sf::st_transform(poly, "epsg:2056")), "epsg:4326")
+          fixed <- suppressWarnings(sf::st_collection_extract(fixed, "POLYGON"))
+          if(nrow(fixed) == 0) return(invisible(NULL))
+          poly <- sf::st_sf(polygons = sf::st_union(fixed))
         }
 
-        proxy <- leaflet::leafletProxy(leafletMapID)|>
-          leaflet::clearGroup("first")|>
-          leaflet::clearGroup("after")|>
-          leaflet::clearGroup("cut")
+        polys <- r$polygonsList
+        hasAreas <- inherits(polys, "sf") && nrow(polys) > 0
+        poly$id <- if(hasAreas && is.finite(max(polys$id))) max(polys$id) + 1 else 1
+
+        if(numberOfPolygons == "multi" && hasAreas){
+          #check if new polygon intersects or overlaps with any other
+          intersectingPolys <- which(lengths(sf::st_intersects(polys, poly)) > 0)
+          if(length(intersectingPolys) > 0){
+            #if so, combine it into a single polygon
+            merged <- sf::st_union(c(sf::st_geometry(poly), sf::st_geometry(polys[intersectingPolys, ])))
+            poly <- sf::st_sf(id = poly$id, polygons = merged)
+            #remove intersecting polys
+            polys <- polys[-intersectingPolys, ]
+          }
+        }
+
+        poly <- .vftScoreAOI(poly)
+
+        if(numberOfPolygons == "multi" && hasAreas){
+          #columns the working set carries and a fresh area has no value for
+          #(AOI, on a return after a confirm) - the confirm handler refills AOI
+          for(col in setdiff(names(polys), names(poly))) poly[[col]] <- NA
+          r$polygonsList <- rbind(polys, poly[, names(polys)])
+        }else{
+          #keep a single polygon
+          r$polygonsList <- poly
+        }
+        vftDbg(r$polygonsList)
+        .vftDrawAOI()
       }, ignoreInit = TRUE)
 
-      r$obsMarkerClick <- shiny::observeEvent(input[[mapMarkerClick]], {
-        vftDbg("MARKER CLICK")
-        vftDbg(input[[mapMarkerClick]])
-        r$markerWasClicked <- TRUE
-
-        if(!is.null(input[[mapMarkerClick]]$group) ){#& r$step1Refreshing != TRUE
-          #FINALISE POLYGON ####
-          #If first vertex of polygon is clicked, Finalise polygon
-          if( input[[mapMarkerClick]]$group == "first"){
-            if(nrow(r$mapPoints) > 2){
-              #create polygon with points
-              poly <- sf::st_cast(sf::st_combine(r$mapPoints), "POLYGON")
-              poly <- sf::st_sf(poly)
-              # poly$DULN <- 1
-
-
-              if(is.finite(max(r$polygonsList$id))){
-                poly$id <- max(r$polygonsList$id)+1
-              }else{
-                poly$id <- 1
-              }
-              # poly <- concaveman(mapPoints, 1) Doesn't work well
-              poly <- dplyr::rename(poly, polygons = "poly")
-
-              if(numberOfPolygons == "multi"){
-                #check if new polygon intersects or overlaps with any other
-                intersectingPolys <- which(sf::st_intersects(poly, r$polygonsList, sparse = FALSE))
-                if(length(intersectingPolys) > 0){
-                  #if so, combine it into a single polygon
-                  newPoly <- sf::st_as_sf(sf::st_union(c(poly$polygons, r$polygonsList[intersectingPolys,]$polygons) ) )
-                  newPoly <- newPoly |> dplyr::rename(polygons = .data$x)
-                  #determine its general attractivity (with popup)
-                  newPoly$DULN <- 1
-                  #determine id
-                  newPoly$id <- max(r$polygonsList$id)+1
-                  #remove intersecting polys
-                  r$polygonsList <- r$polygonsList[-intersectingPolys,]
-                  #add new polygon
-                  # r$polygonsList[nrow(r$polygonsList) + 1, ] <- newPoly
-                  poly <- newPoly
-                }
-
-                #generate DULN value for polygon on the fly
-                values <- terra::extract(.vftDULNna(), poly)
-
-                values <- values |> dplyr::group_by(ID)|>dplyr::arrange(desc(walkNat))
-
-                # meanFunc <- function(x){
-                #   (median(x[1:(length(x)/4 )] , na.rm = TRUE)+
-                #      median(x, na.rm = TRUE) ) / 2
-                # }
-                # meanValues <- values |> dplyr::group_by(ID)|> dplyr::summarise(mean = meanFunc(Nature_walk))
-                # spltPoly$DULN <- meanValues$mean
-                poly$DULN <- (median(values$walkNat[1:(length(values$walkNat)/4 )] , na.rm = TRUE)+
-                                             median(values$walkNat, na.rm = TRUE) ) / 2
-
-
-                # poly$DULN <- mean(values$Nature_walk, na.rm = TRUE) #[values$all > -20] no longer need to avoid values <= -20
-
-                if(is.na(poly$DULN)){vftDbgCat("WARNING step4: poly$DULN is NA after extraction\n")}
-
-                 #add area to polygon
-                poly$area <- as.numeric(sf::st_area(poly$polygons))
-
-                #keep a table of polygons
-                r$polygonsList <- rbind(r$polygonsList, poly)
-              }else{
-                #keep a single polygon
-                r$polygonsList <- poly
-              }
-
-              r$polyFinished <- TRUE
-
-              r$mapPoints <- sf::st_sfc(crs = 4326)
-              vftDbg(r$polygonsList)
-              proxy <- leaflet::leafletProxy(leafletMapID)|>
-                leaflet::clearGroup("eraseable")|>
-                leaflet::addGeoJSON(geojson = geojsonsf::sf_geojson(r$polygonsList),
-                                    stroke = TRUE,
-                                    weight = 5,
-                                    color = "black",
-                                    fill = TRUE,
-                                    fillColor = "green",
-                                    opacity = 1,
-                                    group = "eraseable",
-                                    options = leaflet::pathOptions(pane = "layer2"))
-
-              leaflet::clearGroup(proxy, "first")
-              leaflet::clearGroup(proxy, "after")
-
-
-
-            }else{
-              #TODO: write error (need more points)
-            }
-          }
-        }else if(r$step1Refreshing == TRUE){
-          r$step1Refreshing <- FALSE
-        }
-      }, ignoreInit = TRUE, ignoreNULL = TRUE)
-
-      r$obsMapClick <- shiny::observeEvent(input[[mapClick]], {
-        #precised condition (default always evaluates as TRUE)
-        # if(  inputConditionName == "DEFAULT" | input[[inputConditionName]] %in% inputConditionValue){
-        vftDbg("CLICK")
-        vftDbg(input[[mapClick]])
-        vftDbg(r$markerWasClicked)
-
-        #if we're not in Polygon Cut mode
-        if(input$cutButton == FALSE){
-        if(!r$markerWasClicked){
-          if( !is.null(input[[mapClick]]$lng) ){
-            #clear shapes
-            r$mapPoints <- rbind(r$mapPoints,sf::st_as_sf( sf::st_sfc( sf::st_point(x = c(input[[mapClick]]$lng, input[[mapClick]]$lat)), crs = 4326) ) )
-            #draw points
-            vftDbg(r$mapPoints)
-
-            proxy = leaflet::leafletProxy(leafletMapID )
-
-            circleMarker <- leaflet::addCircleMarkers(map = proxy,
-                                                      lng = input[[mapClick]]$lng, lat = input[[mapClick]]$lat,
-                                                      radius = ifelse(nrow(r$mapPoints) == 1, 7, 4),
-                                                      color = ifelse(nrow(r$mapPoints) == 1, "red", "blue"),
-                                                      stroke = ifelse(nrow(r$mapPoints) == 1, TRUE, FALSE),
-                                                      fillOpacity = 0.5,
-                                                      group = ifelse(nrow(r$mapPoints) == 1, "first", "after"),
-                                                      options = leaflet::pathOptions(pane = "layer2"))
-          }
-
-        }
-        #reset information if a marker was clicked
-        r$markerWasClicked <- FALSE
-        # }
-        }else{
-          #POLYGON CUT MODE ####
-          #check if cross cut marker exists (if not, create it)
-          if(r$cutMarkerExists == FALSE ){
-            #only add cross if clicked outside a shape
-            # if(r$shapeWasClicked == FALSE){
-          r$cutPoints <-  sf::st_as_sf( sf::st_sfc( sf::st_point(x = c(input[[mapClick]]$lng, input[[mapClick]]$lat)), crs = 4326) )
-          proxy = leaflet::leafletProxy(leafletMapID )
-
-          crossMarker <- leaflet::addMarkers(map = proxy,
-                                                    lng = input[[mapClick]]$lng, lat = input[[mapClick]]$lat,
-                                                    group = "cut",
-                                             icon = leaflet::icons(iconUrl = "www/cutCross.png", iconWidth = 10, iconHeight = 10),
-                                                    options = leaflet::pathOptions(pane = "layer2"))
-          r$cutMarkerExists <- TRUE
-            # }
-            # else{
-            #   #reset shape click status
-            #   r$shapeWasClicked <- FALSE
-            # }
-
-          }else if(r$cutMarkerExists == TRUE ){
-            #if cut marker exists, this is second point of line
-
-            #finalize line to cut polygon with
-            #add point
-            r$cutPoints <- rbind(r$cutPoints,sf::st_as_sf( sf::st_sfc( sf::st_point(x = c(input[[mapClick]]$lng, input[[mapClick]]$lat)), crs = 4326) ) )
-            # create line and split polygon
-            line <- sf::st_cast(sf::st_union(r$cutPoints[c(1,2),]), "LINESTRING")
-            #detect intersecting polygon
-            polyIndex <- as.numeric(sf::st_intersects(line, r$polygonsList)[[1]])
-
-            #if second point is NOT within shape (split shape)
-            #otherwise, make hole in it
-            if( r$shapeWasClicked == FALSE){
-
-
-              #if there is intersection, do next steps. Otherwise, ignore next steps
-              if(length(polyIndex) > 0){
-
-                if(all(!is.na(polyIndex))){
-                  intrPoly <- r$polygonsList[polyIndex,]
-                  #split polygon with line
-                  spltPoly <- lwgeom::st_split(intrPoly, line)
-                  spltPoly <- sf::st_collection_extract(spltPoly, "POLYGON")
-
-                  #check if split occurred (more polys after than before), if not, make a hole instead
-                  if(nrow(spltPoly) > nrow(intrPoly)){
-
-                    #get new areas
-                    spltPoly$id <- seq.int(from = max(r$polygonsList$id)+1, to = max(r$polygonsList$id) + length(spltPoly$id), by = 1)
-                    #generate DULN value for polygon on the fly
-                    values <- terra::extract(.vftDULNna(), spltPoly)
-
-                    #Determine AoI by giving importance to a sizeable portion of the most attractive area (1/4)
-                    values <- values |> dplyr::group_by(ID)|>dplyr::arrange(desc(walkNat))
-                    meanFunc <- function(x){
-                      (median(x[1:(length(x)/4 )] , na.rm = TRUE)+
-                         median(x, na.rm = TRUE) ) / 2
-                    }
-                    meanValues <- values |> dplyr::group_by(ID)|> dplyr::summarise(mean = meanFunc(walkNat))
-                    spltPoly$DULN <- meanValues$mean #[values$all > -20] no longer need to avoid values <= -20
-
-                    #add area to polygon
-                    spltPoly$area <- as.numeric(sf::st_area(spltPoly$polygons))
-                    #append new ones
-                    r$polygonsList <- rbind(r$polygonsList, spltPoly)
-                    #remove original polygon
-                    r$polygonsList <- r$polygonsList[-polyIndex,]
-
-                    #update map
-                    proxy <- leaflet::leafletProxy(leafletMapID)|>
-                      leaflet::clearGroup("eraseable")|>
-                      leaflet::addGeoJSON(geojson = geojsonsf::sf_geojson(r$polygonsList),
-                                          stroke = TRUE,
-                                          weight = 5,
-                                          color = "black",
-                                          fill = TRUE,
-                                          fillColor = "green",
-                                          opacity = 1,
-                                          group = "eraseable",
-                                          options = leaflet::pathOptions(pane = "layer2"))
-
-                  }else{
-                    # split had no results, try hole
-                    # => make a hole along line
-                    #buffer line
-                    line_buff <-sf::st_transform(sf::st_buffer(sf::st_transform(line, "epsg:2056"), 10, endCapStyle = "FLAT" ), "epsg:4326")
-                    #subtract from shape
-                    newPoly <- sf::st_as_sf(sf::st_difference(r$polygonsList[polyIndex,], line_buff))
-                    sf::st_geometry(newPoly) <- "polygons"
-                    #replace polys with new polys
-                    #get new areas
-                    newPoly$id <- seq.int(from = max(r$polygonsList$id)+1, to = max(r$polygonsList$id) + nrow(newPoly), by = 1)
-                    #generate DULN value for polygon on the fly
-                    values <- terra::extract(.vftDULNna(), newPoly)
-
-                    #Determine AoI by giving importance to a sizeable portion of the most attractive area (1/4)
-                    values <- values |> dplyr::group_by(ID)|>dplyr::arrange(desc(walkNat))
-                    meanFunc <- function(x){
-                      (median(x[1:(length(x)/4 )] , na.rm = TRUE)+
-                         median(x, na.rm = TRUE) ) / 2
-                    }
-                    meanValues <- values |> dplyr::group_by(ID)|> dplyr::summarise(mean = meanFunc(walkNat))
-                    newPoly$DULN <- meanValues$mean #[values$all > -20] no longer need to avoid values <= -20
-                    #add area to polygon
-                    newPoly$area <- as.numeric(sf::st_area(newPoly$polygons))
-                    #append new ones
-                    r$polygonsList <- rbind(r$polygonsList, newPoly)
-                    #remove original polygon
-                    r$polygonsList <- r$polygonsList[-polyIndex,]
-
-                    #update map
-                    proxy <- leaflet::leafletProxy(leafletMapID)|>
-                      leaflet::clearGroup("eraseable")|>
-                      leaflet::addGeoJSON(geojson = geojsonsf::sf_geojson(r$polygonsList),
-                                          stroke = TRUE,
-                                          weight = 5,
-                                          color = "black",
-                                          fill = TRUE,
-                                          fillColor = "green",
-                                          opacity = 1,
-                                          group = "eraseable",
-                                          options = leaflet::pathOptions(pane = "layer2"))
-
-
-                    #reset shape clicked
-                    r$shapeWasClicked <- FALSE
-
-                    leaflet::leafletProxy(leafletMapID) |>leaflet::clearGroup("cut")
-
-                    #reset
-                    r$cutMarkerExists <- FALSE
-                    r$cutPoints <- NULL
-                  }
-
-
-
-                }
-              }else{
-                #no intersection, so do nothing
-
-                #potentially check if shape can be cut
-              }
-
-              leaflet::leafletProxy(leafletMapID) |>leaflet::clearGroup("cut")
-
-
-              #reset
-              r$cutMarkerExists <- FALSE
-              r$cutPoints <- NULL
-            }else{
-              # line ends inside a shape
-              # => make a hole along line
-              #buffer line
-              line_buff <- sf::st_transform(sf::st_buffer(sf::st_transform(line, "epsg:2056"), 10, endCapStyle = "FLAT"), "epsg:4326")
-              #subtract from shape
-              newPoly <- sf::st_as_sf(sf::st_difference(r$polygonsList[polyIndex,], line_buff))
-              sf::st_geometry(newPoly) <- "polygons"
-              #replace polys with new polys
-              #get new areas
-              newPoly$id <- seq.int(from = max(r$polygonsList$id)+1, to = max(r$polygonsList$id) + nrow(newPoly), by = 1)
-              #generate DULN value for polygon on the fly
-              values <- terra::extract(.vftDULNna(), newPoly)
-
-              #Determine AoI by giving importance to a sizeable portion of the most attractive area (1/4)
-              values <- values |> dplyr::group_by(ID)|>dplyr::arrange(desc(walkNat))
-              meanFunc <- function(x){
-                (median(x[1:(length(x)/4 )] , na.rm = TRUE)+
-                   median(x, na.rm = TRUE) ) / 2
-              }
-              meanValues <- values |> dplyr::group_by(ID)|> dplyr::summarise(mean = meanFunc(walkNat))
-              newPoly$DULN <- meanValues$mean #[values$all > -20] no longer need to avoid values <= -20
-              #add area to polygon
-              newPoly$area <- as.numeric(sf::st_area(newPoly$polygons))
-              #append new ones
-              r$polygonsList <- rbind(r$polygonsList, newPoly)
-              #remove original polygon
-              r$polygonsList <- r$polygonsList[-polyIndex,]
-
-              #update map
-              proxy <- leaflet::leafletProxy(leafletMapID)|>
-                leaflet::clearGroup("eraseable")|>
-                leaflet::addGeoJSON(geojson = geojsonsf::sf_geojson(r$polygonsList),
-                                    stroke = TRUE,
-                                    weight = 5,
-                                    color = "black",
-                                    fill = TRUE,
-                                    fillColor = "green",
-                                    opacity = 1,
-                                    group = "eraseable",
-                                    options = leaflet::pathOptions(pane = "layer2"))
-
-
-              #reset shape clicked
-              r$shapeWasClicked <- FALSE
-
-              leaflet::leafletProxy(leafletMapID) |>leaflet::clearGroup("cut")
-
-              #reset
-              r$cutMarkerExists <- FALSE
-              r$cutPoints <- NULL
-            }
-          }
-          }
-
-
-
-      }, ignoreInit = TRUE, ignoreNULL = FALSE)
+      ##### the scissors ####
+      #Pressed while exactly two vertices are placed: the line between them cuts
+      #every area it touches - split where it crosses one, a slit where it does
+      #not. See .vftCutAOI().
+      r$obsPolyCut <- shiny::observeEvent(input$polyCut, {
+        line <- vftPolyDrawLine(input$polyCut)
+        if(is.null(line)) return(invisible(NULL))
+        if(isTRUE(.vftCutAOI(line))) .vftDrawAOI()
+      }, ignoreInit = TRUE)
 
 
       ##### PolygonEraser ####
-
-      #populate global variable
-      if(is.null(r$polygonsList) ){
-        r$polygonsList <- r$startingPolygons
-      }
-
-
-
+      #A click on an area removes it. polydraw.js makes the areas click-through
+      #while a drawing is in progress, so this only ever hears a click that was
+      #meant for an area - there is no drawing state to check here any more.
       mapGeojsonClick <- paste0(leafletMapID, "_geojson_click")
 
+      r$obsErase <- shiny::observeEvent(input[[mapGeojsonClick]], {
+        vftDbg("SHAPE CLICK")
+        vftDbg(input[[mapGeojsonClick]])
 
-      if(numberOfPolygons == "multi"){
-
-        r$obsErase <- shiny::observeEvent(input[[mapGeojsonClick]], {
-          vftDbg("SHAPE CLICK")
-          vftDbg(input[[mapGeojsonClick]])
-
-          r$shapeWasClicked <- TRUE
-
-          # erase shape if clicked AND if mapoints aren't being put down AND polygon cut mode isn't ON
-          if(input[[mapGeojsonClick]]$group == "eraseable" & is.null(nrow(r$mapPoints) ) & input$cutButton != TRUE  ){
-            #update polygons
-            r$polygonsList <- r$polygonsList[!r$polygonsList$id %in% input[[mapGeojsonClick]]$properties$id, ]
-
-            #replot polygons
-            leaflet::leafletProxy(leafletMapID )|>
-              leaflet::clearGroup("eraseable")|>
-              leaflet::addGeoJSON(
-                geojson = geojsonsf::sf_geojson(r$polygonsList),
-                stroke = TRUE,
-                weight = 5,
-                color = "black",
-                fill = TRUE,
-                fillColor = "green",
-                opacity = 1,
-                group = "eraseable",
-                options = leaflet::pathOptions(pane = "layer2")
-              )
-
-            r$markerWasClicked <- TRUE
-
-          }
-
-        })
-
-      }else{
-
-        r$obsErase <- shiny::observeEvent(input[[paste0(leafletMapID, "_click")]], {
-          vftDbg("GENERAL CLICK")
-
-          #create variable if missing
-          if(is.null(r$polyFinished) ){r$polyFinished <- FALSE}
-
-          #when map is clicked but NO polygon was finalised
-          if(r$polyFinished == FALSE){
-
-            #and a polygon already exists
-            if(!is.null(r$polygonsList)){
-
-              #erase the existing polygon
-
-              #update polygons
-              r$polygonsList <- NULL
-
-
-
-              #replot polygons
-              leaflet::leafletProxy(leafletMapID )|>
-                leaflet::clearGroup("eraseable")
-
-            }
-
-          }else{
-            #reset global variable
-            r$polyFinished <- FALSE
-          }
-
-        })
-
-      }
-
+        if(identical(input[[mapGeojsonClick]]$group, "eraseable")){
+          r$polygonsList <- r$polygonsList[!r$polygonsList$id %in% input[[mapGeojsonClick]]$properties$id, ]
+          .vftDrawAOI()
+        }
+      })
 
 
       #observe banner click (choosing to step back in history)
@@ -902,8 +570,8 @@ step4_server <- function(id, minThresh, i18n, currentLang,
 
 
         r$obsConfirm$destroy()
-        r$obsMapClick$destroy()
-        r$obsMarkerClick$destroy()
+        r$obsPolyDrawn$destroy()
+        r$obsPolyCut$destroy()
         r$obsErase$destroy()
         r$obsBanner$destroy()
 
@@ -1080,19 +748,14 @@ step4_server <- function(id, minThresh, i18n, currentLang,
       #about to create a fresh set. Without this, a second visit would leave two
       #marker-click handlers live and a single click would draw two polygons.
       #
-      #r$obsCutMode is on this list now. It was created by plotMap() alongside
-      #the other five and never destroyed, so cut mode was toggled once per
-      #visit ever made - each stale copy clearing the "first"/"after"/"cut"
-      #groups of a map it no longer had anything to do with. The four modal and
-      #language observers that had the same problem are not here because they
-      #have moved OUT of plotMap() to module scope, where nothing recreates
-      #them; see the note there.
-      for(o in list(r$obsConfirm, r$obsBanner, r$obsMapClick,
-                    r$obsMarkerClick, r$obsErase, r$obsCutMode)){
+      #The four modal and language observers are not on this list because they
+      #live at module scope, where nothing recreates them; see the note there.
+      for(o in list(r$obsConfirm, r$obsBanner, r$obsPolyDrawn,
+                    r$obsPolyCut, r$obsErase)){
         if(!is.null(o)) try(o$destroy(), silent = TRUE)
       }
-      r$obsConfirm <- NULL; r$obsBanner <- NULL; r$obsMapClick <- NULL
-      r$obsMarkerClick <- NULL; r$obsErase <- NULL; r$obsCutMode <- NULL
+      r$obsConfirm <- NULL; r$obsBanner <- NULL; r$obsPolyDrawn <- NULL
+      r$obsPolyCut <- NULL; r$obsErase <- NULL
 
       #--- 3. banner and language
       if(identical(currentLang, "de")){
@@ -1109,8 +772,6 @@ step4_server <- function(id, minThresh, i18n, currentLang,
       r$needHelp         <- needHelp
       r$currentLang      <- currentLang
       r$startingPolygons <- NULL
-      r$cutMarkerExists  <- FALSE
-      r$shapeWasClicked  <- FALSE
       r$promiseFinished  <- NULL
       r$finalPolygons    <- finalPolygons
       r$confirm          <- NULL

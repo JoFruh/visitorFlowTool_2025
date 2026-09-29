@@ -229,6 +229,13 @@ vftFitHeightCSS <- function(){
     .vft-step1-opt .btn-file{ font-weight: 600; }
     #step1-zoomText:empty{ display: none; }
     #step1-zoomText{ font-size: 12px; line-height: 1.3; }
+    /* step 1's area warning. vft-area-over is R's verdict on the outline in
+       force; vft-pd-live / vft-pd-over are polydraw.js's on the ring being
+       drawn, and while one is being drawn only that verdict counts - the
+       outline in force is about to be replaced. */
+    .vft-area-warn{ display: none; line-height: 1.3; }
+    .vft-area-warn.vft-area-over:not(.vft-pd-live),
+    .vft-area-warn.vft-pd-live.vft-pd-over{ display: block; }
 
     /* ---- step 2: three columns of one height ---------------------------- */
     /* The species list, the plot and the group list are one visual band, so they

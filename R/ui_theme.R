@@ -88,7 +88,9 @@ vftGlyph <- function(kind){
     resid = '<rect x="1.5" y="1.5" width="15" height="15" rx="3" fill="rgba(138,114,43,0.3)" stroke="#8a722b" stroke-width="1.6"/>',
     conf  = '<circle cx="9" cy="9" r="7" fill="rgba(198,40,40,0.2)" stroke="#c62828" stroke-width="2"/>',
     orig  = '<circle cx="9" cy="9" r="7" fill="none" stroke="#6a1b9a" stroke-width="2" stroke-dasharray="3 2.5"/>',
-    usage = '<path d="M1.5 13 C 6 13, 8 5, 16.5 5" fill="none" stroke="#182db5" stroke-width="4" stroke-linecap="round"/>')
+    usage = '<path d="M1.5 13 C 6 13, 8 5, 16.5 5" fill="none" stroke="#182db5" stroke-width="4" stroke-linecap="round"/>',
+    #four of the paint materials (grass, water, artificial, tree), as painted
+    mat   = '<rect x="1" y="1" width="7.5" height="7.5" rx="1.5" fill="lightgreen"/><rect x="9.5" y="1" width="7.5" height="7.5" rx="1.5" fill="dodgerblue"/><rect x="1" y="9.5" width="7.5" height="7.5" rx="1.5" fill="grey"/><rect x="9.5" y="9.5" width="7.5" height="7.5" rx="1.5" fill="#006400"/>')
   shiny::HTML(paste0('<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">', g, '</svg>'))
 }
 
@@ -100,12 +102,14 @@ vftGlyph <- function(kind){
 #' shinyjs::enable()/disable() on the id reach the checkbox itself.
 #' `disabled` puts the attribute on the checkbox, where enable() takes it off -
 #' shinyjs::disabled() around the row would mark the LABEL instead.
+#' `checked` is the initial value, as checkboxInput()'s `value`.
 #' @noRd
-vftSwitchRow <- function(inputId, label, glyph = NULL, disabled = FALSE){
+vftSwitchRow <- function(inputId, label, glyph = NULL, disabled = FALSE, checked = FALSE){
   shiny::tags$label(
     class = "vftRailRow",
     shiny::tags$input(id = inputId, type = "checkbox", class = "vftRailCheck",
-                      disabled = if(isTRUE(disabled)) NA),
+                      disabled = if(isTRUE(disabled)) NA,
+                      checked  = if(isTRUE(checked)) NA),
     if(!is.null(glyph)) shiny::span(class = "vftGlyph", vftGlyph(glyph)),
     shiny::span(class = "vftRailLabel", label),
     shiny::span(class = "vftSw"))

@@ -482,10 +482,7 @@ inst/app/www/data/tables/speciesInformation_final3_old.csv
 inst/app/www/data/tables/speciesInformation_final3.csv
 inst/app/www/data/tables/speciesInformation_SDMapsCH.csv
 inst/app/www/data/tables/speciesInformationCSV.csv
-inst/app/www/data/tables/translation_de.csv
-inst/app/www/data/tables/translation_en.csv
-inst/app/www/data/tables/translation_fr.csv
-inst/app/www/data/tables/translation_or.csv
+
 inst/app/www/data/tables/translation_backup/translation_de_bckp.csv
 inst/app/www/data/tables/trns_bckp/translation_de_bckp.csv
 inst/app/www/data/tables_new/ChosenSpeciesOverview.xlsx

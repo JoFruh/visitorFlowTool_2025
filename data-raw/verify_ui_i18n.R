@@ -117,5 +117,44 @@ r2 <- try(app_ui(), silent = TRUE)
 ok("app_ui() builds", !inherits(r2, "try-error"),
    if (inherits(r2, "try-error")) conditionMessage(attr(r2, "condition")) else "")
 
+cat("\n=== 9. the 'results will be discarded' modal follows the language ===\n")
+## .vftT() used to call tr$t() bare. After usei18n() that is a tag, which the
+## modal's own length-1 guard turns back into the German key - so the modal was
+## German in every language while its French and English rows sat in the CSVs.
+## Rendered for real: vftAskCommit() through a session that captures the modal.
+fakeSession <- function(){
+  s <- new.env()
+  s$userData <- new.env()
+  s$userData$vftI18n <- i18n
+  s$sendModal <- function(type, message) s$modal <- message$html
+  s
+}
+atRisk <- structure(c(finalPolygons = "Zielgebiete", networkList = "Szenarien",
+                      versionsUI = "gespeicherte Versionen"), nVersions = 2L)
+html <- sapply(LANGS, function(lg){
+  i18n$set_translation_language(lg)
+  s <- fakeSession()
+  vftAskCommit(r = NULL, values = list(), changed = "minThresh", atRisk = atRisk,
+               session = s, step = "step3")
+  as.character(s$modal)
+})
+i18n$set_translation_language("de")
+expect <- list(
+  de = c("Neue Daten übernehmen?", "Zielgebiete", "2 gespeicherte Versionen", "3 ZG definieren",
+         "Neu erstellen und verwerfen"),
+  fr = c("Appliquer les nouvelles données ?", "Zones cibles", "2 versions enregistrées",
+         "3 Définir les ZC", "Créer et supprimer"),
+  en = c("Apply the new data?", "Target areas", "2 saved versions", "3 Define AoIs",
+         "Create new and discard"))
+for (lg in LANGS) {
+  miss <- expect[[lg]][!vapply(expect[[lg]], function(s) grepl(s, html[[lg]], fixed = TRUE), logical(1))]
+  ok(sprintf("modal in %s carries its own title, items, step and button", lg),
+     !length(miss), if (length(miss)) paste("missing:", paste(miss, collapse = " | ")) else "")
+}
+ok("the English modal has no German left in it",
+   !grepl("verworfen|Zielgebiete|Abbrechen", html[["en"]]))
+ok("the French modal has no German left in it",
+   !grepl("verworfen|Zielgebiete|Abbrechen", html[["fr"]]))
+
 cat(sprintf("\n%d check(s) failed\n", fails))
 quit(status = if (fails == 0) 0 else 1)

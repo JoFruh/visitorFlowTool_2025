@@ -53,7 +53,7 @@
     //ids drawn as a hole punched through the baseline rather than as a colour -
     //canopy_cleared, which a plan import writes to remove existing canopy
     holes:        {},
-    opacity:      { ground: 0.5, groundDimmed: 0.2, canopy: 0.7 },
+    opacity:      { ground: 1, groundDimmed: 0.2, canopy: 1, canopyDimmed: 0.2 },
     grids:        { ground: new PaintGrid(), canopy: new PaintGrid() },
     bases:        { ground: new BaseGrid(),  canopy: new BaseGrid()  },
     //a plan import's result before it is applied (planimport.js), drawn above
@@ -82,6 +82,10 @@
     //Right/middle-drag pans exactly as it does while painting, so nothing the
     //user had is taken away by the refusal.
     blocked:      false,
+    //the rail's "Materialien" switch is off: both panes are hidden so the map
+    //underneath can be read, and the brush lets go of the pointer (the map pans)
+    //rather than paint strokes nobody can see
+    hidden:       false,
     //rolling record of the events that decide whether paint is armed and drawn.
     //Reasoning backwards from a single end-state flag repeatedly gave the wrong
     //answer here, because the flag says what is true now and not who last set
@@ -1070,26 +1074,30 @@
 
   /* The whole show/hide/dim story, in CSS on the panes.
    *
-   * Ground is dimmed rather than removed while canopy is being edited, so you can
-   * see what you are painting canopy over; canopy is hidden rather than removed
-   * when editing ground. Both are hidden outside paint mode, since R only arms the
-   * brush in context 4 and the painted layers have no business on the other
-   * contexts' maps. Nothing here touches the grids, so none of it costs a redraw. */
+   * Whichever level is not being edited is dimmed rather than removed: ground
+   * while canopy is edited, so you can see what you are painting canopy over, and
+   * canopy while ground is edited, so the trees stay in view without being in the
+   * way. Dimming is only visual - strokes land in the edited level's grids (see
+   * activeLevel/targetLevels) and the panes take no pointer events. Both are
+   * hidden outside paint mode, since R only arms the brush in context 4 and the
+   * painted layers have no business on the other contexts' maps. Nothing here
+   * touches the grids, so none of it costs a redraw. */
   function applyLevelStyles() {
     var map = state.map;
     if (!map) return;
     /* One pane per level, carrying baseline and paint together, so a single
      * opacity applies to the finished surface and painted cells are
-     * indistinguishable from surveyed ones. The only dimming is the ground
-     * level while canopy is being edited. */
+     * indistinguishable from surveyed ones. The only dimming is of the level
+     * not being edited. */
     var g = map.getPane(PANES.ground), c = map.getPane(PANES.canopy);
+    var shown = state.active && !state.hidden;
     if (g) {
       g.style.opacity = state.canopyActive ? state.opacity.groundDimmed : state.opacity.ground;
-      g.style.display = state.active ? "" : "none";
+      g.style.display = shown ? "" : "none";
     }
     if (c) {
-      c.style.opacity = state.opacity.canopy;
-      c.style.display = (state.active && state.canopyActive) ? "" : "none";
+      c.style.opacity = state.canopyActive ? state.opacity.canopy : state.opacity.canopyDimmed;
+      c.style.display = shown ? "" : "none";
     }
   }
 
@@ -1147,8 +1155,10 @@
     //to the map (pan and zoom keep working) and no stroke is ever registered.
     //Pane visibility is left to `active` alone, so the layers stay on screen.
     //`importing` does the same while a plan is placed, so the map moves under it
+    //`hidden` too: strokes on materials the user has switched off would be
+    //painted blind
     state.overlay.style.pointerEvents =
-      (state.active && !state.readonly && !state.importing) ? "auto" : "none";
+      (state.active && !state.readonly && !state.importing && !state.hidden) ? "auto" : "none";
     updateCursor();
   }
 
@@ -1487,6 +1497,16 @@
     state.blocked = b;
     applyActive();
     reportDebug(b ? "paint-blocked" : "paint-unblocked");
+  });
+
+  /* The rail's "Materialien" switch. Display only: the grids, the baseline and
+   * the queues are untouched, so switching back on costs no redraw. */
+  on("set-paint-visible", function (msg) {
+    var v = !(msg && msg.visible === false);
+    trace("set-paint-visible(" + v + ")");
+    if (!v) flush();
+    state.hidden = !v;
+    applyActive();
   });
 
   on("set-paint-color", function (msg) {

@@ -223,22 +223,29 @@ vftHeightRampOf <- function(id){
 #' portable across it.
 PAINT_RES <- 1
 
-#' Opacities of the painted layers. The ground layer is dimmed (rather than
-#' hidden) while canopy is being edited, so you can still see what you are
-#' painting canopy over. These are applied by the browser as the CSS opacity of
-#' the *map pane*, not of individual overlays: that is what keeps overlapping
-#' strokes from compounding into darker patches.
+#' Opacities of the painted layers. The level not being edited is dimmed rather
+#' than hidden: ground while canopy is edited, so you can still see what you are
+#' painting canopy over, and canopy while ground is edited, so the trees stay in
+#' view but read as out of reach (strokes only land in the edited level). These
+#' are applied by the browser as the CSS opacity of the *map pane*, not of
+#' individual overlays: that is what keeps overlapping strokes from compounding
+#' into darker patches.
 #'
 #' One opacity per level, applied to the land cover baseline and the paint
 #' together: they share a canvas, so a painted grass cell and a surveyed grass
 #' cell are the same colour and cannot be told apart. The map reads as one
 #' surface rather than as edits highlighted against a backdrop.
 #'
-#' The ground dim is the only distinction drawn anywhere, and it is between
+#' The level dims are the only distinction drawn anywhere, and they are between
 #' levels, not between paint and baseline.
-PAINT_OPACITY_GROUND        <- 0.5
+#'
+#' Both levels are fully opaque: the materials are the surface the heat model
+#' computes from, so the base map must not show through them. Hiding them to see
+#' the map is the "Materialien" switch on the rail (set-paint-visible).
+PAINT_OPACITY_GROUND        <- 1
 PAINT_OPACITY_GROUND_DIMMED <- 0.2
-PAINT_OPACITY_CANOPY        <- 0.7
+PAINT_OPACITY_CANOPY        <- 1
+PAINT_OPACITY_CANOPY_DIMMED <- 0.2
 
 #' Everything the browser needs to set itself up: the grid resolution, the
 #' EPSG:3857 -> EPSG:2056 transform (see paintTransform2056), the material colors
@@ -255,7 +262,8 @@ paintInitPayload <- function(refLng, refLat){
     holes     = as.list(PAINT_HOLE_IDS),
     opacity   = list(ground       = PAINT_OPACITY_GROUND,
                      groundDimmed = PAINT_OPACITY_GROUND_DIMMED,
-                     canopy       = PAINT_OPACITY_CANOPY)
+                     canopy       = PAINT_OPACITY_CANOPY,
+                     canopyDimmed = PAINT_OPACITY_CANOPY_DIMMED)
   )
 }
 

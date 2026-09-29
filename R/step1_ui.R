@@ -50,7 +50,14 @@ vftDbg("UI1")
                   #written from ten places in step1_server via shinyjs::html().
                   #A plain div, so it is not a registered output and never enters
                   #the per-message manageHiddenOutputs() sweep.
-                  shiny::tags$div(id = shiny::NS(id, "zoomText"))
+                  shiny::tags$div(id = shiny::NS(id, "zoomText")),
+                  #"too large for heat mitigation": never written, only shown
+                  #and hidden by class - by step1_server for the outline in
+                  #force, by polydraw.js for the ring being drawn. The rules
+                  #are in R/layout_helpers.R.
+                  shiny::tags$div(id = shiny::NS(id, "areaWarn"), class = "vft-area-warn",
+                    shiny::tags$span(style = "color:#dd1717; font-size:medium; font-weight:bold;",
+                      i18n$t("Warnung: Das gewählte Gebiet ist zu groß für die Hitzeminderungsplanung. Wenn Sie diese Funktion nutzen möchten, wählen Sie ein kleineres Gebiet.")))
                 )
               ),
 

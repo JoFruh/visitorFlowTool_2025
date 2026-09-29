@@ -348,9 +348,10 @@ VFT_NEXT_CHOICES <- list(
   list(id = "vftNextSim",   key = ":nav_step5:",
        fallback = "Naherholung simulieren",
        when = function(steps) any(VFT_NAV_FOLD %in% steps)),
+  #dropped, not greyed, while HEAT_MITIGATION is off (R/features.R)
   list(id = "vftNextHitze", key = ":nav_hitze:",
        fallback = "Hitzeminderung",
-       when = function(steps) "newVersions" %in% steps)
+       when = function(steps) "newVersions" %in% steps && vftHeatEnabled())
 )
 
 #' The CSS for the modal, kept out of the function body for readability.
@@ -807,7 +808,14 @@ vftNavBarServer <- function(r, input, session = shiny::getDefaultReactiveDomain(
   #is read once, by newVersions_server.R's contextChoice_ui render, and cleared
   #there; check = TRUE so it gets the same busy/reentrant/reachable refusal as
   #every other click in this bar.
-  if("newVersions" %in% steps){
+  #
+  #Switched off (HEAT_MITIGATION in R/features.R), the button is greyed but
+  #clickable - see vftStepNav() - and the click only says so. goHitze stays
+  #NULL, so the next-step modal wires no Hitzeminderung observer either.
+  if(!vftHeatEnabled()){
+    shiny::observeEvent(input$vftNav_hitze, vftNotImplementedModal(session),
+                        ignoreInit = TRUE)
+  }else if("newVersions" %in% steps){
     goHitze <- function(){
       #already behind this door - the same "nothing to do" the six step buttons
       #make, asked the same way. Without it, clicking the ringed Hitzeminderung
@@ -1019,7 +1027,9 @@ vftNavBarServer <- function(r, input, session = shiny::getDefaultReactiveDomain(
     #and nothing else. Outside the loop now, because it is no longer an answer
     #about `s`. The reentrancy half of the step test is dropped rather than
     #copied - newVersions is a converted singleton, so that half was always TRUE.
-    if("newVersions" %in% steps){
+    #Never toggled while the feature is off: toggleState() would add a
+    #`disabled` attribute, and that swallows the "not implemented" click.
+    if("newVersions" %in% steps && vftHeatEnabled()){
       okHitze <- vftHitzeReachable(r) && !busy
       if(!identical(okHitze, sentHitze)){
         shinyjs::toggleState(id = "vftNav_hitze", condition = okHitze)

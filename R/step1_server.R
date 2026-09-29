@@ -196,22 +196,9 @@ step1_server <- function(id, i18n,
     #no starting polygons at step1
     r$polygonsList <- NULL
 
-    #container for all vertices of a polygon that is to be created
-    r$mapPoints <- NULL
-    r$mapPoints <-sf::st_sfc(crs = 4326) #empty list of generated sf points
-
     r$launchProgress <- 0
     r$promiseFinished <- FALSE
     r$ABMprogress <- NULL
-
-    #variable to help avoid creating markers at the same time as a polygon is finalised by clicking on a marker.
-    r$markerWasClicked <- FALSE
-
-    r$polyFinished <- FALSE
-
-    #populate given list container with variables called by the observed reactives.
-    #This allows an outside variable to communicate between leaflet map and the reactives of this function.
-    # r$markerWasClicked <- r$markerWasClicked
 
     r$DULN <- NULL
     r$DULN_all <- NULL
@@ -221,20 +208,34 @@ step1_server <- function(id, i18n,
 
     r$currentLang <- "de"
 
-    mapMarkerClick <- paste0(leafletMapID, "_marker_click")
     mapGeojsonClick <- paste0(leafletMapID, "_geojson_click")
-    mapClick <- paste0(leafletMapID, "_click")
 
 
-    # MAP CLICK OBSERVERS ####
+    # MAP DRAWING ####
+    #
+    #The vertices are placed and drawn by inst/app/www/polydraw.js; R hears
+    #about a drawing once, when its ring is closed (R/polydraw_helpers.R). That
+    #replaced a click-by-click protocol - a map click per vertex, a red marker
+    #to click again to close - whose state lived in r$mapPoints,
+    #r$markerWasClicked and r$polyFinished.
+
     ##shape click ####
     # simply remove shape (users may use this way to delete shape out of habit)
+    #polydraw.js makes the outline click-through while a drawing is in
+    #progress, so this only hears a click meant for it.
     r1$obsGeojsonClick <- shiny::observeEvent(input[[mapGeojsonClick]], {
-      r$markerWasClicked <- TRUE
-
       #erase the existing polygons
       r$polygonsList <- NULL
       r1$finalPolygon <- NULL
+      r1$shape <- NULL
+
+      #and the outline the map is drawing, which is now r1$finalShape and
+      #may be one enter() put back. Clearing it keeps the map and the
+      #confirm handlers telling the same story - without this, the map was
+      #blank while a confirm would still have passed the old perimeter on as
+      #if it were on screen. It discards nothing: `r$shape` at app level is
+      #untouched, and coming back here again re-seeds this from it.
+      r1$finalShape <- NULL
 
       #replot
       leaflet::leafletProxy(leafletMapID )|>
@@ -246,214 +247,61 @@ step1_server <- function(id, i18n,
 
     }, ignoreInit = TRUE, ignoreNULL = TRUE)
 
-    ## marker click ####
-    r1$obsMarkerClick <- shiny::observeEvent(input[[mapMarkerClick]], {
-      # variables$
-      r$markerWasClicked <- TRUE
-      if(!is.null(input[[mapMarkerClick]]$group) ){#& envBase$step1Refreshing != TRUE
-        #FINALISE POLYGON ####
-        #If first vertex of polygon is clicked, Finalise polygon
-        if( input[[mapMarkerClick]]$group == "first"){
-          if(nrow(r$mapPoints) > 2){
+    ## a closed ring ####
+    #One area at a time in this step: a valid ring inside Switzerland replaces
+    #whatever outline was in force - a drawn one, an uploaded file or typed
+    #coordinates. A ring that is refused leaves that outline where it was.
+    r1$obsPolyDrawn <- shiny::observeEvent(input$polyDrawn, {
+      poly <- vftPolyDrawSf(input$polyDrawn)
+      if(is.null(poly)) return(invisible(NULL))
 
-            #create polygon with points
-            poly <- sf::st_cast(sf::st_combine(r$mapPoints), "POLYGON") #variables$
-            poly <- sf::st_sf(poly)
-            #check if polygon is not valid
-            if(!sf::st_is_valid(poly)){
-              #erase points
-              r$mapPoints <- sf::st_sfc(crs = 4326)
-              leaflet::leafletProxy(leafletMapID )|>
-                leaflet::clearGroup("first")|>
-                leaflet::clearGroup("after")
+      #check if polygon is not valid
+      if(!isTRUE(all(sf::st_is_valid(poly)))){
+        shiny::showModal(
+          shiny::modalDialog(
+            shiny::h3(shiny::HTML(as.character(i18n()$t("Das gezeichnete Polygon war <b>nicht brauchbar</b>, bitte zeichnen Sie ein <b>einfacheres Polygon</b>. <br>(z.B.: keine gekreuzten Linien)"))))
+          )
+        )
+      }else if(!sf::st_intersects(poly, countryshape, sparse = FALSE)[[1, 1]]){
+        #check if polygon entirely outside CH
+        shiny::showModal(
+          shiny::modalDialog(
+            shiny::h3(shiny::HTML(paste0(i18n()$t("Dieses Tool ist auf die <b>Schweiz</b> beschränkt.<br>"),
+                                         i18n()$t("Bitte wählen Sie ein Bereich <b>innerhalb</b> seiner Grenzen."))))
+          )
+        )
+      }else{
+        #keep a single polygon
+        poly$id <- 1
+        r$polygonsList <- poly
 
-              shiny::showModal(
-                shiny::modalDialog(
-                  shiny::h3(shiny::HTML(as.character(i18n()$t("Das gezeichnete Polygon war <b>nicht brauchbar</b>, bitte zeichnen Sie ein <b>einfacheres Polygon</b>. <br>(z.B.: keine gekreuzten Linien)"))))
-                )
-              )
-            }else if(!sf::st_intersects(poly, countryshape, sparse = FALSE)[[1, 1]]){
-              #check if polygon entirely outside CH
+        #the outline it replaces (see the shape click above)
+        r1$shape <- NULL
+        r1$finalShape <- NULL
 
-              #erase points
-              r$mapPoints <- sf::st_sfc(crs = 4326)
-              leaflet::leafletProxy(leafletMapID )|>
-                leaflet::clearGroup("first")|>
-                leaflet::clearGroup("after")
+        leaflet::leafletProxy(leafletMapID)|>
+          leaflet::clearGroup("eraseable")|>
+          leaflet::addGeoJSON(geojson = geojsonsf::sf_geojson(r$polygonsList),
+                              stroke = TRUE,
+                              weight = 5,
+                              color = "black",
+                              fill = TRUE,
+                              fillColor = "green",
+                              opacity = 1,
+                              group = "eraseable",
+                              options = leaflet::pathOptions(pane = "layer2"))
 
-              shiny::showModal(
-                shiny::modalDialog(
-                  shiny::h3(shiny::HTML(paste0(i18n()$t("Dieses Tool ist auf die <b>Schweiz</b> beschränkt.<br>"),
-                                        i18n()$t("Bitte wählen Sie ein Bereich <b>innerhalb</b> seiner Grenzen."))))
-                )
-              )
-            }else{
-              #if so, error message and do not create polygon
+        #When polygon is finalised, remove any file data and make Confirm button appear
+        #determine type of shape
+        r1$shapeType <- "drawing"
 
+        #a polygon was closed on the map: a NEW outline. See r1$isNewShape.
+        r1$isNewShape <- TRUE
 
-              if(is.finite(max(r$polygonsList$id))){ #polygonEnv$
-                poly$id <- max(r$polygonsList$id)+1 #polygonEnv$
-              }else{
-                poly$id <- 1
-              }
-              # poly <- concaveman(r$mapPoints, 1) Doesn't work well
-              poly <- dplyr::rename(poly, polygons = "poly")
-
-              # if(numberOfPolygons == "multi"){
-              #   #check if new polygon intersects or overlaps with any other
-              #   intersectingPolys <- which(sf::st_intersects(poly, r$polygonsList, sparse = FALSE)) #polygonEnv$
-              #   if(length(intersectingPolys) > 0){
-              #     #if so, combine it into a single polygon
-              #     newPoly <- sf::st_as_sf(sf::st_union(c(poly$polygons, r$polygonsList[intersectingPolys,]$polygons) ) ) #polygonEnv$
-              #     newPoly <- newPoly |> dplyr::rename(polygons = .data$x)
-              #     #determine its general attractivity (with popup)
-              #     newPoly$DULN <- 1
-              #     #determine id
-              #     newPoly$id <- max(r$polygonsList$id)+1 #polygonEnv$
-              #     #remove intersecting polys
-              #     r$polygonsList <- r$polygonsList[-intersectingPolys,]
-              #     #add new polygon
-              #     # polygonEnv$r$polygonsList[nrow(polygonEnv$r$polygonsList) + 1, ] <- newPoly
-              #     poly <- newPoly
-              #   }
-              #
-              #   #generate DULN value for polygon on the fly
-              #   values <- terra::extract(r1$DULN$all, poly)
-              #   poly$DULN <- mean(values$all[values$all > -20], na.rm = TRUE) #avoid values <= -20 as these are symbolic
-              #
-              #   #keep a table of polygons
-              #   r$polygonsList <- rbind(r$polygonsList, poly)
-              # }else{
-
-              #keep a single polygon
-              r$polygonsList <- poly
-
-              # }
-              r$polyFinished <- TRUE
-              r$mapPoints <- sf::st_sfc(crs = 4326)
-              proxy <- leaflet::leafletProxy(leafletMapID)|>
-                leaflet::clearGroup("eraseable")|>
-                leaflet::addGeoJSON(geojson = geojsonsf::sf_geojson(r$polygonsList),
-                                    stroke = TRUE,
-                                    weight = 5,
-                                    color = "black",
-                                    fill = TRUE,
-                                    fillColor = "green",
-                                    opacity = 1,
-                                    group = "eraseable",
-                                    options = leaflet::pathOptions(pane = "layer2"))
-
-              leaflet::clearGroup(proxy, "first")
-              leaflet::clearGroup(proxy, "after")
-
-              # makeButton2()
-
-
-            }
-
-          }else{
-            #TODO: write error (need more points)
-            shiny::showModal(
-              shiny::modalDialog(
-                shiny::h3(shiny::HTML(paste0(i18n()$t("Die Polygone müssen <b>mindestens 3 Punkte</b> haben."), i18n()$t("<br>Bitte fügen Sie vor der Fertigstellung der Form einen <b>zusätzlichen Punkt</b> hinzu.") )) )
-              )
-            )
-            vftDbgCat("ERROR: not enough points.\n")
-          }
-
-        }
-      }else if(r1$step1Refreshing == TRUE){
-        r1$step1Refreshing <- FALSE
+        button2Visible(TRUE)
+        button1Visible(FALSE)
       }
-    }, ignoreInit = TRUE, ignoreNULL = TRUE)
-
-    ## empty map click ####
-    r1$obsMapClick <- shiny::observeEvent(input[[mapClick]], {
-      #precised condition (default always evaluates as TRUE)
-      # if(  inputConditionName == "DEFAULT" | input[[inputConditionName]] %in% inputConditionValue){
-
-      if(!r$markerWasClicked){
-        if( !is.null(input[[mapClick]]$lng) ){
-          #add point
-          r$mapPoints <- rbind(r$mapPoints,sf::st_as_sf( sf::st_sfc( sf::st_point(x = c(input[[mapClick]]$lng, input[[mapClick]]$lat)), crs = 4326) ) )
-          #draw points
-          vftDbg(r$mapPoints)
-
-          proxy = leaflet::leafletProxy(leafletMapID )
-
-          circleMarker <- leaflet::addCircleMarkers(map = proxy,
-                                                    lng = input[[mapClick]]$lng, lat = input[[mapClick]]$lat,
-                                                    radius = ifelse(nrow(r$mapPoints) == 1, 7, 4),
-                                                    color = ifelse(nrow(r$mapPoints) == 1, "red", "blue"),
-                                                    stroke = ifelse(nrow(r$mapPoints) == 1, TRUE, FALSE),
-                                                    fillOpacity = 0.5,
-                                                    group = ifelse(nrow(r$mapPoints) == 1, "first", "after"),
-                                                    options = leaflet::pathOptions(pane = "layer2"))
-        }
-
-      }
-      #reset information if a marker was clicked
-      r$markerWasClicked <- FALSE
-      # }
-    }, ignoreInit = TRUE, ignoreNULL = FALSE)
-
-
-    ##Polygon Deletion####
-
-    #populate global variable
-    if(is.null(r$polygonsList) ){
-      r$polygonsList <- startingPolygons
-    }
-
-
-
-    mapGeojsonClick <- paste0(leafletMapID, "_geojson_click")
-
-
-
-      r1$obsErase <- shiny::observeEvent(input[[paste0(leafletMapID, "_click")]], {
-
-        #create variable if missing
-        if(is.null(r$polyFinished) ){r$polyFinished <- FALSE}
-
-        #when map is clicked but NO polygon was finalised
-        if(r$polyFinished == FALSE){
-          #and a polygon already exists
-          if(!is.null(r$polygonsList) | !is.null(r1$shape)){
-
-            #erase the existing polygon
-            r$polygonsList <- NULL
-            r1$shape <- NULL
-
-            #and the outline the map is drawing, which is now r1$finalShape and
-            #may be one enter() put back. Clearing it keeps the map and the
-            #confirm handlers telling the same story - without this, a stray
-            #click on a return visit blanked the map while a confirm would still
-            #have passed the old perimeter on as if it were on screen. It
-            #discards nothing: `r$shape` at app level is untouched, and coming
-            #back here again re-seeds this from it.
-            r1$finalShape <- NULL
-
-            button1Visible(FALSE)
-            button2Visible(FALSE)
-
-            #replot
-            leaflet::leafletProxy(leafletMapID )|>
-              leaflet::clearGroup("eraseable")
-
-            button2Visible(FALSE)
-
-
-          }
-
-        }else{
-          #reset global variable
-          r$polyFinished <- FALSE
-        }
-
-      })
-
-    # }
+    }, ignoreInit = TRUE)
 
 
     shiny::observeEvent(input$resetButton, {
@@ -496,6 +344,11 @@ step1_server <- function(id, i18n,
     #flag and calls this, which renders whatever is true at that moment, and
     #both warnings can be on screen together - which for a large area drawn at a
     #low zoom is exactly what should happen.
+    #
+    #The area warning has since moved out to its own element, #areaWarn, because
+    #the browser now raises it too, on every pointer move while a ring is being
+    #drawn, and a strip that R rewrites wholesale would have overwritten that.
+    #The strip still composes, so a third warning can join the zoom one here.
     updateZoomText <- function(){
       parts <- character(0)
 
@@ -508,16 +361,8 @@ step1_server <- function(id, i18n,
           i18n()$t("Bitte zoomen Sie weiter hinein, bevor Sie einen Bereich auswählen.")))
       }
 
-      #the area: a separate ceiling, and about the shape rather than the view, so
-      #zooming in does not clear it. Past it newVersions cannot build a land
-      #cover baseline and greys the Hitzeminderung context out (see
-      #paintAreaTooLarge() and the contextChoice_ui render), which is a poor
-      #place to find out - by then the area is confirmed and the whole
-      #simulation has been run on it. Said here, while it is still one click to
-      #draw a smaller one.
-      if(isTRUE(shiny::isolate(r1$areaTooLarge))){
-        parts <- c(parts, i18n()$t("Warnung: Das gewählte Gebiet ist zu groß für die Hitzeminderungsplanung. Wenn Sie diese Funktion nutzen möchten, wählen Sie ein kleineres Gebiet."))
-      }
+      #(the area warning used to be the strip's second part; it is its own
+      #element now, #areaWarn - see areaLimitObs below)
 
       shinyjs::html(id = "zoomText",
                     html = if(length(parts) == 0) "" else
@@ -525,6 +370,26 @@ step1_server <- function(id, i18n,
                              paste(parts, collapse = "<br>"), "</b></font>"))
     }
 
+    #### the area warning ####
+    #
+    #A separate ceiling from the zoom's, and about the shape rather than the
+    #view, so zooming in does not clear it. Past it newVersions cannot build a
+    #land cover baseline and greys the Hitzeminderung context out (see
+    #paintAreaTooLarge() and the contextChoice_ui render), which is a poor place
+    #to find out - by then the area is confirmed and the whole simulation has
+    #been run on it. Said here, while it is still one click to draw a smaller
+    #one. Not said at all while the feature is switched off (HEAT_MITIGATION in
+    #R/features.R) - it would warn about a door that is shut.
+    #
+    #Two writers share the #areaWarn element, by class, and never its text
+    #(which is a translated tag in step1_ui, so it follows the language):
+    #  - `vft-area-over`, set here: the outline in force is too large;
+    #  - `vft-pd-live` / `vft-pd-over`, set by polydraw.js while a ring is being
+    #    drawn: the ring as it would be if closed at the pointer is too large.
+    #The CSS in R/layout_helpers.R lets the live verdict win while a drawing is
+    #in progress, so the warning comes and goes with the pointer and never
+    #doubles up with the one about the outline being replaced.
+    #
     #Keep that flag in step with whatever outline is currently in force.
     #
     #An observer rather than a call at each of the sites that can change the
@@ -542,7 +407,8 @@ step1_server <- function(id, i18n,
       if(is.null(outline)) outline <- r1$finalShape
       if(is.null(outline)) outline <- r1$shape
       r1$areaTooLarge <- paintAreaTooLarge(outline)
-      updateZoomText()
+      shinyjs::toggleClass(id = "areaWarn", class = "vft-area-over",
+                           condition = vftHeatEnabled() && isTRUE(r1$areaTooLarge))
     })
 
 
@@ -573,7 +439,7 @@ step1_server <- function(id, i18n,
       if(is.null(outline)) outline <- shiny::isolate(r1$shape)
 
       #if a shape exists already, draw it and zoom to it
-      if(!is.null(outline) ){
+      map <- if(!is.null(outline) ){
 
         outline <- sf::st_as_sf(sf::st_transform(outline, "epsg:4326"))
         bb <- sf::st_bbox(outline)
@@ -619,6 +485,12 @@ step1_server <- function(id, i18n,
             leaflet::providers$OpenStreetMap,
             options = leaflet::providerTileOptions(noWrap = TRUE) )
       }
+
+      #the drawer: vertices, rubber band and area preview in the browser. No
+      #scissors here - step 1 keeps one outline, there is nothing to cut. The
+      #area warning is live while drawing, when there is a feature to warn about.
+      vftPolyDraw(map, session, cut = FALSE,
+                  areaWarn = if(vftHeatEnabled()) "areaWarn")
     })
 
     # OBSERVERS ####
@@ -640,15 +512,9 @@ step1_server <- function(id, i18n,
                            h4(),
                            h3(strong("2)"), i18n()$t("Klicken Sie auf verschiedene Punkte auf der Karte.") ),
                            h4(),
-                           h4(i18n()$t("Der erste Punkt, den Sie auf diese Weise erstellen, ist groß und rot.") ),
-                           h4(i18n()$t("Die nächsten Punkte sind kleiner und blau.") ),
-                           shiny::div(style = "text-align:center",
-                                      shiny::img(src = "www/firstSecondThirdClick.png", style = "height:75px")
-                           ),
-                           h4(i18n()$t("Wenn Sie erneut auf den roten Punkt klicken, wird der von Ihnen erstellte Ausschnitt auf der Karte fertiggestellt ( " ), strong(i18n()$t("Sie benötigen mindestens 3 Punkte!") ), ")"),
-                           shiny::div(style = "text-align:center",
-                                      shiny::img(src = "www/thirdLastClick.png", style = "height:75px")
-                           ),
+                           h4(i18n()$t("Eine Linie zum Mauszeiger zeigt, wie die Fläche aussehen wird.") ),
+                           h4(i18n()$t("Klicken Sie auf den ersten Punkt oder doppelklicken Sie, um die Fläche fertigzustellen (" ), strong(i18n()$t("Sie benötigen mindestens 3 Punkte!") ), ")"),
+                           h4(shiny::HTML(i18n()$t("Mit <b>Esc</b> oder der <b>Rücktaste</b> entfernen Sie den zuletzt gesetzten Punkt. Um einen anderen Punkt zu entfernen, fahren Sie mit der Maus darüber und klicken Sie auf das <b>X</b>."))),
                            h4(i18n()$t("Probieren Sie es aus! Sie können jederzeit eine neue Form erstellen, indem Sie erneut auf die Karte klicken!") )
 
         )
@@ -806,11 +672,8 @@ step1_server <- function(id, i18n,
           button1Visible(TRUE)
           button2Visible(FALSE)
 
-          #erase points
-          r$mapPoints <- sf::st_sfc(crs = 4326)
-          leaflet::leafletProxy(leafletMapID )|>
-            leaflet::clearGroup("first")|>
-            leaflet::clearGroup("after")
+          #abandon any drawing in progress: the file is the outline now
+          vftPolyDrawCancel(leafletMapID)
 
           #TODO: reset text input if necessary
           shiny::updateTextInput(inputId = "gps_tl", value = "X.XXX..., X.XXX...")
@@ -959,24 +822,6 @@ step1_server <- function(id, i18n,
 
     shiny::observeEvent(input$shp, {
       determineConfirm_fileInput()
-    }, ignoreInit = TRUE)
-
-    ## polygon finalisation ####
-    #When polygon is finalised, remove any file data and make Confirm button appear
-    # shiny::observeEvent(input[["areaSelectMap_marker_click"]], {
-    shiny::observeEvent(r$polyFinished, {
-      if(!is.null(r$polygonsList)){
-      #determine type of shape
-      r1$shapeType <- "drawing"
-
-      #a polygon was closed on the map: a NEW outline. See r1$isNewShape.
-      r1$isNewShape <- TRUE
-
-      button2Visible(TRUE)
-      button1Visible(FALSE)
-      # input$shp <- NULL
-      }
-
     }, ignoreInit = TRUE)
 
     if(is.null(r1$obsConfirmBtn1)){
@@ -1366,9 +1211,6 @@ step1_server <- function(id, i18n,
         shape_larger <- sf::st_buffer(shp, dist = 1000)
         r1$shapeLarger <- sf::st_transform(shape_larger, "epsg:4326" )
 
-        #
-        r$markerWasClicked <- FALSE
-
         reportConfirm(1)
 
         #nothing was awaited, so nothing can still be outstanding
@@ -1442,17 +1284,13 @@ step1_server <- function(id, i18n,
 
       #the drawing state, which belongs to a visit and not to a session
       r$polygonsList     <- NULL
-      r$mapPoints        <- sf::st_sfc(crs = 4326)
-      r$polyFinished     <- FALSE
-      r$markerWasClicked <- FALSE
+      vftPolyDrawCancel(leafletMapID, session)
 
       #The map output is suspended while this tab is hidden and re-executes when
       #the tab is shown again, so it redraws the outline on its own - but only
       #after a client round trip. Drawing it here as well costs one message and
       #puts the area on screen at once.
       proxy <- leaflet::leafletProxy(leafletMapID, session = session) |>
-        leaflet::clearGroup("first") |>
-        leaflet::clearGroup("after") |>
         leaflet::clearGroup("eraseable")
 
       if(!is.null(shp)){

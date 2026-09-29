@@ -22,6 +22,11 @@ app_ui <- function(){
   #sent and inst/app/www/vft-state.js for where it is kept.
   shiny::tags$script(src = "www/vft-state.js"),
 
+  #Polygon drawing on the step 1 and step 4 maps: vertices, rubber band and
+  #preview are drawn in the browser, and R is sent the finished ring. Attached
+  #to each map by vftPolyDraw() - see R/polydraw_helpers.R.
+  shiny::tags$script(src = "www/polydraw.js"),
+
   #A queued progress bar goes red and shows the RUNNING job's percentage instead
   #of its own, so the user can see they are waiting and roughly for how long. The
   #class is toggled on one bar at a time rather than restyled globally, because a
@@ -385,24 +390,29 @@ vftStepNav <- function(i18n = NULL){
   #the three steps newVersions needs when this door needs only the perimeter
   #(VFT_HITZE_NEEDS in R/steps.R, which is the same test that enables it).
   hitzeLab  <- navTr(":nav_hitze:", "Hitzeminderung")
+  #no "benötigt: ..." while the feature is switched off - no step opens it
   hitzeTips <- tooltipFor("newVersions", label = hitzeLab,
-                          prereq = vftHitzePrereqSteps())
+                          prereq = if(vftHeatEnabled()) vftHitzePrereqSteps() else character(0))
+
+  hitzeBtn <- withData(
+    shiny::actionButton(
+      inputId = "vftNav_hitze",
+      label   = withData(shiny::tags$span(class = "vft-nav-lab", hitzeLab[["de"]]),
+                         "data-i18n-", hitzeLab),
+      class   = "vft-nav-btn",
+      title   = hitzeTips[["de"]]
+    ),
+    "data-tip-", hitzeTips)
+  #Switched off (HEAT_MITIGATION in R/features.R): greyed by a CLASS rather than
+  #the `disabled` attribute, because a disabled button swallows the click that
+  #has to raise the "not implemented" modal. vftNavBarServer() never
+  #toggleState()s it, so the class is the button's state for the session.
+  hitzeBtn <- if(vftHeatEnabled()) shiny::tagAppendAttributes(hitzeBtn, disabled = NA)
+              else shiny::tagAppendAttributes(hitzeBtn, class = "vft-nav-btn--off",
+                                              `aria-disabled` = "true")
 
   center[[length(center) + 1L]] <- shiny::tags$div(class = "vft-nav-sep")
-  center[[length(center) + 1L]] <- shiny::tags$div(class = "vft-nav-group",
-    shiny::tagAppendAttributes(
-      withData(
-        shiny::actionButton(
-          inputId = "vftNav_hitze",
-          label   = withData(shiny::tags$span(class = "vft-nav-lab", hitzeLab[["de"]]),
-                             "data-i18n-", hitzeLab),
-          class   = "vft-nav-btn",
-          title   = hitzeTips[["de"]]
-        ),
-        "data-tip-", hitzeTips),
-      disabled = NA
-    )
-  )
+  center[[length(center) + 1L]] <- shiny::tags$div(class = "vft-nav-group", hitzeBtn)
 
   #the app title. Reuses the translation row the six step banner images already
   #used; the trailing ": " that row carries belonged to the old banner's layout
@@ -666,6 +676,17 @@ vftStepNav <- function(i18n = NULL){
       #vftNav .vft-nav-btn[disabled] {
         background-color:transparent; color:#000000; border-color:#000000;
         opacity:1; cursor:not-allowed;
+      }
+      /* The one exception to the rule above: a feature switched off in
+         R/features.R. Same look, but still clickable, so the click can say
+         the feature is not there yet. :hover/:focus/:active restated so
+         bootstrap's pressed-button grey does not show through. */
+      #vftNav .vft-nav-btn.vft-nav-btn--off,
+      #vftNav .vft-nav-btn.vft-nav-btn--off:hover,
+      #vftNav .vft-nav-btn.vft-nav-btn--off:focus,
+      #vftNav .vft-nav-btn.vft-nav-btn--off:active {
+        background-color:transparent; color:#000000; border-color:#000000;
+        opacity:1; cursor:not-allowed; box-shadow:none;
       }
       /* current step: no underline - a thick white outline standing slightly
          proud of the button, via outline-offset rather than a border (a border

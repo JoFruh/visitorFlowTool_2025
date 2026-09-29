@@ -28,33 +28,21 @@ vftDbg("UI5")
 
         shiny::fluidRow(class = "vft-grow",
           shiny::column(12, align = "center",
-                        #cut mode: a red frame round the map, so the mode is
-                        #visible where the clicks go. Moved between the two
-                        #classes by the cutButton observer in step4_server.R.
-                        shinyjs::inlineCSS(list(.cutModeOn = "border: 3px solid #c62828;")),
-                        shinyjs::inlineCSS(list(.cutModeOff = "border: 1px solid #d6d9d8;")),
-
-                        #mapFrame carries the cut-mode border, so it is the
-                        #box that has to be full height - the map fills it,
-                        #and the border comes off the map rather than making
-                        #the page taller in cut mode.
-                        shiny::div(id= "mapFrame", class = "cutModeOff vft-grow-fill vft-step4-frame",
+                        #mapFrame carries the border, so it is the box that
+                        #has to be full height - the map fills it. (It used to
+                        #turn red in the polygon cut mode; cutting is now the
+                        #scissors button on a two-point line, drawn by
+                        #inst/app/www/polydraw.js, and there is no mode.)
+                        shiny::div(id= "mapFrame", class = "vft-grow-fill vft-step4-frame",
+                                   style = "border: 1px solid #d6d9d8;",
                  shinycssloaders::withSpinner(  leaflet::leafletOutput(shiny::NS(id, "finalAOIMap"), height = 500), type = 3, color = VFT_TEAL, color.background = "white" )
                         )
           )
         ),
 
-        #ACTIONS: the mode switch and the secondary buttons first, the button
-        #that finishes the step last. The switch is a plain checkbox styled as
-        #one (vftRailRow, R/ui_theme.R): input$cutButton is TRUE/FALSE as it
-        #was from the materialSwitch it replaces.
+        #ACTIONS: the secondary buttons first, the button that finishes the
+        #step last.
         shiny::div(class = "vft-actions",
-          shiny::tags$label(
-            class = "vftRailRow vft-switch-pill",
-            shiny::tags$input(id = shiny::NS(id, "cutButton"), type = "checkbox", class = "vftRailCheck"),
-            shiny::span(class = "vftGlyph", vftIcon("scissors")),
-            shiny::span(class = "vftRailLabel", i18n$t("Polygonschnitt-Modus")),
-            shiny::span(class = "vftSw")),
           shiny::actionButton(shiny::NS(id, "resetButton"), class = "vft-btn",
                               label = vftBtnLabel("reset", i18n$t("Reset"))),
           shiny::actionButton(shiny::NS(id, "aoiButton"), class = "vft-btn",
