@@ -21,6 +21,8 @@
   /* the app's teal, for the emphasised words and the buttons */
   --vftTut-accent: #006268;
   --vftTut-accent-text: #ffffff;
+  /* the areas of interest: the border step 5 draws them with (R "green4") */
+  --vftTut-aoi: #008b00;
 
   /* the text card */
   --vftTut-card-bg: #ffffff;
@@ -159,6 +161,11 @@
   font-style: normal;
   font-weight: var(--vftTut-emph-weight);
   font-size: var(--vftTut-em-size);
+}
+
+/* <em class="vftTutAoi">: the term "areas of interest", in their map colour */
+.vftTutorialText .vftTutAoi {
+  color: var(--vftTut-aoi);
 }
 
 .vftTutorialCentered .vftTutorialText {

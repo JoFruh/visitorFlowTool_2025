@@ -57,7 +57,7 @@
   var PLAY = '<svg class="vftTutorialPlay" viewBox="0 0 10 12" aria-hidden="true">' +
              '<path d="M0 0L10 6L0 12Z"/></svg>';
 
-  // from the server: {lang, next_, stop, offer, start, tours: {step1: [...]}}
+  // from the server: {lang, next_, stop, offer, start, tours: {step1: [...], step2: [...]}}
   var texts = null;
   var state = null;       // the running tour, null when none
   var chain = null;       // a finished tour waiting for the next step's
@@ -195,10 +195,12 @@
 
   // A row of buttons, one window each. The margin shrinks with the gap between
   // them, so the windows (and their outlines) never run into each other.
-  function buttonRow(selector) {
+  // keep(el): which of them get a window (all when omitted).
+  function buttonRow(selector, keep) {
     return function () {
       var found = [];
       Array.prototype.forEach.call(document.querySelectorAll(selector), function (el, i) {
+        if (keep && !keep(el)) { return; }
         var r = shown(el) && elRect(el, 0);
         if (r) { found.push({ key: el.id || selector + i, rect: r, el: el }); }
       });
@@ -321,12 +323,194 @@
   var UPLOAD_CARD = '.vft-step1-options > .vft-step1-opt:first-child';
   var DRAW_CARD = '.vft-step1-options > .vft-step1-opt:last-child';
 
+  /* ------------------------- step 2's hints ------------------------- */
+
+  // the Amphibians class checkbox: its value is the group's name in the
+  // language the list was built in (i18n()$t(group_de) in step2_server.R)
+  var AMPHIBIANS = ['Amphibien', 'Amphibiens', 'Amphibians'];
+  // the species the weight hints use: VU, Emerald and priority 1, so every
+  // icon hint 7 talks about is on its row
+  var TOAD = 'Bombina variegata';
+  // the group list is rebuilt as the step settles - "all species" is ticked
+  // 1.5 s after the species scan (step2_server.R) - so hint 4 only opens its
+  // window once the checkbox has held still this long
+  var SETTLE = 2000;
+
+  var SPECIES = '#step2-speciesCheckbox';
+
+  // a window on el, cut to what its scrolling container shows
+  function clipped(el, box, pad, key, hit) {
+    var r = shown(el) && elRect(el, pad);
+    var c = r && box && elRect(box, 0);
+    r = r && (c ? intersect(r, c) : r);
+    return r ? [{ key: key, rect: r, hit: hit || [el] }] : [];
+  }
+
+  // scroll a list so that el sits in the middle of it (the list only)
+  function centreIn(el, box) {
+    if (!el || !box) { return; }
+    var r = el.getBoundingClientRect(), b = box.getBoundingClientRect();
+    if (r.top >= b.top && r.bottom <= b.bottom) { return; }
+    box.scrollTop += (r.top - b.top) - (box.clientHeight - r.height) / 2;
+  }
+
+  function amphibianBox() {
+    var boxes = document.querySelectorAll('#step2-groupCheckbox_class input[type=checkbox]');
+    for (var i = 0; i < boxes.length; i++) {
+      if (AMPHIBIANS.indexOf(boxes[i].value) >= 0) { return boxes[i]; }
+    }
+    // an area without amphibians: the first group, rather than a tour stuck
+    return boxes[0] || null;
+  }
+
+  function amphibianTarget(ctx) {
+    var box = amphibianBox();
+    var label = box && box.closest('label');
+    if (!shown(label)) { ctx.seen = null; return []; }
+    var now = performance.now();
+    if (!ctx.seen || ctx.seen.el !== label) { ctx.seen = { el: label, at: now }; }
+    if (now - ctx.seen.at < SETTLE) { return []; }
+    var col = label.closest('.vft-step2-groups');
+    if (!ctx.scrolled) { ctx.scrolled = true; centreIn(label, col); }
+    return clipped(label, col, 4, 'amphibians', [label]);
+  }
+
+  // a tick on the Amphibians box, by the user
+  function watchAmphibians(ctx) {
+    ctx.on(document, 'change', function (e) {
+      if (e.target && e.target === amphibianBox() && e.target.checked) { ctx.flag = true; }
+    }, true);
+  }
+
+  // the species list, from "most widespread" above it to "least widespread"
+  // below it
+  function speciesList() {
+    var list = document.querySelector(SPECIES);
+    var box = list && list.closest('.vft-fit-species');
+    if (!shown(box)) { return []; }
+    var parts = [box];
+    var up = box.previousElementSibling, down = box.nextElementSibling;
+    for (var i = 0; i < 2; i++) {
+      if (up) { parts.push(up); up = up.previousElementSibling; }
+      if (down) { parts.push(down); down = down.nextElementSibling; }
+    }
+    var r = union(parts.filter(shown).map(function (el) { return elRect(el, 4); }));
+    return r ? [{ key: 'species', rect: r }] : [];
+  }
+
+  // the toad's row; failing that the first ticked row, then the first row
+  function toadRow() {
+    var rows = document.querySelectorAll(SPECIES + ' .checkbox');
+    var ticked = null;
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].textContent.indexOf(TOAD) >= 0) { return rows[i]; }
+      if (!ticked) {
+        var cb = rows[i].querySelector('input[type=checkbox]');
+        if (cb && cb.checked) { ticked = rows[i]; }
+      }
+    }
+    return ticked || rows[0] || null;
+  }
+
+  function toadList(row) { return row && row.closest('.vft-fit-species'); }
+
+  function showToad() {
+    var row = toadRow();
+    centreIn(row, toadList(row));
+  }
+
+  function toadTarget() {
+    var row = toadRow();
+    return clipped(row, toadList(row), 2, 'toad');
+  }
+
+  function toadWeight() {
+    var row = toadRow();
+    return row && row.querySelector('input[type=number]');
+  }
+
+  function weightTarget() {
+    var input = toadWeight();
+    var wrap = input && input.closest('.form-group');
+    return clipped(wrap || input, toadList(toadRow()), 4, 'weight', [input]);
+  }
+
+  // typed or stepped by the user, not set by the app
+  function watchWeight(ctx) {
+    showToad();
+    var mark = function (e) { if (e.target && e.target === toadWeight()) { ctx.touched = true; } };
+    ctx.on(document, 'input', mark, true);
+    ctx.on(document, 'change', mark, true);
+  }
+
+  function weightRaised(ctx) {
+    var input = toadWeight();
+    return !!ctx.touched && !!input && Number(input.value) >= 3;
+  }
+
+  // a tap on this element moves on (the element works as usual)
+  function watchClick(selector) {
+    return function (ctx) {
+      ctx.on(window, 'click', function (e) {
+        if (e.target && e.target.closest && e.target.closest(selector)) { ctx.flag = true; }
+      }, true);
+    };
+  }
+
+  function sliderBox() {
+    var input = document.getElementById('step2-minValThreshold');
+    return input && input.closest('.shiny-input-container');
+  }
+
+  // the value Shiny sends once the slider comes to rest
+  function watchThreshold(ctx) {
+    ctx.jq('shiny:inputchanged', function (e) {
+      if (e.name === 'step2-minValThreshold' && Number(e.value) >= 25) { ctx.flag = true; }
+    });
+  }
+
+  /* ------------------------- step 3's hints ------------------------- */
+
+  // the three steps of the recreation simulation in the nav bar, as one
+  // window: the chevrons overlap each other, so one window each would too
+  function simSteps() {
+    var r = union(['#vftNav_step3', '#vftNav_step4', '#vftNav_step5'].map(function (s) {
+      var el = document.querySelector(s);
+      return shown(el) ? elRect(el, 4) : null;
+    }));
+    return r ? [{ key: 'simSteps', rect: r }] : [];
+  }
+
+  function aoiSliderBox() {
+    var input = document.getElementById('step3-AOISlider');
+    return input && input.closest('.shiny-input-container');
+  }
+
+  // Arriving from step 1, the ring is on step 3 while its data is still being
+  // prepared and step 1's page is still showing: wait for step 3's own page.
+  function step3NotYet() { return !shown(aoiSliderBox()); }
+
+  // The slider runs from 20 on the left down to 0 on the right, and starts on
+  // 11: "reaching 8" is a value of 8 or below, sent once the slider rests.
+  function watchAoiThreshold(ctx) {
+    ctx.jq('shiny:inputchanged', function (e) {
+      if (e.name === 'step3-AOISlider' && Number(e.value) <= 8) { ctx.flag = true; }
+    });
+  }
+
+  // the map redraws for the new threshold (debounced 400 ms in step3_server.R)
+  function aoiMapRedrawing() {
+    var el = document.getElementById('step3-AOIMap');
+    return !!el && el.classList.contains('recalculating');
+  }
+
   /* ------------------------------ tours ----------------------------- */
   // targets: the windows. advance(ctx): polled every frame, true moves on.
   // enter(ctx): runs as the hint starts; ctx.on()/ctx.jq() listeners go with
   //   the hint.
   // look: a hint to read - a Next button moves on, the windows take no taps.
-  //   onNext(ctx, done): runs before it moves on.
+  //   onNext(ctx, done): runs before it moves on. live: its windows take taps
+  //   all the same (a control that may be used, but need not be).
   // pass: a selector whose taps go through all the same.
   // escPass: Escape is left to the page (polydraw.js takes a vertex back
   //   with it) instead of stopping the tour.
@@ -383,6 +567,112 @@
         targets: sel('#helpButton', 8),
         look: true,
         onNext: sendChoice
+      }
+    ],
+
+    step2: [
+      { // 1 - this step's button in the nav bar
+        targets: sel('#vftNav_step2', 4),
+        look: true
+      },
+      { // 2 - the other steps: one window per group of the bar, step 2's left out
+        targets: buttonRow('#vftNav .vft-nav-center > .vft-nav-group', function (el) {
+          return !el.querySelector('#vftNav_step2');
+        }),
+        look: true
+      },
+      { // 3 - the sensitivity map
+        targets: sel('#step2-SDMmap'),
+        look: true
+      },
+      { // 4 - tick Amphibians
+        targets: amphibianTarget,
+        enter: watchAmphibians,
+        advance: flagged
+      },
+      { // 5 - the map, amphibians only
+        targets: sel('#step2-SDMmap'),
+        look: true
+      },
+      { // 6 - the species list
+        targets: speciesList,
+        look: true
+      },
+      { // 7 - the toad's row, scrolled into sight
+        targets: toadTarget,
+        enter: showToad,
+        look: true
+      },
+      { // 8 - its weight up to 3
+        targets: weightTarget,
+        enter: watchWeight,
+        advance: weightRaised
+      },
+      { // 9 - weights by red list status
+        targets: sel('#step2-redListWeights'),
+        enter: watchClick('#step2-redListWeights'),
+        advance: flagged
+      },
+      { // 10 - hide the bottom 25 %
+        targets: function () {
+          var box = sliderBox();
+          var r = shown(box) && elRect(box, 4);
+          return r ? [{ key: 'threshold', rect: r, hit: [box] }] : [];
+        },
+        enter: watchThreshold,
+        advance: flagged
+      },
+      { // 11 - the download: may be used, Next moves on either way
+        targets: sel('#step2-SMbutton'),
+        look: true,
+        live: true
+      },
+      { // 12 - confirm. Confirming over later steps' work first asks whether
+        // to discard it: that modal takes taps too.
+        targets: sel('#step2-confirmButton2'),
+        advance: nextStepModalUp,
+        pass: '#shiny-modal'
+      },
+      { // 13 - one window per choice; the tour ends with the tap, and the
+        // chosen step's tour follows if it has one
+        targets: buttonRow('#shiny-modal .vft-next-btn'),
+        avoid: ['#shiny-modal .vft-next-head'],
+        enter: watchClick('#shiny-modal .vft-next-btn'),
+        advance: flagged
+      }
+    ],
+
+    step3: [
+      { // 1 - the recreation simulation's three steps in the nav bar
+        targets: simSteps,
+        hold: step3NotYet,
+        look: true
+      },
+      { // 2 - this sub-step's button
+        targets: sel('#vftNav_step3', 4),
+        look: true
+      },
+      { // 3 - the threshold slider, down to 8
+        targets: function () {
+          var box = aoiSliderBox();
+          var r = shown(box) && elRect(box, 4);
+          return r ? [{ key: 'aoiThreshold', rect: r, hit: [box] }] : [];
+        },
+        enter: watchAoiThreshold,
+        advance: flagged
+      },
+      { // 4 - the map, once it has redrawn for the new threshold
+        targets: sel('#step3-AOIMap'),
+        hold: aoiMapRedrawing,
+        look: true
+      },
+      { // 5 - confirm. The tour ends with the tap, and step 4's tour follows
+        // if it has one. Confirming over later steps' work first asks whether
+        // to discard it: that modal takes taps too.
+        targets: sel('#step3-confirmButton3'),
+        enter: watchClick('#step3-confirmButton3'),
+        advance: flagged,
+        pass: '#shiny-modal'
       }
     ]
   };
@@ -560,10 +850,11 @@
     c.setAttribute('data-lang-windows', px(lang));
   }
 
-  // Taps go through a window, but not in a hint that is only to read, and
-  // only onto the window's own target (el: the element tapped)
+  // Taps go through a window, but not in a hint that is only to read (unless
+  // it is live), and only onto the window's own target (el: the element tapped)
   function inWindow(x, y, el) {
-    if (state.pause || hints()[state.idx].look) { return false; }
+    var step = hints()[state.idx];
+    if (state.pause || (step.look && !step.live)) { return false; }
     return state.wins.some(function (w) {
       if (!contains(w.cur, x, y) && !contains(w.goal, x, y)) { return false; }
       return !w.hit || w.hit.some(function (h) { return !!h && !!el && h.contains(el); });

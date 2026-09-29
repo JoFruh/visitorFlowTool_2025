@@ -36,10 +36,10 @@
 #' (`vftTutorialKey()`): `step1`..`step5`, `newVersions`, or `hitze` for the
 #' Hitzeminderung door, which is the newVersions tab on another context and so
 #' needs a tour of its own.
-VFT_TUTORIAL_TOURS <- c("step1")
+VFT_TUTORIAL_TOURS <- c("step1", "step3")
 
 #' How many hints each tour has; its texts are `:tut_<key>_1:` .. `_<n>:`.
-VFT_TUTORIAL_HINTS <- c(step1 = 6L)
+VFT_TUTORIAL_HINTS <- c(step1 = 6L, step3 = 5L)
 
 #' English stand-ins for a translation row that has not been added yet.
 #'
@@ -48,8 +48,10 @@ VFT_TUTORIAL_HINTS <- c(step1 = 6L)
 #' ":tut_step1_3:" on screen. English rather than German because English is
 #' what the tour was written in. The CSVs carry all three languages.
 #'
-#' Step texts may use `<br>`, `<b>` (teal) and `<em>` (bold, one size larger) -
-#' see inst/app/www/vft-tutorial.css.
+#' Step texts may use `<br>`, `<b>` (teal), `<em>` (bold, one size larger) and
+#' `<em class=vftTutAoi>` (the same, in the areas of interest's green) - see
+#' inst/app/www/vft-tutorial.css. The class is left unquoted: the CSV reader
+#' drops a `"` inside a field, so a quoted one would not match the fallback.
 VFT_TUTORIAL_FALLBACK <- list(
   ":tut_step1_1:" = "Welcome to Visitor Flow Tool.<br>Here you can quickly and easily explore the impacts of planning on biodiversity and heat mitigation, <em>anywhere in Switzerland</em>.<br>Let's explore how!",
   ":tut_step1_2:" = "You can upload shapefiles or a .kml file to determine your area of interest.",
@@ -57,6 +59,11 @@ VFT_TUTORIAL_FALLBACK <- list(
   ":tut_step1_4:" = "Now that we have an area, we can hit <b>Confirm</b> to finish this step.",
   ":tut_step1_5:" = "There are now various stages you can choose from, depending on your interests.<br>Choose the one you're interested in!",
   ":tut_step1_6:" = "The tutorial will continue to your chosen next step.<br>If you interrupt the tutorial, you can restart it at any step you wish.<br>Simply click the help button on that step!",
+  ":tut_step3_1:" = "To simulate recreation, we first need to specify <em class=vftTutAoi>Areas of Interest</em>.<br>These are the areas recreationists go to, to recreate.<br>For example: parks, forests, lakesides.",
+  ":tut_step3_2:" = "In this sub-step, we quickly define Areas of Interest by sliding a bar.",
+  ":tut_step3_3:" = "Slide the bar to the value of <b>8</b>.",
+  ":tut_step3_4:" = "Now all areas with an attractivity above 8 are Areas of Interest.",
+  ":tut_step3_5:" = "<b>Confirm</b> to go to the next sub-step and precisely edit the Areas of Interest.",
   ":tut_next:"       = "Next",
   ":tut_stop:"       = "Stop tutorial",
   ":tut_offer:"      = "New here? Take a short guided tour.",
