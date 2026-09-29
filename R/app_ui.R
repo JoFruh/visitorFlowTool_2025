@@ -27,6 +27,12 @@ app_ui <- function(){
   #to each map by vftPolyDraw() - see R/polydraw_helpers.R.
   shiny::tags$script(src = "www/polydraw.js"),
 
+  #The guided tutorial: a dim over the page with windows cut into it, one tour
+  #per step, played entirely in the browser. R sends it its texts and raises
+  #the help button's tutorial modal - see R/tutorial.R.
+  shiny::tags$link(rel = "stylesheet", href = "www/vft-tutorial.css"),
+  shiny::tags$script(src = "www/vft-tutorial.js"),
+
   #A queued progress bar goes red and shows the RUNNING job's percentage instead
   #of its own, so the user can see they are waiting and roughly for how long. The
   #class is toggled on one bar at a time rather than restyled globally, because a

@@ -59,6 +59,11 @@ app_server <- function(input, output, session){
   #See R/navigation.R.
   vftLangServer(r, i18n, input, session)
 
+  #the guided tutorial's texts, sent to the browser in the current language.
+  #The tours themselves run in inst/app/www/vft-tutorial.js; the help button's
+  #tutorial modal is raised from vftNavBannerProxyServer(). See R/tutorial.R.
+  vftTutorialServer(r, session)
+
   #the lazy data layer: one observe that derives whatever a step is about to
   #need, and completes a navigation that was waiting for it. Nothing is computed
   #because of where the user has been, only because something is about to read

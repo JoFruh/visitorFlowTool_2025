@@ -86,7 +86,15 @@ vftNavBannerProxyServer <- function(r, input, session = shiny::getDefaultReactiv
                              selected = input$languageSelect)
   }, ignoreInit = TRUE)
 
+  #A step with a guided tour answers the help button with the tour's offer
+  #instead of its own help modal (R/tutorial.R). The others still get theirs,
+  #until their tour is written.
   shiny::observeEvent(input$helpButton, {
+    key <- vftTutorialKey(r)
+    if(key %in% VFT_TUTORIAL_TOURS){
+      vftTutorialModal(session, key, lang = shiny::isolate(r$currentLang))
+      return(invisible(NULL))
+    }
     step <- current()
     shinyjs::click(id = shiny::NS(step, VFT_BANNER_PROXY[[step]]$help))
   }, ignoreInit = TRUE)

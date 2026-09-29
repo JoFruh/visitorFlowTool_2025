@@ -1,0 +1,347 @@
+/* ------------------------------------------------------------------ *
+ * Guided tutorial (vft-tutorial.js), ported from FRISCH's.
+ *
+ * Everything that sets how the tutorial looks is one of the variables
+ * below - the dim, the window outline, and the text card with its buttons.
+ * The hint texts come from the translation CSVs (keys :tut_<step>_<n>:, see
+ * R/tutorial.R) and may use
+ *   <br>   a new line
+ *   <b>    an emphasised word, in the app's teal
+ *   <em>   a word in bold, one size larger, in the text's own colour
+ * ------------------------------------------------------------------ */
+
+:root {
+  /* the layer over the app: grey, 75 % transparent */
+  --vftTut-dim: rgba(60, 60, 60, 0.35);
+
+  /* the outline drawn around each window */
+  --vftTut-ring: rgba(255, 255, 255, 0.95);
+  --vftTut-ring-width: 2.5px;
+
+  /* the app's teal, for the emphasised words and the buttons */
+  --vftTut-accent: #006268;
+  --vftTut-accent-text: #ffffff;
+
+  /* the text card */
+  --vftTut-card-bg: #ffffff;
+  --vftTut-card-text: #1f2a2b;
+  --vftTut-card-muted: #6b7677;
+  --vftTut-card-width: 380px;
+  --vftTut-card-wide: 600px;
+  --vftTut-card-radius: 12px;
+  --vftTut-card-padding: 12px 16px 10px 16px;
+  --vftTut-card-shadow: 0 6px 24px rgba(0, 0, 0, 0.28);
+  --vftTut-caret-size: 9px;
+
+  /* the text itself */
+  --vftTut-font-family: 'FranklinGFB', 'FranklinGothic', 'Franklin Gothic Book',
+                        'Libre Franklin', Arial, sans-serif;
+  --vftTut-font-size: 17px;
+  --vftTut-font-weight: 500;
+  --vftTut-line-height: 1.4;
+  --vftTut-emph-weight: 700;
+  --vftTut-em-size: larger;
+
+  /* the Next button of a hint to read */
+  --vftTut-next-size: 15px;
+
+  /* the hint counter ("2 / 6") and the Stop button */
+  --vftTut-small-size: 12px;
+
+  /* above the modals (1050) and the nav bar, under nothing */
+  --vftTut-z: 3000;
+}
+
+/* the layer itself takes no taps: vft-tutorial.js filters them, letting
+   through only those inside a window or on the card */
+.vftTutorial {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: var(--vftTut-z);
+  pointer-events: none;
+}
+
+.vftTutorialCanvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* ---- the text card ---- */
+
+.vftTutorialBox {
+  position: fixed;
+  left: 0;
+  top: 0;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: min(var(--vftTut-card-width), calc(100vw - 32px));
+  padding: var(--vftTut-card-padding);
+  background: var(--vftTut-card-bg);
+  color: var(--vftTut-card-text);
+  border-radius: var(--vftTut-card-radius);
+  box-shadow: var(--vftTut-card-shadow);
+  font-family: var(--vftTut-font-family);
+  pointer-events: auto;
+  transition: opacity 0.2s ease-out;
+}
+
+/* a hint with little height to spare (step 1's drawing hint, above the map) */
+.vftTutorialBox.vftTutorialWide {
+  max-width: min(var(--vftTut-card-wide), calc(100vw - 32px));
+}
+
+/* after its first placement the card glides to the next one */
+.vftTutorialBox.vftTutorialPlaced {
+  transition: opacity 0.2s ease-out, left 0.3s ease-out, top 0.3s ease-out;
+}
+
+/* between hints, and while the map moves: only the dim */
+.vftTutorialQuiet .vftTutorialBox {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* the caret, pointing at the windows; --vftTut-caret-x is set by the script */
+.vftTutorialBox::after {
+  content: "";
+  position: absolute;
+  left: var(--vftTut-caret-x, 50%);
+  width: 0;
+  height: 0;
+  margin-left: calc(-1 * var(--vftTut-caret-size));
+  border: var(--vftTut-caret-size) solid transparent;
+}
+
+.vftTutorialBox[data-side="above"]::after {
+  top: 100%;
+  border-top-color: var(--vftTut-card-bg);
+  border-bottom-width: 0;
+}
+
+.vftTutorialBox[data-side="below"]::after {
+  bottom: 100%;
+  border-bottom-color: var(--vftTut-card-bg);
+  border-top-width: 0;
+}
+
+.vftTutorialBox[data-side="none"]::after {
+  display: none;
+}
+
+.vftTutorialCount {
+  font-size: var(--vftTut-small-size);
+  color: var(--vftTut-card-muted);
+  line-height: 1;
+  margin-bottom: 6px;
+}
+
+.vftTutorialText {
+  font-size: var(--vftTut-font-size);
+  font-weight: var(--vftTut-font-weight);
+  line-height: var(--vftTut-line-height);
+  overflow-wrap: break-word;
+}
+
+.vftTutorialText b,
+.vftTutorialText strong {
+  font-weight: var(--vftTut-emph-weight);
+  color: var(--vftTut-accent);
+}
+
+.vftTutorialText em {
+  font-style: normal;
+  font-weight: var(--vftTut-emph-weight);
+  font-size: var(--vftTut-em-size);
+}
+
+.vftTutorialCentered .vftTutorialText {
+  text-align: center;
+}
+
+.vftTutorialActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.vftTutorialStop {
+  margin: 0 -6px -4px 0;
+  padding: 4px 6px;
+  border: 0;
+  background: none;
+  color: var(--vftTut-card-muted);
+  font-size: var(--vftTut-small-size);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.vftTutorialStop:hover,
+.vftTutorialStop:focus-visible {
+  color: var(--vftTut-card-text);
+}
+
+/* Next, on a hint that is only to read: a teal play triangle */
+.vftTutorialNext {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 12px 5px 14px;
+  border: 1.5px solid var(--vftTut-accent);
+  border-radius: 999px;
+  background: var(--vftTut-card-bg);
+  color: var(--vftTut-accent);
+  font-size: var(--vftTut-next-size);
+  font-weight: 700;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.vftTutorialNext:hover,
+.vftTutorialNext:focus-visible {
+  background: var(--vftTut-accent);
+  color: var(--vftTut-accent-text);
+}
+
+.vftTutorialPlay {
+  width: 10px;
+  height: 12px;
+  fill: var(--vftTut-accent);
+}
+
+.vftTutorialNext:hover .vftTutorialPlay,
+.vftTutorialNext:focus-visible .vftTutorialPlay {
+  fill: var(--vftTut-accent-text);
+}
+
+/* three dots while the hint waits for something to happen (the confirm) */
+.vftTutorialDots {
+  display: none;
+  margin-right: auto;
+  gap: 4px;
+}
+
+.vftTutorialWaiting .vftTutorialDots {
+  display: inline-flex;
+}
+
+.vftTutorialDots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--vftTut-accent);
+  animation: vftTutDot 1s infinite ease-in-out;
+}
+
+.vftTutorialDots i:nth-child(2) { animation-delay: 0.15s; }
+.vftTutorialDots i:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes vftTutDot {
+  0%, 80%, 100% { opacity: 0.25; }
+  40% { opacity: 1; }
+}
+
+/* ---- the bubble offering the tour on the first visit ---- */
+
+/* teal like the next-step modal, under the help button with its caret
+   pointing at it (placed by the script). It pops in out of the caret's tip:
+   grows past its size, then settles on it */
+.vftTutorialOffer {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: var(--vftTut-z);
+  box-sizing: border-box;
+  width: max-content;
+  max-width: min(320px, calc(100vw - 32px));
+  padding: 22px 24px 20px 24px;
+  background: var(--vftTut-accent);
+  color: var(--vftTut-accent-text);
+  border-radius: 20px;
+  box-shadow: var(--vftTut-card-shadow);
+  font-family: var(--vftTut-font-family);
+  text-align: center;
+  animation: vftTutOfferPop 0.46s ease-out;
+}
+
+.vftTutorialOffer::after {
+  content: "";
+  position: absolute;
+  bottom: 100%;
+  left: var(--vftTut-caret-x, 50%);
+  width: 0;
+  height: 0;
+  margin-left: calc(-1 * var(--vftTut-caret-size));
+  border: var(--vftTut-caret-size) solid transparent;
+  border-top-width: 0;
+  border-bottom-color: var(--vftTut-accent);
+}
+
+@keyframes vftTutOfferPop {
+  0%   { transform: scale(0.2); opacity: 0; }
+  56%  { transform: scale(1.12); opacity: 1; }
+  100% { transform: scale(1); }
+}
+
+.vftTutorialOfferText {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.35;
+  margin-bottom: 16px;
+}
+
+.vftTutorialOfferClose {
+  position: absolute;
+  top: 2px;
+  right: 6px;
+  padding: 2px 6px;
+  border: 0;
+  background: none;
+  color: var(--vftTut-accent-text);
+  font-size: 22px;
+  line-height: 1;
+  opacity: 0.75;
+  cursor: pointer;
+}
+
+.vftTutorialOfferClose:hover,
+.vftTutorialOfferClose:focus-visible {
+  opacity: 1;
+}
+
+/* ---- the start button: in the bubble, and in the help button's modal ---- */
+
+/* both sit on teal, so the button is its inverse */
+.vftTutorialStartBtn,
+.vftTutorialStartBtn:hover,
+.vftTutorialStartBtn:focus {
+  background-color: var(--vftTut-accent-text);
+  color: var(--vftTut-accent);
+  border: 0;
+  border-radius: 999px;
+  padding: 9px 26px;
+  font-size: 18px;
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+.vftTutorialStartBtn:hover,
+.vftTutorialStartBtn:focus-visible {
+  outline: 3px solid var(--vftTut-accent-text);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vftTutorialBox,
+  .vftTutorialBox.vftTutorialPlaced { transition: none; }
+  .vftTutorialOffer { animation: none; }
+  .vftTutorialDots i { animation: none; opacity: 0.8; }
+}
