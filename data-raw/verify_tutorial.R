@@ -104,7 +104,37 @@ if (!nzchar(tables) || !dir.exists(tables)) {
      !any(unlist(s2[c("de", "fr")]) %in% unlist(VFT_TUTORIAL_FALLBACK)))
   ok("step 2: the step's name and 'Amphibians' teal and larger (<b><em>)",
      all(vapply(s2, function(s) all(grepl("<b><em>.+</em></b>", s[c(1, 4)])), NA)))
+  nv <- lapply(pay, function(p) as.character(p$tours$newVersions))
+  ok("newVersions: nineteen translated strings in every language",
+     all(vapply(nv, function(s) length(s) == 19 && all(nzchar(s)) && !any(grepl("^:.*:$", s)), NA)) &&
+     !any(unlist(nv[c("de", "fr")]) %in% unlist(VFT_TUTORIAL_FALLBACK)))
+  ok("newVersions: the classes of its terms and icons survive the CSV",
+     all(vapply(nv, function(s) grepl("<em class=vftTutDelete>", s[9]) &&
+                  grepl("<i class=vftTutNode></i>", s[11]) &&
+                  grepl("<i class=vftTutNodeSel></i>", s[14]) &&
+                  grepl("<em class=vftTutResidence>.+<em class=vftTutParking>", s[17]) &&
+                  grepl("<em class=vftTutNew>", s[18]), NA)))
+  ok("the heat mitigation hint (toHitze) is there in every language",
+     all(vapply(pay, function(p) grepl("<em class=vftTutHeat>", p$tours$toHitze[1]), NA)) &&
+     length(unique(vapply(pay, function(p) p$tours$toHitze[1], ""))) == 3)
+  hz <- lapply(pay, function(p) as.character(p$tours$hitze))
+  ok("hitze: eighteen translated strings in every language",
+     all(vapply(hz, function(s) length(s) == 18 && all(nzchar(s)) && !any(grepl("^:.*:$", s)), NA)) &&
+     !any(unlist(hz[c("de", "fr")]) %in% unlist(VFT_TUTORIAL_FALLBACK)))
+  ok("hitze: the classes of its materials and tools survive the CSV",
+     all(vapply(hz, function(s) grepl("<em class=vftTutGrass>", s[3]) &&
+                  all(grepl("<em class=vftTutTree>", s[6:7])) &&
+                  grepl("<em class=vftTutBlack>.+<em class=vftTutBlack>", s[15]) &&
+                  grepl("<em class=vftTutBlack>", s[16]) &&
+                  grepl("<b><em>.+</em></b>", s[17]), NA)))
+  ok("hitze: the plan's Next button by the name the import gives it",
+     all(mapply(function(s, lg) grepl(sprintf("<em>%s</em>", i18n$get_translations()["Weiter", lg]), s[17]),
+                hz, names(hz))))
 }
+ok("the plan the heat mitigation tour hands over is in www",
+   file.exists(file.path(dirname(R), "inst/app/www/vft-tutorial-plan.png")))
+ok("...and the JS asks for it by that name",
+   any(grepl("www/vft-tutorial-plan.png", readLines(js, encoding = "UTF-8"), fixed = TRUE)))
 
 cat("\n=== 4. a missing row falls back, it never shows a key ===\n")
 bare <- list(userData = list(vftI18n = NULL))
@@ -145,8 +175,12 @@ testServer(function(input, output, session) {
      identical(modals, c("step1", "step2")) && length(clicks) == 0)
   session$userData$r$navStep <- "newVersions"
   session$setInputs(helpButton = 3)
-  ok("on Neue Versionen (no tour yet) it still opens the page's own help",
-     identical(modals, c("step1", "step2")) && identical(clicks, "newVersions-helpButton6"),
+  ok("on Neue Versionen it raises the scenarios page's tutorial modal",
+     identical(modals, c("step1", "step2", "newVersions")) && length(clicks) == 0)
+  session$userData$r$navContext <- "4"
+  session$setInputs(helpButton = 4)
+  ok("behind the Hitzeminderung door it raises the heat mitigation tour's modal",
+     identical(modals, c("step1", "step2", "newVersions", "hitze")) && length(clicks) == 0,
      paste(clicks, collapse = ","))
 })
 utils::assignInNamespace("click", realClick, "shinyjs")

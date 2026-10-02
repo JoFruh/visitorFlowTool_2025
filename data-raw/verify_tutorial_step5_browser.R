@@ -256,6 +256,10 @@ clickEl("#step5-newVersionsButton")
 ok("the tap ends the tour", waitFor("!document.getElementById('vftTutorial')", 5))
 ok("...stored as done", identical(stored(), "done"))
 ok("...and the app moves on to the scenarios", waitFor(ringIs("vftNav_newVersions"), 120))
+#its own tour (data-raw/verify_tutorial_newVersions_browser.R) follows there;
+#stopped at once, this check is about step 5's
+ok("...where the scenarios page's tour follows", waitFor(atHint(1, "newVersions"), 240))
+invisible(js("document.querySelector('.vftTutorialStop').click()"))
 
 cat("\n=== 10. again with two scenarios: hints 9b and 10 ===\n")
 #the page seeds its default "Neu" scenario as it opens

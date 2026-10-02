@@ -13,6 +13,16 @@
  *   <b><em>   teal and one size larger (a teal button's name: confirm)
  *   <em class=vftTutGrey>   dark grey and one size larger (reset)
  *   <i class=vftTutScissors></i>   step 4's scissors button, as an icon
+ *   <em class=vftTutDelete>, vftTutParking, vftTutResidence   the same, in
+ *          the colour of the scenarios page's delete / parking / residential
+ *          button
+ *   <em class=vftTutNew>   the seeded scenario's name: light grey, italic
+ *   <em class=vftTutHeat>   heat mitigation, dark red
+ *   <em class=vftTutGrass>, vftTutTree   a paint material's name, in the
+ *          colour it paints (grass, tree)
+ *   <em class=vftTutBlack>   a tool's name, in black (eraser, reset, plan)
+ *   <i class=vftTutNode></i>, <i class=vftTutNodeSel></i>   a node of the
+ *          path network, and the selected one, as the map draws them
  * ------------------------------------------------------------------ */
 
 :root {
@@ -32,6 +42,15 @@
   --vftTut-bio: #8b0000;
   /* a secondary button's name (reset): the dark grey of its label */
   --vftTut-grey: #4a4f4e;
+  /* the scenarios page's buttons: delete a path, parking, residential */
+  --vftTut-delete: #ed3737;
+  --vftTut-parking: #1127b8;
+  --vftTut-residence: #ba8e16;
+  /* the seeded scenario's provisional name (versionLabel(): grey, italic) */
+  --vftTut-new: #9a9a9a;
+  /* paint materials, as PAINT_CATEGORIES has them (R/paintbrush_helpers.R) */
+  --vftTut-grass: lightgreen;
+  --vftTut-tree: #004200;
 
   /* the text card */
   --vftTut-card-bg: #ffffff;
@@ -201,6 +220,55 @@
   border: 2px solid var(--vftTut-bio);
   border-radius: 50%;
   background: #ffffff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238b0000' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='6' cy='6' r='3'/%3E%3Ccircle cx='6' cy='18' r='3'/%3E%3Cpath d='M20 4 8.1 15.9'/%3E%3Cpath d='M14.5 14.5 20 20'/%3E%3Cpath d='M8.1 8.1 12 12'/%3E%3C/svg%3E") center / 62% no-repeat;
+}
+
+/* the scenarios page's terms, each in its button's (or label's) colour */
+.vftTutorialText .vftTutDelete { color: var(--vftTut-delete); }
+.vftTutorialText .vftTutParking { color: var(--vftTut-parking); }
+.vftTutorialText .vftTutResidence { color: var(--vftTut-residence); }
+.vftTutorialText .vftTutHeat { color: var(--vftTut-bio); }
+.vftTutorialText .vftTutGrass { color: var(--vftTut-grass); }
+.vftTutorialText .vftTutTree { color: var(--vftTut-tree); }
+.vftTutorialText .vftTutBlack { color: #000000; }
+.vftTutorialText .vftTutNew {
+  color: var(--vftTut-new);
+  font-style: italic;
+}
+
+/* <i class="vftTutNode"></i>: a node as the map draws it - white, grey rim */
+.vftTutorialText .vftTutNode {
+  display: inline-block;
+  box-sizing: border-box;
+  width: 0.8em;
+  height: 0.8em;
+  margin: 0 0.1em;
+  vertical-align: -0.05em;
+  border: 1.5px solid #808080;
+  border-radius: 50%;
+  background: #ffffff;
+}
+
+/* <i class="vftTutNodeSel"></i>: the selected node, the map's own icon */
+.vftTutorialText .vftTutNodeSel {
+  display: inline-block;
+  width: 1.1em;
+  height: 1.1em;
+  margin: 0 0.1em;
+  vertical-align: -0.2em;
+  background: url("selectedNode.png") center / contain no-repeat;
+}
+
+/* A modal the scenarios page opens over its map (a path's qualities, a new
+   path's) moves to the right edge while its hint is on, off the path it is
+   about, and its backdrop all but goes: the tutorial's dim already does that
+   job, and the window on the path would show it darkened. */
+body.vftTutModalAside #shiny-modal .modal-dialog {
+  margin-left: auto;
+  margin-right: 16px;
+}
+
+body.vftTutModalAside .modal-backdrop.in {
+  opacity: 0.1;
 }
 
 .vftTutorialCentered .vftTutorialText {

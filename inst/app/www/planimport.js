@@ -1376,6 +1376,9 @@
       return;
     }
     H.on("cancel", function () { cancel(); });
+    //the guided tutorial starts an import with a plan of its own, in place of
+    //the file picker (givePlan() in vft-tutorial.js)
+    window.__vftPlanImportStart = start;
 
     Shiny.addCustomMessageHandler("plan-import-labels", function (msg) {
       labels = Object.assign({}, L_, msg || {});

@@ -36,10 +36,19 @@
 #' (`vftTutorialKey()`): `step1`..`step5`, `newVersions`, or `hitze` for the
 #' Hitzeminderung door, which is the newVersions tab on another context and so
 #' needs a tour of its own.
-VFT_TUTORIAL_TOURS <- c("step1", "step2", "step3", "step4", "step5")
+#'
+#' `toHitze` is no page's: it is the one hint step 5 plays when the user comes
+#' back from the newVersions tour (the JS's `NEXT`), pointing on to
+#' Hitzeminderung. It is listed so its text is sent; no ring key matches it, so
+#' no help button offers it.
+VFT_TUTORIAL_TOURS <- c("step1", "step2", "step3", "step4", "step5", "newVersions", "toHitze",
+                        "hitze")
 
-#' How many hints each tour has; its texts are `:tut_<key>_1:` .. `_<n>:`.
-VFT_TUTORIAL_HINTS <- c(step1 = 6L, step2 = 13L, step3 = 5L, step4 = 5L, step5 = 10L)
+#' How many hints of its own each tour has; its texts are `:tut_<key>_1:` ..
+#' `_<n>:`. `hitze` also plays three of the scenarios page's hints, with their
+#' texts, when there is no scenario to paint on (`borrowed()` in the JS).
+VFT_TUTORIAL_HINTS <- c(step1 = 6L, step2 = 13L, step3 = 5L, step4 = 5L, step5 = 10L,
+                        newVersions = 19L, toHitze = 1L, hitze = 18L)
 
 #' The alternative texts of hints that change with the app - a hint's
 #' `variant()` in the JS picks one as the hint starts. `"6b"` is hint 6's
@@ -56,8 +65,16 @@ VFT_TUTORIAL_VARIANTS <- list(step5 = c("6b", "9b"))
 #' Step texts may use `<br>`, `<b>` (teal), `<em>` (bold, one size larger) and
 #' `<em class=vftTutAoi>` (the same, in the areas of interest's green),
 #' `<em class=vftTutBio>` (the same, in the biodiversity sensitivity's dark red),
-#' `<em class=vftTutGrey>` (the same, dark grey: the reset button) and
-#' `<i class=vftTutScissors></i>` (step 4's scissors button) - see
+#' `<em class=vftTutGrey>` (the same, dark grey: the reset button, the
+#' Original scenario), `<em class=vftTutDelete>`, `vftTutParking`,
+#' `vftTutResidence` (the scenarios page's red, blue and ochre buttons),
+#' `<em class=vftTutNew>` (the seeded scenario's grey italic name),
+#' `<em class=vftTutHeat>` (heat mitigation, dark red),
+#' `<em class=vftTutGrass>`, `<em class=vftTutTree>` (a paint material, in its
+#' paint's colour), `<em class=vftTutBlack>` (a tool's name, black),
+#' `<i class=vftTutScissors></i>` (step 4's scissors button) and
+#' `<i class=vftTutNode></i>` / `<i class=vftTutNodeSel></i>` (a path network
+#' node, and the selected one) - see
 #' inst/app/www/vft-tutorial.css. `<b><em>` is teal and one size larger. The
 #' class is left unquoted: the CSV reader drops a `"` inside a field, so a
 #' quoted one would not match the fallback.
@@ -103,6 +120,44 @@ VFT_TUTORIAL_FALLBACK <- list(
   ":tut_step5_9:" = "You only have the original scenario for now.<br>Let's create a new one!",
   ":tut_step5_9b:" = "Select another scenario here.",
   ":tut_step5_10:" = "Now you can launch a new simulation!",
+  ":tut_newVersions_1:"  = "Here we can create new <b><em>Scenarios</em></b>.<br>Which we can then use in the Simulations.",
+  ":tut_newVersions_2:"  = "To change anything, we first need to create a new <b><em>Scenario</em></b>.<br>We cannot alter the <em class=vftTutGrey>Original</em> scenario.",
+  ":tut_newVersions_3:"  = "Submit a name for the new scenario.",
+  ":tut_newVersions_4:"  = "To change anything, we first need to select a new <b><em>Scenario</em></b>.<br>We cannot alter the <em class=vftTutGrey>Original</em> scenario.",
+  ":tut_newVersions_5:"  = "We can alter many different components through the different contexts here.",
+  ":tut_newVersions_6:"  = "In the Paths/Roads context, we can see all paths, their qualities and their intersections (nodes).<br>The legend explains it all.",
+  ":tut_newVersions_7:"  = "You can click on a path to either remove it, or change its qualities.<br>Click on any path.",
+  ":tut_newVersions_8:"  = "You can now see the path's qualities and change them.",
+  ":tut_newVersions_9:"  = "We can also <em class=vftTutDelete>delete</em> the path.<br>Click the button.",
+  ":tut_newVersions_10:" = "You will notice the path is now gone.",
+  ":tut_newVersions_11:" = "You can also select nodes <i class=vftTutNode></i>.<br>Select one by clicking on it.",
+  ":tut_newVersions_12:" = "You can create a new path from the selected node <i class=vftTutNodeSel></i>,<br>either by clicking on the map to create a new attached node,<br>or by clicking another existing node to connect them.",
+  ":tut_newVersions_13:" = "As you are creating a new path, you have to determine its qualities.<br>Submit the new path qualities.",
+  ":tut_newVersions_14:" = "You can also delete a node by clicking on the selected node <i class=vftTutNodeSel></i>,<br>all paths connected to the node will also be deleted.<br>Delete a node.",
+  ":tut_newVersions_15:" = "Now let's change the parking spaces and residences.",
+  ":tut_newVersions_16:" = "Simply create a new polygon, as you have done in step 1.",
+  ":tut_newVersions_17:" = "Now choose if the area will be a <em class=vftTutResidence>residence</em>, or a <em class=vftTutParking>parking space</em>.",
+  ":tut_newVersions_18:" = "All these changes are saved in the selected scenarios.<br>A <em class=vftTutNew>New</em> scenario is automatically created on your first visit, but you can change its name.<br>You cannot alter the <em class=vftTutGrey>Original</em> scenario.",
+  ":tut_newVersions_19:" = "Once you've got your new scenarios, you can <b><em>confirm</em></b> them to return to the Simulate Recreation step.",
+  ":tut_toHitze_1:" = "We can now explore the last context: <em class=vftTutHeat>Heat mitigation</em>.",
+  ":tut_hitze_1:"    = "Heat mitigation is another context for building scenarios.<br>However, it also works independently from the Recreation Simulation.",
+  ":tut_hitze_2:"    = "Here we see the main landscape materials mapped.",
+  ":tut_hitze_3:"    = "We can repaint these materials as we wish!<br>Choose the <em class=vftTutGrass>Grass</em> material from your palette.",
+  ":tut_hitze_4:"    = "Now let's paint the new material on the map.<br>Zoom in to be more precise with your brush.",
+  ":tut_hitze_5:"    = "You can paint the ground level, or the canopy (trees, roofs, buildings).<br>You can switch between the two here.",
+  ":tut_hitze_6:"    = "Now let's paint <em class=vftTutTree>trees</em>!",
+  ":tut_hitze_7:"    = "The <em class=vftTutTree>tree</em> material can have different heights.<br>This will affect the projected shade.<br>Choose a height.",
+  ":tut_hitze_8:"    = "Now paint some trees.",
+  ":tut_hitze_9:"    = "Careful! Planting trees on underground structures, such as parking spaces, is not recommended.<br><br>If you insist, you can ignore the element and continue painting.",
+  ":tut_hitze_10:"   = "After altering the map's materials, you can calculate the impact on heat.",
+  ":tut_hitze_11:"   = "This can take a few seconds, as the interaction of different materials and shade, at different scales, are combined into a single map.",
+  ":tut_hitze_12:"   = "We now have a heat map for this scenario. It was calculated at noon.<br><br>We can also calculate it for the morning or the afternoon.",
+  ":tut_hitze_13:"   = "These heat maps are saved to the selected scenario.<br>You can show them again by clicking the icons directly.",
+  ":tut_hitze_14:"   = "Let's now hide the heat map.",
+  ":tut_hitze_15:"   = "Here are the last few useful tools.<br>The <em class=vftTutBlack>Eraser</em> will remove your modifications at precise areas of the map.<br><em class=vftTutBlack>Reset</em> will remove all your modifications on the selected scenario.",
+  ":tut_hitze_16:"   = "<em class=vftTutBlack>Load Existing Plan</em> will allow you to quickly change materials with an existing map/image!<br>For the sake of the tutorial, we will provide the map.",
+  ":tut_hitze_17:"   = "Align the uploaded map to your location and hit <b><em>Next</em></b>.<br>These will not necessarily align as the provided map may not be from this location.",
+  ":tut_hitze_18:"   = "Now you can assign a material to every color of the map.<br>Though most of these will have been done automatically.",
   ":tut_next:"       = "Next",
   ":tut_stop:"       = "Stop tutorial",
   ":tut_offer:"      = "New here? Take a short guided tour.",

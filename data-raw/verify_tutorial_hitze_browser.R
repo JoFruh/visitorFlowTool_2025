@@ -1,0 +1,344 @@
+## Browser check of the heat mitigation tour (inst/app/www/vft-tutorial.js,
+## TOURS.hitze) in the REAL app, in headless Chrome, with real mouse events
+## through the DevTools protocol. Step 1's tour is walked to get there, choosing
+## heat mitigation as the next step, so the tour starts by chaining. Then:
+##   * the tour as most users meet it - the seeded "Neu" scenario is selected -
+##     through the palette (grass, a stroke, the level switch, a tree height, a
+##     stroke over an underground element and its warning), the heat map at two
+##     times of day and its icons, the tools, and the plan import with the
+##     tour's own plan (no file picker) up to Apply;
+##   * with the Original selected: the scenarios page's "select a scenario"
+##     hint is played before the palette, with its own text.
+##
+## Needs the app running with the nav bar on, e.g.
+##   VFT_NAV=1, pkgload::load_all("."), shiny::runApp(system.file("app",
+##   package = "visitorFlowTool"), port = 7781)
+## Run:  Rscript data-raw/verify_tutorial_hitze_browser.R [url]
+args <- commandArgs(trailingOnly = TRUE)
+URL  <- if (length(args)) args[[1]] else Sys.getenv("VFT_URL", "http://127.0.0.1:7781")
+SHOTS <- Sys.getenv("VFT_SHOTS", file.path(tempdir(), "tutorial_hitze_shots"))
+dir.create(SHOTS, showWarnings = FALSE, recursive = TRUE)
+
+fails <- 0
+ok <- function(what, cond, extra = "") {
+  cat(sprintf("%-66s %s %s\n", what, if (isTRUE(cond)) "PASS" else "FAIL", extra))
+  if (!isTRUE(cond)) fails <<- fails + 1
+}
+
+b <- chromote::ChromoteSession$new(width = 1600, height = 1000)
+js <- function(x) b$Runtime$evaluate(x, returnByValue = TRUE)$result$value
+waitFor <- function(expr, secs = 30, step = 0.25) {
+  t0 <- Sys.time()
+  repeat {
+    v <- tryCatch(js(expr), error = function(e) NULL)
+    if (isTRUE(v)) return(TRUE)
+    if (as.numeric(difftime(Sys.time(), t0, units = "secs")) > secs) return(FALSE)
+    Sys.sleep(step)
+  }
+}
+shot <- function(name) {
+  png <- b$Page$captureScreenshot(format = "png")$data
+  writeBin(jsonlite::base64_dec(png), file.path(SHOTS, paste0(name, ".png")))
+}
+mouse <- function(type, x, y, count = 1)
+  b$Input$dispatchMouseEvent(type = type, x = x, y = y, button = "left", clickCount = count)
+move  <- function(x, y) { b$Input$dispatchMouseEvent(type = "mouseMoved", x = x, y = y); Sys.sleep(0.06) }
+click <- function(x, y) {
+  move(x, y); mouse("mousePressed", x, y); mouse("mouseReleased", x, y); Sys.sleep(0.12)
+}
+clickAt <- function(p) { p <- unlist(p); click(p[1], p[2]) }
+centre <- function(sel) js(sprintf(
+  "(function(){ var e = document.querySelector(%s); if(!e) return null;
+     var r = e.getBoundingClientRect(); return [r.left + r.width/2, r.top + r.height/2]; })()",
+  jsonlite::toJSON(sel, auto_unbox = TRUE)))
+clickEl <- function(sel) {
+  p <- centre(sel); if (is.null(p)) return(invisible(FALSE))
+  click(p[[1]], p[[2]]); invisible(TRUE)
+}
+tut    <- function() js("window.vftTutorialState ? vftTutorialState() : null")
+atHint <- function(i, key = "hitze") sprintf("(function(){ var s = vftTutorialState();
+  return s.key === '%s' && s.idx === %d && !s.quiet && !s.pause; })()", key, i - 1)
+still  <- function(i, key = "hitze") isTRUE(js(atHint(i, key)))
+wins   <- function() {
+  w <- js("(function(){ var c = document.querySelector('.vftTutorialCanvas');
+             return c ? c.getAttribute('data-windows') : null; })()")
+  if (is.null(w)) list() else jsonlite::fromJSON(w, simplifyVector = FALSE)
+}
+rectOf <- function(sel) js(sprintf(
+  "(function(){ var e = document.querySelector(%s); if(!e) return null;
+     var r = e.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; })()",
+  jsonlite::toJSON(sel, auto_unbox = TRUE)))
+near <- function(w, r, tol = 12) {
+  if (is.null(w) || is.null(r)) return(FALSE)
+  w <- unlist(w); r <- unlist(r)
+  all(abs(c(w[1] - r[1], w[2] - r[2], (w[1] + w[3]) - (r[1] + r[3]),
+            (w[2] + w[4]) - (r[2] + r[4]))) <= tol)
+}
+inside <- function(w, r, tol = 2) {
+  w <- unlist(w); r <- unlist(r)
+  w[1] >= r[1] - tol && w[2] >= r[2] - tol &&
+    w[1] + w[3] <= r[1] + r[3] + tol && w[2] + w[4] <= r[2] + r[4] + tol
+}
+ringIs <- function(id) sprintf("(function(){ var e = document.querySelector('#vftNav .vft-nav-current');
+                                  return !!e && e.id === '%s'; })()", id)
+hasNext <- function() isTRUE(js("!!document.querySelector('.vftTutorialBox .vftTutorialNext')"))
+nextAndWait <- function(i, key = "hitze") { Sys.sleep(0.4); clickEl(".vftTutorialNext"); waitFor(atHint(i, key), 60) }
+modalUp <- function(id) isTRUE(js(sprintf("jQuery('#%s').is(':visible')", id)))
+text <- function() js("document.querySelector('.vftTutorialBox .vftTutorialText').innerHTML")
+card <- function() unlist(rectOf(".vftTutorialBox"))
+count <- function() tut()$count
+cards <- function() js("Array.from(document.querySelectorAll('#placeholder .vftCard button[id*=versionBtn]')).map(function(b){
+  return b.innerText + (b.classList.contains('selected') && !b.classList.contains('notSelected') ? '*' : ''); }).join(',')")
+pageReady <- function(secs = 180) {
+  ok <- waitFor("(function(){ var a = document.getElementById('newVersions-addVersionButton');
+                   return !!a && !a.disabled && a.offsetParent !== null; })()", secs)
+  Sys.sleep(2); ok
+}
+MAPJS <- "HTMLWidgets.find('#newVersions-versionMap').getMap()"
+
+## the tour's own hints are numbered 1..18; the three it borrows from the
+## scenarios page sit after hint 2
+hz   <- function(k) atHint(if (k >= 3) k + 3 else k)
+win1 <- function() unlist(wins()[[1]])
+stopTour <- function() invisible(js("document.querySelector('.vftTutorialStop') && document.querySelector('.vftTutorialStop').click()"))
+## a short brush stroke, the button held
+stroke <- function(x, y) {
+  move(x, y); mouse("mousePressed", x, y)
+  for (i in 1:12) {
+    b$Input$dispatchMouseEvent(type = "mouseMoved", x = x + 2 * i, y = y + i, button = "left", buttons = 1)
+    Sys.sleep(0.03)
+  }
+  mouse("mouseReleased", x + 24, y + 12)
+}
+UGBOX <- '[id^="shiny-notification-"][id$="ugWarn"]'
+ugUp  <- function() isTRUE(js(sprintf("!!document.querySelector('%s')", UGBOX)))
+heatOn <- "document.getElementById('newVersions-heatSwitch').classList.contains('paintToolActive')"
+## the middles of the underground elements drawn on the map (pane ugPane)
+UG <- sprintf("(function(){ var m = %s, r = m.getContainer().getBoundingClientRect(), out = [];
+  m.eachLayer(function(l){ if (l.options && l.options.pane === 'ugPane' && l.getBounds) {
+    var c = m.latLngToContainerPoint(l.getBounds().getCenter()); out.push([r.left + c.x, r.top + c.y]); } });
+  return out; })()", MAPJS)
+
+invisible(b$Page$navigate(URL))
+ok("the app connects", waitFor("!!(window.Shiny && Shiny.shinyapp && Shiny.shinyapp.isConnected())", 120))
+invisible(js("localStorage.setItem('vft.tutorial.v1', JSON.stringify({status: 'done', at: Date.now()}));
+              localStorage.removeItem('vft.tutorial.done.v1');"))
+invisible(b$Page$reload())
+Sys.sleep(1)
+ok("...again", waitFor("!!(window.Shiny && Shiny.shinyapp && Shiny.shinyapp.isConnected())", 120))
+MAP1 <- "#step1-areaSelectMap"
+invisible(waitFor(sprintf("(function(){ var w = HTMLWidgets.find('%s'); var m = w && w.getMap && w.getMap();
+                            return !!m && !!m._loaded; })()", MAP1), 60))
+Sys.sleep(1.5)
+
+cat("=== 1. to heat mitigation, through step 1's tour ===\n")
+invisible(js("vftTutorialStart('step1')"))
+ok("step 1's tour starts", waitFor(atHint(1, "step1"), 20))
+clickEl(".vftTutorialNext")
+invisible(waitFor(atHint(2, "step1"), 10)); clickEl(".vftTutorialNext")
+invisible(waitFor(atHint(3, "step1"), 15))
+Sys.sleep(0.6)
+mp <- unlist(rectOf(MAP1)); cx <- mp[1] + mp[3] / 2; cy <- mp[2] + mp[4] / 2
+pts <- list(c(cx - 120, cy - 90), c(cx + 120, cy - 90), c(cx, cy + 110))
+for (q in pts) click(q[1], q[2])
+move(cx, cy); move(pts[[1]][1], pts[[1]][2]); click(pts[[1]][1], pts[[1]][2])
+invisible(waitFor(atHint(4, "step1"), 20))
+Sys.sleep(0.6); clickEl("#step1-confirmButton2")
+invisible(waitFor(atHint(5, "step1"), 60))
+Sys.sleep(0.8); clickEl("#vftNextHitze")
+invisible(waitFor(atHint(6, "step1"), 10))
+Sys.sleep(0.6); clickEl(".vftTutorialNext")
+ok("the ring lands on heat mitigation", waitFor(ringIs("vftNav_hitze"), 240))
+
+cat("\n=== 2. hints 1-2: the context, the materials ===\n")
+ok("the heat mitigation tour follows by itself", waitFor(hz(1), 240))
+Sys.sleep(0.8)
+ok("...on the seeded 'Neu', selected", identical(cards(), "Original,Neu*"), cards())
+w <- wins()
+ok("one window, on the heat mitigation context",
+   length(w) == 1 && near(w[[1]], js("(function(){ var l = document.querySelector('#newVersions-contextChoice input[value=\"4\"]').closest('label');
+     var r = l.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; })()"), 8))
+ok("...with a Next button", hasNext())
+ok("the counter leaves out the scenario hints, the tree and the warning: 1 / 16",
+   identical(count(), "1 / 16"), count())
+shot("01_context")
+ok("Next: hint 2", nextAndWait(2)); Sys.sleep(0.6)
+w <- wins(); m <- unlist(rectOf("#newVersions-versionMap"))
+ok("one window, inside the map and most of its height",
+   length(w) == 1 && inside(w[[1]], m) && w[[1]][[4]] > 0.5 * m[4], jsonlite::toJSON(w, auto_unbox = TRUE))
+area <- win1()
+shot("02_materials")
+
+cat("\n=== 3. hints 3-4: grass, and a stroke ===\n")
+ok("Next passes over the scenario hints, to hint 3", nextAndWait(6)); Sys.sleep(0.6)
+ok("one window, on the grass button",
+   length(wins()) == 1 && near(wins()[[1]], rectOf("#newVersions-paintColor_grass"), 8))
+ok("...no Next button", !hasNext())
+ok("'Gras' in its paint's colour", grepl("<em class=\"vftTutGrass\">Gras</em>", text()), text())
+clickEl("#newVersions-paintColor_bush"); Sys.sleep(0.8)
+ok("a tap on another material is swallowed", still(6))
+clickEl("#newVersions-paintColor_grass")
+ok("grass tapped: hint 4", waitFor(hz(4), 20)); Sys.sleep(0.6)
+ok("the window is the area again", near(wins()[[1]], area, 4))
+Sys.sleep(3.5)
+ok("it waits for a stroke", still(7))
+t0 <- Sys.time(); stroke(area[1] + area[3] / 2, area[2] + area[4] * 0.6)
+Sys.sleep(1.2)
+ok("not at once", still(7))
+ok("hint 5 follows the stroke", waitFor(hz(5), 20))
+el <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+ok("...about 3 s after it began (+ the 1 s pause)", el > 3.5 && el < 7, sprintf("%.1f s", el))
+shot("05_level")
+
+cat("\n=== 4. hints 5-8: the canopy, a tree height, trees ===\n")
+ok("one window, on the level switch",
+   near(wins()[[1]], rectOf("#newVersions-paintColorButtonsDiv .paintLevelSwitch"), 8))
+clickEl("#newVersions-paintColorButtonsDiv .paintLevelSwitch")
+ok("switched: the tree is armed with it, so hint 6 is passed over - hint 7", waitFor(hz(7), 20)); Sys.sleep(0.6)
+ok("one window, on the tree's height bar",
+   near(wins()[[1]], rectOf("#newVersions-paintHeightGroup_canopy_tree"), 8))
+ok("'Baum' in the tree's dark green", grepl("<em class=\"vftTutTree\">Baum</em>", text()), text())
+clickEl("#newVersions-paintHeightGroup_canopy_tree .colorBtnSelected"); Sys.sleep(0.8)
+ok("a tap on the height already armed does not count", still(10))
+clickEl("#newVersions-paintHeight_13")
+ok("another height: hint 8", waitFor(hz(8), 20)); Sys.sleep(0.6)
+shot("08_trees")
+ug <- js(UG)
+ok("the area has underground elements on the map", length(ug) > 0, length(ug))
+hit <- FALSE
+for (p in utils::head(ug, 8)) {
+  p <- unlist(p)
+  if (!inside(c(p[1] - 30, p[2] - 30, 60, 60), area)) next
+  stroke(p[1], p[2]); Sys.sleep(0.6)
+  if (ugUp()) { hit <- TRUE; break }
+  if (!still(11)) break
+}
+ok("a stroke over one raises the warning", hit)
+
+cat("\n=== 5. hint 9: the underground warning ===\n")
+ok("hint 9 follows at once", waitFor(hz(9), 8)); Sys.sleep(0.6)
+w <- wins()
+ok("one window, on the warning's ignore button",
+   length(w) == 1 && near(w[[1]], rectOf(paste(UGBOX, "button[onclick]")), 8))
+ok("...with a Next button", hasNext())
+k <- card(); n <- unlist(rectOf(UGBOX))
+ok("the card keeps off the warning", k[2] + k[4] <= n[2] || k[1] + k[3] <= n[1])
+shot("09_underground")
+t0 <- Sys.time(); clickEl(paste(UGBOX, "button[onclick]")); Sys.sleep(1.2)
+ok("the button works through the window (element ignored)", is.null(rectOf(paste(UGBOX, "button[onclick]"))))
+ok("...and the hint stays a moment", still(12))
+ok("hint 10 follows", waitFor(hz(10), 20))
+el <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+ok("...about 3 s after the tap (+ the pause)", el > 3.5 && el < 7, sprintf("%.1f s", el))
+
+cat("\n=== 6. hints 10-14: the heat map ===\n")
+Sys.sleep(0.6)
+ok("the warning was closed: it sat on the heat controls", !ugUp())
+ok("one window, on the heat button",
+   length(wins()) == 1 && near(wins()[[1]], rectOf("#newVersions-heatSwitch"), 8))
+shot("10_heat")
+clickEl("#newVersions-heatSwitch")
+ok("hint 11", waitFor(hz(11), 20)); Sys.sleep(0.6)
+w <- wins()
+ok("one window, on the progress bar",
+   length(w) == 1 && near(w[[1]], rectOf("#shiny-notification-panel .shiny-notification"), 8))
+shot("11_progress")
+ok("the heat map is up: hint 12", waitFor(hz(12), 180)); Sys.sleep(0.6)
+ok("...computed at midday", isTRUE(js("document.querySelector('#newVersions-heatBin input[value=\"midday\"]').checked")))
+ok("one window, on the times of day",
+   near(wins()[[1]], rectOf("#newVersions-heatBin .shiny-options-group"), 8))
+clickEl('#newVersions-heatBin input[value="afternoon"] + span')
+ok("another time of day: hint 13, once its map is in", waitFor(hz(13), 180)); Sys.sleep(0.6)
+strip <- js("(function(){ var e = document.querySelector('#placeholder button.vftHeatCard').closest('.vftCard').querySelector('.vftHeatIcons');
+  var r = e.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; })()")
+ok("one window, on the card's heat icons", length(wins()) == 1 && near(wins()[[1]], strip, 8))
+ok("...two of them lit", js("document.querySelectorAll('#placeholder .vftHeatIcon:not(.vftHeatNone)').length") == 2)
+k <- card(); cd <- unlist(rectOf("#placeholder button.vftHeatCard"))
+ok("the card is under the scenario card, not on it", k[2] >= cd[2] + cd[4])
+ok("...with a Next button", hasNext())
+shot("13_icons")
+ok("Next: hint 14", nextAndWait(17)); Sys.sleep(0.6)
+ok("one window, on the button, now 'Hitze ausblenden'",
+   near(wins()[[1]], rectOf("#newVersions-heatSwitch"), 8) &&
+   grepl("ausblenden", js("document.getElementById('newVersions-heatSwitch').innerText")))
+clickEl("#newVersions-heatSwitch")
+ok("hidden: hint 15", waitFor(hz(15), 20) && !isTRUE(js(heatOn)))
+
+cat("\n=== 7. hints 15-18: the tools, the plan ===\n")
+Sys.sleep(0.6)
+w <- wins()
+ok("two windows, on the eraser and the reset",
+   length(w) == 2 && near(w[[1]], rectOf("#newVersions-paintEraser"), 8) &&
+   near(w[[2]], rectOf("#newVersions-paintReset"), 8))
+ok("both names in black",
+   lengths(regmatches(text(), gregexpr("<em class=\"vftTutBlack\">", text()))) == 2, text())
+clickEl("#newVersions-paintReset"); Sys.sleep(0.8)
+ok("a hint to read: the reset takes no tap", still(18) && hasNext())
+shot("15_tools")
+ok("Next: hint 16", nextAndWait(19)); Sys.sleep(0.6)
+ok("one window, on the plan button", near(wins()[[1]], rectOf("#newVersions-paintImport"), 8))
+invisible(js("window.__picker = 0; document.getElementById('newVersions-planFile').addEventListener('click', function(){ window.__picker++; });"))
+clickEl("#newVersions-paintImport")
+ok("tapped: the tour's plan is being placed - hint 17", waitFor(hz(17), 30)); Sys.sleep(0.6)
+ok("...and no file picker was opened", identical(as.integer(js("window.__picker")), 0L))
+w <- wins()
+ok("two windows: the map, and the box with Next",
+   length(w) == 2 && near(w[[1]], rectOf("#newVersions-versionMap"), 8) &&
+   near(w[[2]], rectOf("#newVersions-planImportPanel .vft-plan-panel"), 8))
+ok("'Weiter' teal and larger", grepl("<b><em>Weiter</em></b>", text()), text())
+k <- card(); fr <- unlist(rectOf(".vft-plan-floating"))
+ok("the card is clear of the plan", k[2] + k[4] <= fr[2] || k[1] >= fr[1] + fr[3], paste(round(k), collapse = " "))
+shot("17_place")
+clickEl("#newVersions-planImportPanel .vft-plan-panel .btn-default"); Sys.sleep(0.6)
+ok("cancel takes no tap", !is.null(rectOf(".vft-plan-floating")) && still(20))
+## drag the plan: the map window takes it
+mx <- fr[1] + fr[3] / 2; my <- fr[2] + fr[4] / 2
+move(mx, my); mouse("mousePressed", mx, my)
+for (i in 1:8) {
+  b$Input$dispatchMouseEvent(type = "mouseMoved", x = mx + 5 * i, y = my, button = "left", buttons = 1)
+  Sys.sleep(0.03)
+}
+mouse("mouseReleased", mx + 40, my); Sys.sleep(0.4)
+ok("the plan can be dragged through the window", unlist(rectOf(".vft-plan-floating"))[1] > fr[1] + 30)
+clickEl("#newVersions-planImportPanel .vft-plan-panel .btn-success")
+ok("Next: the colours - hint 18", waitFor(hz(18), 30)); Sys.sleep(0.6)
+ok("one window, on the colour card", length(wins()) == 1 && near(wins()[[1]], rectOf(".vft-plan-card"), 8))
+rows <- js("Array.from(document.querySelectorAll('.vft-plan-colrow select')).map(function(s){ return s.value; }).join(',')")
+ok("the plan's seven colours, each with a material of its own",
+   identical(sort(strsplit(rows, ",")[[1]]), as.character(c(1:5, 7:8))), rows)
+shot("18_colours")
+clickEl(".vft-plan-card .vft-plan-right > .vft-plan-row .btn-default"); Sys.sleep(0.6)
+ok("back and cancel take no tap", !is.null(rectOf(".vft-plan-card")) && still(21))
+clickEl(".vft-plan-card .vft-plan-right > .vft-plan-row .btn-success")
+ok("Apply ends the tour", waitFor("vftTutorialState().key === null", 20))
+ok("...the plan applied", is.null(rectOf(".vft-plan-card")))
+ok("...and the tour recorded as done", grepl("hitze", js("localStorage.getItem('vft.tutorial.done.v1')")))
+shot("19_end")
+
+cat("\n=== 8. with the Original selected ===\n")
+Sys.sleep(1.5)
+cardRect <- function(i) js(sprintf("(function(){ var r = document.querySelectorAll('#placeholder .vftCard button[id*=versionBtn]')[%d].getBoundingClientRect();
+  return [r.left, r.top, r.width, r.height]; })()", i - 1))
+cr <- unlist(cardRect(1)); click(cr[1] + cr[3] / 2, cr[2] + cr[4] / 3)
+invisible(waitFor("(function(){ var g = document.querySelector('#newVersions-paintColor_grass'); return !!g && g.disabled; })()", 60))
+Sys.sleep(2)
+ok("the Original is selected: the palette is shut", identical(cards(), "Original*,Neu"), cards())
+clickEl("#helpButton")
+ok("the help button offers this page's tour", waitFor("jQuery('#shiny-modal .vftTutorialStartBtn').is(':visible')", 10))
+Sys.sleep(0.6); clickEl("#shiny-modal .vftTutorialStartBtn")
+ok("hint 1", waitFor(hz(1), 30)); Sys.sleep(0.8)
+ok("the counter takes in the 'select a scenario' hint: 1 / 17", identical(count(), "1 / 17"), count())
+ok("Next: hint 2", nextAndWait(2))
+ok("Next: the scenarios page's hint 4", nextAndWait(5)); Sys.sleep(0.6)
+ok("...with its own text ('Original' in grey)", grepl("<em class=\"vftTutGrey\">Original</em>", text()), text())
+ok("one window, on the other scenario's card",
+   length(wins()) == 1 && near(wins()[[1]], cardRect(2), 8))
+shot("20_select")
+cr <- unlist(cardRect(2)); click(cr[1] + cr[3] / 2, cr[2] + cr[4] / 3)
+ok("selected: hint 3, the palette open again", waitFor(hz(3), 60))
+Sys.sleep(0.6)
+ok("...on the grass button", near(wins()[[1]], rectOf("#newVersions-paintColor_grass"), 8))
+stopTour()
+
+cat(sprintf("\n%d check(s) failed (screenshots in %s)\n", fails, SHOTS))
+quit(status = if (fails == 0) 0 else 1)
