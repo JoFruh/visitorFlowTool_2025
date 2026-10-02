@@ -136,19 +136,31 @@ step4_server <- function(id, minThresh, i18n, currentLang,
     }
 
     #' Redraw every area from r$polygonsList.
+    #'
+    #' The walk around a lake (generateAoI2()'s lake-loop pass, `lakeLoop`
+    #' TRUE) is filled blue, every other area green. Two layers in the one
+    #' `eraseable` group, so the eraser - which reads properties$id - does not
+    #' care which. No `lakeLoop` column (the skip path, an older save) or an NA
+    #' (a drawn or merged area) is green.
     .vftDrawAOI <- function(){
       map <- leaflet::leafletProxy(leafletMapID) |>
         leaflet::clearGroup("eraseable")
-      if(inherits(r$polygonsList, "sf") && nrow(r$polygonsList) > 0){
-        map |> leaflet::addGeoJSON(geojson = geojsonsf::sf_geojson(r$polygonsList),
-                                   stroke = TRUE,
-                                   weight = 5,
-                                   color = "black",
-                                   fill = TRUE,
-                                   fillColor = "green",
-                                   opacity = 1,
-                                   group = "eraseable",
-                                   options = leaflet::pathOptions(pane = "layer2"))
+      polys <- r$polygonsList
+      if(inherits(polys, "sf") && nrow(polys) > 0){
+        isLake <- if(is.null(polys$lakeLoop)) rep(FALSE, nrow(polys)) else polys$lakeLoop %in% TRUE
+        for(lake in c(FALSE, TRUE)){
+          sel <- polys[isLake == lake, ]
+          if(nrow(sel) == 0) next
+          map |> leaflet::addGeoJSON(geojson = geojsonsf::sf_geojson(sel),
+                                     stroke = TRUE,
+                                     weight = 5,
+                                     color = "black",
+                                     fill = TRUE,
+                                     fillColor = if(lake) "#1f78b4" else "green",
+                                     opacity = 1,
+                                     group = "eraseable",
+                                     options = leaflet::pathOptions(pane = "layer2"))
+        }
       }
       invisible(map)
     }
@@ -182,6 +194,8 @@ step4_server <- function(id, minThresh, i18n, currentLang,
 
       firstId <- max(polys$id) + 1
       pieces$id <- seq.int(from = firstId, length.out = nrow(pieces))
+      #a piece of a lake area is not the walk around the lake any more
+      if(!is.null(pieces$lakeLoop)) pieces$lakeLoop <- FALSE
       if(nrow(pieces) > 0) pieces <- .vftScoreAOI(pieces)
 
       r$polygonsList <- rbind(polys[-hit, ], pieces[, names(polys)])
@@ -850,6 +864,9 @@ step4_server <- function(id, minThresh, i18n, currentLang,
             DULN_all <- terra::unwrap(DULN_all_wrapped)
 
             progress1$set(1/2)
+            #includes the lake-loop pass (R/lakeLoopAoI.R): it reads the lakes and
+            #the paths near them HERE, in the worker - the path network itself is
+            #not loaded for it. Adds one ~5 s paths read, only when a lake qualifies.
             finalAOI <- generateAoI2(minThresh = minThresh, perimeter = shape,
                                      walkNat = walkNat, DULN_all = DULN_all) #, lake_path = lake_path
             progress1$set(2/2)

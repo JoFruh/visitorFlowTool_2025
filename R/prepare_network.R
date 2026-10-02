@@ -133,6 +133,13 @@ vftPrepareNetwork <- function(network, finalPolygons, minThresh,
                                type = "points", crs = "EPSG:4326")
 
   vertices_AOI_data <- terra::extract(terra::vect(finalPolygons["AOI"]), vertices_vect)
+  #ONE ROW PER VERTEX. A point inside two polygons comes back as two rows (the
+  #first column is the point's index), and every positional read of AOI below
+  #would then be shifted by one from that node on. Step 4 is meant to hand over
+  #disjoint areas - the lake-loop pass in generateAoI2() subtracts its areas from
+  #the others - but per-feature simplification and the 4326 round trip can leave
+  #slivers of overlap, so the first match wins here rather than trusting that.
+  vertices_AOI_data <- vertices_AOI_data[!duplicated(vertices_AOI_data[[1]]), , drop = FALSE]
 
   #add node_DULN data to original nodes
   AOI <- vertices_AOI_data$AOI

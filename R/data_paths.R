@@ -166,6 +166,61 @@ VFT_PA_TOLERANCE_M <- 25
 #' if the outlines ever look wrong.
 VFT_AOI_TOLERANCE_M <- 75
 
+#' Smallest area of interest generateAoI2() keeps, in square metres (10 ha).
+#'
+#' One number for both places that drop small areas: the slivers disagg() makes
+#' out of the thresholded raster, and the remnants and lake areas the lake-loop
+#' pass (vftLakeLoopAoI()) produces. A pond whose walk-around is smaller than
+#' this stays inside the area around it rather than becoming an area of its own.
+VFT_AOI_MIN_AREA_M2 <- 100000
+
+#' The lake-loop pass (R/lakeLoopAoI.R). Visitors treat "the walk around the
+#' lake" as a destination in itself, so a lake that one generated area mostly
+#' covers, and that a path can circle while staying near the shore, gets an area
+#' of its own: the lake plus the loop.
+#'
+#'   VFT_LAKE_LOOP_SHARE     a lake is a candidate when ONE area covers more
+#'                           than this share of it (holes filled first, so an
+#'                           area that rings the lake still counts)
+#'   VFT_LAKE_LOOP_BUFFER_*  the loop must stay within this distance of the
+#'                           area holding the lake (plus the lake) - a swing
+#'                           away from the water through attractive ground is
+#'                           no detour. Grows with the lake - see
+#'                           vftLakeLoopBuffer() below
+#'   VFT_LAKE_LOOP_ENCLOSED  share of the lake the loop must enclose; below 1 so
+#'                           a footbridge across an inlet or a marshy corner
+#'                           does not reject an obvious loop
+#'   VFT_LAKE_LOOP_PAD_M     the lake area is grown by this much so the shore
+#'                           path's nodes fall INSIDE it rather than on its edge
+#'                           - vftPrepareNetwork() assigns nodes by intersection
+VFT_LAKE_LOOP_SHARE    <- 0.5
+VFT_LAKE_LOOP_ENCLOSED <- 0.95
+VFT_LAKE_LOOP_PAD_M    <- 15
+
+#' How far outside the area holding the lake the loop may stray: proportional
+#' to the lake's sqrt(area) - its size as a length - and clamped. Measured from
+#' that area plus the lake, not from the water (see vftLakeLoopAoI()); for a lake
+#' whose holder is little more than the lake, the two are the same thing.
+#'
+#' The reference is a 52 000 m2 lake at 50 m. Taken as a disc that is a 129 m
+#' radius, and 50 m around it makes 100 300 m2 - just over VFT_AOI_MIN_AREA_M2,
+#' so the smallest lake worth a loop can also be an area of its own - and about
+#' 0.8 km of shore, an 8-10 minute walk. Smaller lakes keep the 50 m. The band
+#' grows with the lake up to 200 m, which it reaches at about 83 ha (a 516 m
+#' radius - the same proportion as 50 m to 129 m); past that a detour is not
+#' worth it however large the lake.
+VFT_LAKE_LOOP_BUFFER_MIN_M  <- 50
+VFT_LAKE_LOOP_BUFFER_MAX_M  <- 200
+VFT_LAKE_LOOP_BUFFER_REF_M2 <- 52000
+
+#' The loop band for lakes of `area` square metres (vectorised).
+vftLakeLoopBuffer <- function(area,
+                              minM  = VFT_LAKE_LOOP_BUFFER_MIN_M,
+                              maxM  = VFT_LAKE_LOOP_BUFFER_MAX_M,
+                              refM2 = VFT_LAKE_LOOP_BUFFER_REF_M2){
+  pmin(maxM, pmax(minM, minM * sqrt(area / refM2)))
+}
+
 vftProtectedAreasCached <- function(tolerance = VFT_PA_TOLERANCE_M){
   if(!exists(".vft_PA_simplified", envir = .GlobalEnv)){
     pa <- sf::st_read(vftData("maps/protectedAreas/PA_all.gpkg"), quiet = TRUE)

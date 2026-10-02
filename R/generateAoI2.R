@@ -27,9 +27,15 @@
 #the smallest set of cells or polygons that can still produce the right answer:
 #crop before threshold, simplify before area, area-filter before extraction.
 #The old body did the opposite at each of those three points.
+#
+#`lakeLoop` switches the lake-loop pass (R/lakeLoopAoI.R) on: a lake one area
+#mostly covers, and that a path circles near the shore, becomes an area of its
+#own - the lake plus the loop - subtracted from the others. The output carries a
+#`lakeLoop` column flagging those areas either way.
 generateAoI2 <- function(minThresh, perimeter = NULL,
                          walkNat = NULL, DULN_all = NULL,
-                         tolerance = VFT_AOI_TOLERANCE_M){
+                         tolerance = VFT_AOI_TOLERANCE_M,
+                         lakeLoop = TRUE){
 
   sf::sf_use_s2(TRUE)
 
@@ -98,17 +104,11 @@ generateAoI2 <- function(minThresh, perimeter = NULL,
 
   #the area filter used to sit AFTER the per-polygon extraction loop, so every
   #sliver disagg() produced was extracted at full cost and then thrown away.
-  keep     <- !is.na(area) & area > 100000 & !sf::st_is_empty(geom2056)
+  keep     <- !is.na(area) & area > VFT_AOI_MIN_AREA_M2 & !sf::st_is_empty(geom2056)
   geom2056 <- geom2056[keep]
   area     <- area[keep]
 
-  #back to lon/lat for the extraction below, and for the caller. Spelled as
-  #"epsg:4326" rather than read off DULN_all: both providers crop in 4326
-  #(R/providers.R), every consumer of these polygons assumes it, and terra's own
-  #srs can come back empty on a machine where PROJ_LIB is shadowed.
-  geom <- sf::st_transform(geom2056, "epsg:4326")
-
-  #### 4. the lakes, read ONCE and actually used ####
+  #### 4. the lakes, read ONCE and used twice ####
   #
   #This block used to build `dulnRaster` and never reference it again - the one
   #line that would have (a median of the lake-masked band) was commented out, and
@@ -118,20 +118,44 @@ generateAoI2 <- function(minThresh, perimeter = NULL,
   #handlers use. One read now, used for both: the automatically generated areas
   #and the hand-drawn ones are scored against the same cells, which they were
   #not before.
+  #
+  #Filtered by the BUFFERED perimeter, not the perimeter itself: the areas reach
+  #1000 m past it (block 1), and the lake-loop pass below has to see every lake
+  #they cover. wkt_filter returns each matching lake whole, so a lake straddling
+  #the edge comes in entire. Inside the perimeter the mask is what it was.
   walkNatNoLakes <- walkNat
+  lakeLoopFlag   <- rep(FALSE, length(geom2056))
   if(!is.null(perimeter)){
-    #before extracting values, remove lakes (make them NA)
-    wkt <- sf::st_as_text( sf::st_as_sfc(sf::st_transform(perimeter, "epsg:2056") ) )
-
+    buf2056 <- sf::st_union(sf::st_buffer(
+      sf::st_geometry(sf::st_transform(perimeter, "epsg:2056")), 1000))
     lakes <- sf::st_read( vftData("maps/lakes.gdb"),
                           query = 'SELECT * FROM "lakes"',
-                          wkt_filter = wkt)
-    lakes <- sf::st_transform(lakes[lakes$SHAPE_Area > 10000, ], "epsg:4326")
+                          wkt_filter = sf::st_as_text(buf2056), quiet = TRUE)
+    lakes <- lakes[lakes$SHAPE_Area > 10000, ]
 
+    #### 4b. the walk around a lake is an area of its own ####
+    #See R/lakeLoopAoI.R. Before the extraction below, so block 5 scores the
+    #final set in its one pass, lake areas included - and their lake cells are
+    #NA by then, so a lake area's DULN is its shore and its loop.
+    if(isTRUE(lakeLoop) && nrow(lakes) > 0 && length(geom2056) > 0){
+      ll <- vftLakeLoopAoI(geom2056, sf::st_transform(lakes, "epsg:2056"))
+      geom2056     <- ll$geom
+      lakeLoopFlag <- ll$lakeLoop
+      area         <- as.numeric(sf::st_area(geom2056))
+    }
+
+    #remove lakes from walkNat (make them NA) before extracting values
+    lakes <- sf::st_transform(lakes, "epsg:4326")
     if(nrow(lakes) > 0) walkNatNoLakes[terra::vect(lakes)] <- NA
   }
   #the name every consumer indexes by, kept whatever terra did to it above
   names(walkNatNoLakes) <- "walkNat"
+
+  #back to lon/lat for the extraction below, and for the caller. Spelled as
+  #"epsg:4326" rather than read off DULN_all: both providers crop in 4326
+  #(R/providers.R), every consumer of these polygons assumes it, and terra's own
+  #srs can come back empty on a machine where PROJ_LIB is shadowed.
+  geom <- sf::st_transform(geom2056, "epsg:4326")
 
   #### 5. one extraction for every polygon, not one per polygon ####
   #
@@ -164,7 +188,8 @@ generateAoI2 <- function(minThresh, perimeter = NULL,
     duln <- numeric(0)
   }
 
-  polygons <- sf::st_sf(DULN = duln, area = area, polygons = geom)
+  polygons <- sf::st_sf(DULN = duln, area = area, lakeLoop = lakeLoopFlag,
+                        polygons = geom)
 
   return(list(polygons = polygons, walkNatNoLakes = terra::wrap(walkNatNoLakes)))
 }
