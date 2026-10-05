@@ -208,6 +208,15 @@ vftLakeLoopAoI <- function(geom2056, lakes2056,
   sf::st_transform(sf::st_zm(sf::st_geometry(p)), "epsg:2056")
 }
 
+#' The lakes (over 1 ha) touching `area2056`, read from lakes.gdb, each whole.
+#' Unlike the paths GDB, this layer is filtered by a 2056 WKT.
+.vftReadLakesWithin <- function(area2056){
+  lakes <- sf::st_read(vftData("maps/lakes.gdb"),
+                       query = 'SELECT * FROM "lakes"',
+                       wkt_filter = sf::st_as_text(area2056), quiet = TRUE)
+  lakes[lakes$SHAPE_Area > 10000, ]
+}
+
 #' Drop every interior ring, keep the outer ones.
 .vftFillHoles <- function(g){
   out <- lapply(g, function(p){

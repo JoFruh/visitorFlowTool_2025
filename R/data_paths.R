@@ -174,6 +174,96 @@ VFT_AOI_TOLERANCE_M <- 75
 #' this stays inside the area around it rather than becoming an area of its own.
 VFT_AOI_MIN_AREA_M2 <- 100000
 
+#' Splitting the thresholded raster into destinations (R/aoiSegment.R). Every
+#' high-value core grows out to the threshold; two neighbouring cores are one
+#' area only where the dip between them is shallow and they are connected - a
+#' path crosses between them, or they touch along a wide border rather than a
+#' neck.
+#'
+#'   VFT_AOI_SPLIT              FALSE is the old behaviour exactly: one area per
+#'                              connected run of cells above the threshold
+#'   VFT_AOI_SPLIT_DEPTH        relative dip at or above which two cores stay
+#'                              apart, path or not. The dip is how far the land
+#'                              comes down from the lower core to the pass, as a
+#'                              share of the way from that core down to the
+#'                              threshold: 0 is level, 1 is all the way
+#'   VFT_AOI_SPLIT_NECK_M       a shared border at least this long is no neck:
+#'                              the two merge without a path (if the dip allows).
+#'                              Shorter is a neck, and a neck no path crosses
+#'                              keeps them apart however shallow the dip. 300 m
+#'                              is 3-4 cells of the 73 x 106 m raster. This
+#'                              replaced VFT_AOI_SPLIT_NOISE (a dip below which
+#'                              cores merged without a path): at 0.1 large blocks
+#'                              fell apart along internal borders no path crossed,
+#'                              and at 0.5 - raised to stop that - it merged true
+#'                              necks too
+#'   VFT_AOI_SPLIT_CONTACT      share of EITHER piece's circumference above which
+#'                              a shared border connects the two outright -
+#'                              whatever the dip, whatever the paths. A chunk
+#'                              largely wrapped by its neighbour is part of it;
+#'                              two big forests touching through a neck share a
+#'                              border small against both outlines and stay
+#'                              apart. Circumferences are counted in cell edges
+#'                              like the borders, holes included, and add up
+#'                              (less twice the shared border) as pieces merge
+#'   VFT_AOI_SPLIT_JOIN_M2      a split piece smaller than this (m2) joins the
+#'                              neighbour with the shallowest dip, whatever the
+#'                              paths. 25 ha is ~500 x 500 m. Separate from
+#'                              VFT_AOI_MIN_AREA_M2 (10 ha), which drops ISOLATED
+#'                              areas: the appendices left on large areas were
+#'                              10-50 ha (median ~30-55 ha at filBleu and glatt),
+#'                              so joining only under 10 ha left them standing.
+#'                              A piece with no neighbour is not affected
+#'   VFT_AOI_SPLIT_PATH_STEP_M  the paths are sampled every this many metres to
+#'                              see which borders they cross; well under the
+#'                              73 x 106 m cell, so no crossing is stepped over
+VFT_AOI_SPLIT             <- TRUE
+VFT_AOI_SPLIT_DEPTH       <- 0.5
+VFT_AOI_SPLIT_NECK_M      <- 300
+VFT_AOI_SPLIT_CONTACT     <- 0.2
+VFT_AOI_SPLIT_JOIN_M2     <- 250000
+VFT_AOI_SPLIT_PATH_STEP_M <- 20
+
+#' Which split VFT_AOI_SPLIT runs. Both make a label raster that the rest of
+#' generateAoI2() treats the same way.
+#'
+#'   VFT_AOI_SPLIT_METHOD  "watershed" (R/aoiSegment.R): grow high-value cores of
+#'                         the attractiveness out to the threshold, merge them
+#'                         back by dip and paths. "cut" (R/aoiCut.R): the
+#'                         inverse - take the finished threshold areas and cut
+#'                         them at narrow bridges, by shape alone, no paths
+#'                         read. "cut" is a candidate under comparison
+#'                         (data-raw/compare_aoi_split.R), not the default
+#'   VFT_AOI_CUT_DEPTH     "cut" only: a bridge narrower than (1 - this) x the
+#'                         width of the narrower body it joins is cut. 0.5:
+#'                         cut where the bridge is under half as wide.
+#'                         VFT_AOI_SPLIT_CONTACT and VFT_AOI_SPLIT_JOIN_M2
+#'                         apply to "cut" too
+#'   VFT_AOI_CUT_MAX_BRIDGE_M  "cut" only: a bridge at least this wide (m) is
+#'                         never cut, however narrow against the bodies it
+#'                         joins. Without it two very wide bodies were cut at a
+#'                         ~1 km waist. Inf turns the floor off. Measured over
+#'                         filBleu, glatt, Zuerichberg and Sihlwald at q50/q70,
+#'                         the bridges cut between areas of 100 ha+ are
+#'                         144-577 m wide, plus that waist at 849 m. 700 sits
+#'                         in the gap; 600 and 800 gave the same areas. 500
+#'                         rejoined a 577 m cut the watershed split makes too,
+#'                         and 300 rebuilt a ~4000 ha area at filBleu q50
+#'   VFT_AOI_CUT_LAKES     "cut" only: anchor the lakes (R/aoiCut.R) - a
+#'                         qualifying lake, plus a vftLakeLoopBuffer() band
+#'                         round its water, is the core of an area of its own,
+#'                         which takes the shore land draining to it; the land
+#'                         that strays from it is cut off. Replaces the
+#'                         lake-loop pass (VFT_LAKE_LOOP) for "cut"
+#'   VFT_AOI_LAKE_MIN_M2   a lake qualifies from this size (m2, 10 ha) - and
+#'                         when more than VFT_LAKE_LOOP_SHARE of its cells are
+#'                         above the threshold
+VFT_AOI_SPLIT_METHOD     <- "cut"
+VFT_AOI_CUT_DEPTH        <- 0.5
+VFT_AOI_CUT_MAX_BRIDGE_M <- 700
+VFT_AOI_CUT_LAKES        <- TRUE
+VFT_AOI_LAKE_MIN_M2      <- 100000
+
 #' The lake-loop pass (R/lakeLoopAoI.R). Visitors treat "the walk around the
 #' lake" as a destination in itself, so a lake that one generated area mostly
 #' covers, and that a path can circle while staying near the shore, gets an area
@@ -193,6 +283,13 @@ VFT_AOI_MIN_AREA_M2 <- 100000
 #'   VFT_LAKE_LOOP_PAD_M     the lake area is grown by this much so the shore
 #'                           path's nodes fall INSIDE it rather than on its edge
 #'                           - vftPrepareNetwork() assigns nodes by intersection
+#'
+#'   VFT_LAKE_LOOP           the pass on or off. OFF while the destination split
+#'                           (VFT_AOI_SPLIT above) is being settled: the split
+#'                           cuts a lake's surface into several basins, so no
+#'                           single area holds it and the pass never fires.
+#'                           To be re-implemented on top of the split.
+VFT_LAKE_LOOP          <- FALSE
 VFT_LAKE_LOOP_SHARE    <- 0.5
 VFT_LAKE_LOOP_ENCLOSED <- 0.95
 VFT_LAKE_LOOP_PAD_M    <- 15

@@ -17,6 +17,15 @@ for (f in sort(list.files(R, pattern = "[.][Rr]$", full.names = TRUE))) {
   suppressWarnings(try(sys.source(f, envir = env), silent = TRUE))
 }
 attach(env, warn.conflicts = FALSE)
+## generateAoI2() splits areas with C++ now (src/aoi_segment.cpp). Without the
+## working tree's dll the split fails over to the unsplit areas and parts 2-3
+## would test the fallback, not the app.
+{
+  .dll <- file.path(dirname(R), "src", paste0("visitorFlowTool", .Platform$dynlib.ext))
+  if(!file.exists(.dll)) stop("compiled code missing: ", .dll,
+                              " -- build it with:  Rscript -e 'pkgbuild::compile_dll(\".\")'")
+  dyn.load(.dll)
+}
 
 fails <- 0
 ok <- function(what, cond, extra = "") {

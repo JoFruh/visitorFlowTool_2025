@@ -204,6 +204,35 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// aoi_basins
+List aoi_basins(NumericVector v, int nrow, int ncol, double thresh);
+RcppExport SEXP _visitorFlowTool_aoi_basins(SEXP vSEXP, SEXP nrowSEXP, SEXP ncolSEXP, SEXP threshSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< int >::type nrow(nrowSEXP);
+    Rcpp::traits::input_parameter< int >::type ncol(ncolSEXP);
+    Rcpp::traits::input_parameter< double >::type thresh(threshSEXP);
+    rcpp_result_gen = Rcpp::wrap(aoi_basins(v, nrow, ncol, thresh));
+    return rcpp_result_gen;
+END_RCPP
+}
+// aoi_edt
+NumericVector aoi_edt(LogicalVector inside, int nrow, int ncol, double dx, double dy);
+RcppExport SEXP _visitorFlowTool_aoi_edt(SEXP insideSEXP, SEXP nrowSEXP, SEXP ncolSEXP, SEXP dxSEXP, SEXP dySEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< LogicalVector >::type inside(insideSEXP);
+    Rcpp::traits::input_parameter< int >::type nrow(nrowSEXP);
+    Rcpp::traits::input_parameter< int >::type ncol(ncolSEXP);
+    Rcpp::traits::input_parameter< double >::type dx(dxSEXP);
+    Rcpp::traits::input_parameter< double >::type dy(dySEXP);
+    rcpp_result_gen = Rcpp::wrap(aoi_edt(inside, nrow, ncol, dx, dy));
+    return rcpp_result_gen;
+END_RCPP
+}
 // ccl_big_patches
 IntegerVector ccl_big_patches(IntegerVector src, int nrow, int ncol, double min_cells);
 RcppExport SEXP _visitorFlowTool_ccl_big_patches(SEXP srcSEXP, SEXP nrowSEXP, SEXP ncolSEXP, SEXP min_cellsSEXP) {
@@ -250,6 +279,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_visitorFlowTool_generateAdjListAndDistTbl_cpp", (DL_FUNC) &_visitorFlowTool_generateAdjListAndDistTbl_cpp, 2},
     {"_visitorFlowTool_findShortestRoute_cpp", (DL_FUNC) &_visitorFlowTool_findShortestRoute_cpp, 5},
     {"_visitorFlowTool_findClosestAOI_cpp", (DL_FUNC) &_visitorFlowTool_findClosestAOI_cpp, 10},
+    {"_visitorFlowTool_aoi_basins", (DL_FUNC) &_visitorFlowTool_aoi_basins, 4},
+    {"_visitorFlowTool_aoi_edt", (DL_FUNC) &_visitorFlowTool_aoi_edt, 5},
     {"_visitorFlowTool_ccl_big_patches", (DL_FUNC) &_visitorFlowTool_ccl_big_patches, 4},
     {"_visitorFlowTool_svf_horizon", (DL_FUNC) &_visitorFlowTool_svf_horizon, 6},
     {NULL, NULL, 0}

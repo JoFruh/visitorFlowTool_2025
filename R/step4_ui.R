@@ -24,7 +24,13 @@ vftDbg("UI5")
         vftHead(i18n$t("Zielgebiete manuell korrigieren:"),
                 vftSub(i18n$t("Klicken Sie auf ein Zielgebiet, um es zu entfernen."), " ",
                        i18n$t("Klicken Sie mehrmals auf ein leeres Areal, um ein neues zu erstellen.")),
-                vftTip(i18n$t("Tipp: Jede einzelne Fläche sollte ein spezifisches Erholungsziel darstellen."))),
+                #the tip, and to its right the button that cuts the areas into
+                #destinations (VFT_AOI_SPLIT_METHOD) - arriving here gives the
+                #plain threshold areas. Reset undoes it.
+                shiny::div(class = "vft-tip-row",
+                  vftTip(i18n$t("Tipp: Jede einzelne Fläche sollte ein spezifisches Erholungsziel darstellen.")),
+                  shiny::actionButton(shiny::NS(id, "autoCutButton"), class = "vft-btn vft-btn-teal",
+                                      label = vftBtnLabel("scissors", i18n$t("Automatische Schnitte"))))),
 
         shiny::fluidRow(class = "vft-grow",
           shiny::column(12, align = "center",

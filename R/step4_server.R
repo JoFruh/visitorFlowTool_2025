@@ -142,8 +142,11 @@ step4_server <- function(id, minThresh, i18n, currentLang,
     #' `eraseable` group, so the eraser - which reads properties$id - does not
     #' care which. No `lakeLoop` column (the skip path, an older save) or an NA
     #' (a drawn or merged area) is green.
-    .vftDrawAOI <- function(){
-      map <- leaflet::leafletProxy(leafletMapID) |>
+    #'
+    #' `async` TRUE from a promise handler: nothing there flushes the session,
+    #' so a deferred proxy call would wait for the user's next click.
+    .vftDrawAOI <- function(async = FALSE){
+      map <- leaflet::leafletProxy(leafletMapID, deferUntilFlush = !async) |>
         leaflet::clearGroup("eraseable")
       polys <- r$polygonsList
       if(inherits(polys, "sf") && nrow(polys) > 0){
@@ -265,15 +268,86 @@ step4_server <- function(id, minThresh, i18n, currentLang,
     #reset observer below can still reach it.
     leafletMapID <- "finalAOIMap"
 
+    #Back to the areas this step started from - the plain threshold areas, i.e.
+    #also from before any "Automatic Cuts". r$resetPolygons, not
+    #r$startingPolygons: on a return to an unconfirmed working set the map
+    #starts from that set, but a reset still goes back to the generated one.
     shiny::observeEvent(input$resetButton, {
       #and any drawing still in progress - it was begun on the areas being
       #thrown away
       vftPolyDrawCancel(leafletMapID)
-      if(!is.null(r$startingPolygons)){
-        r$polygonsList <- r$startingPolygons
+      if(!is.null(r$resetPolygons)){
+        r$polygonsList <- r$resetPolygons
         .vftDrawAOI()
       }
     }, ignoreInit = TRUE, ignoreNULL = TRUE)
+
+    #### Automatic Cuts ####
+    #
+    #Arriving from step 3 gives the plain threshold areas (generateAoI2() with
+    #split = FALSE). This button runs the split - VFT_AOI_SPLIT_METHOD, with its
+    #lake anchoring - over the CURRENT working set, in the worker: an area the
+    #user erased stays erased and one they drew is cut too (`within`). Untouched,
+    #the threshold itself is cut, which is the same thing without the
+    #rasterising. Reset undoes it.
+    shiny::observeEvent(input$autoCutButton, {
+      polys <- r$polygonsList
+      #nothing generated yet (the first generation is still running), the skip
+      #path with no attractiveness to cut, or a cut already on its way
+      if(isTRUE(cache$autoCutBusy) || skip || is.null(r$resetPolygons) ||
+         is.null(DULN) || is.null(DULN_all)) return(invisible(NULL))
+
+      vftPolyDrawCancel(leafletMapID)
+      busy <- c("autoCutButton", "resetButton", "confirmButton4")
+      for(b in busy) shinyjs::disable(b)
+      cache$autoCutBusy <- TRUE
+      #a result for inputs no longer in force (step 3 confirmed a new threshold
+      #meanwhile) is dropped, not drawn over the new areas
+      token <- cache$aoiKey
+
+      untouched <- identical(polys, r$resetPolygons)
+      withinPolys <- if(!untouched && inherits(polys, "sf") && nrow(polys) > 0)
+        sf::st_sf(polygons = sf::st_geometry(polys)) else NULL
+      if(!untouched && is.null(withinPolys)){
+        #everything erased: there is nothing to cut
+        for(b in busy) shinyjs::enable(b)
+        cache$autoCutBusy <- FALSE
+        return(invisible(NULL))
+      }
+
+      progress1 <- vftProgress(message = "Zielgebiete werden automatisch zerschnitten...",
+                               detail = vftMsg("Dies sollte weniger als %d Sekunden dauern", 30),
+                               queue = ipc::shinyQueue(),
+                               millis = 1000)
+      walkNat_wrapped  <- terra::wrap(DULN$walkNat)
+      DULN_all_wrapped <- terra::wrap(DULN_all)
+      minThresh_ <- minThresh
+      shape_     <- shape
+
+      vftFuture({
+        walkNat  <- terra::unwrap(walkNat_wrapped)
+        DULN_all <- terra::unwrap(DULN_all_wrapped)
+        progress1$set(1/2)
+        out <- generateAoI2(minThresh = minThresh_, perimeter = shape_,
+                            walkNat = walkNat, DULN_all = DULN_all,
+                            split = TRUE, within = withinPolys)
+        progress1$set(2/2)
+        progress1$close()
+        out
+      }, seed = TRUE, progress = progress1) %...>% (function(out){
+        cache$autoCutBusy <- FALSE
+        for(b in busy) shinyjs::enable(b)
+        if(!identical(cache$aoiKey, token)) return(invisible(NULL))
+        cut <- out$polygons
+        if(nrow(cut) > 0) cut$id <- seq_len(nrow(cut))
+        r$polygonsList <- cut
+        .vftDrawAOI(async = TRUE)
+      }) %...!% (function(e){
+        cache$autoCutBusy <- FALSE
+        vftAsyncError(progress1, "Automatic Cuts", busy)(e)
+      })
+      invisible(NULL)
+    }, ignoreInit = TRUE)
 
 
 
@@ -414,18 +488,26 @@ step4_server <- function(id, minThresh, i18n, currentLang,
 
         #plot the initial map
         if(skip == FALSE){ #with starting polygons
-          map <- map |>
-            leaflet::addGeoJSON(
-            geojson = geojsonsf::sf_geojson(r$startingPolygons ),
-            stroke = TRUE,
-            weight = 5,
-            color = "black",
-            fill = TRUE,
-            fillColor = "green",
-            opacity = 1,
-            group = "eraseable",
-            options = leaflet::pathOptions(pane = "layer2")
-          )
+          #blue for a lake's area, green for the rest - as .vftDrawAOI() does.
+          #Starting polygons can carry cuts now (a return after "Automatic Cuts").
+          polys  <- r$startingPolygons
+          isLake <- if(is.null(polys$lakeLoop)) rep(FALSE, nrow(polys)) else polys$lakeLoop %in% TRUE
+          for(lake in c(FALSE, TRUE)){
+            sel <- polys[isLake == lake, ]
+            if(nrow(sel) == 0) next
+            map <- map |>
+              leaflet::addGeoJSON(
+              geojson = geojsonsf::sf_geojson(sel),
+              stroke = TRUE,
+              weight = 5,
+              color = "black",
+              fill = TRUE,
+              fillColor = if(lake) "#1f78b4" else "green",
+              opacity = 1,
+              group = "eraseable",
+              options = leaflet::pathOptions(pane = "layer2")
+            )
+          }
         }
 
         #### the step-1 perimeter ####
@@ -786,6 +868,7 @@ step4_server <- function(id, minThresh, i18n, currentLang,
       r$needHelp         <- needHelp
       r$currentLang      <- currentLang
       r$startingPolygons <- NULL
+      r$resetPolygons    <- NULL
       r$promiseFinished  <- NULL
       r$finalPolygons    <- finalPolygons
       r$confirm          <- NULL
@@ -794,6 +877,9 @@ step4_server <- function(id, minThresh, i18n, currentLang,
       shinyjs::enable("confirmButton4")
       shinyjs::enable("resetButton")
       shinyjs::enable(id = "banner")
+      #nothing to cut on the skip path; and a cut still running from an earlier
+      #visit keeps it off until it lands
+      shinyjs::toggleState("autoCutButton", condition = !skip && !isTRUE(cache$autoCutBusy))
 
       #--- 5. (the lakes cutout used to be built here, on the main thread, on the
       #way in to this step. It is built by .vftDULNna() on first EDIT now - see
@@ -823,10 +909,13 @@ step4_server <- function(id, minThresh, i18n, currentLang,
       if(!is.null(shiny::isolate(r$polygonsList)) &&
          identical(cache$aoiKey, aoiKey)){
         r$startingPolygons <- shiny::isolate(r$polygonsList)
+        #Reset still goes back to the generated areas, not to this working set
+        r$resetPolygons <- if(!is.null(cache$defaultAoI)) cache$defaultAoI else r$startingPolygons
         plotMap()
         return(invisible(NULL))
       }
-      cache$aoiKey <- aoiKey
+      cache$aoiKey     <- aoiKey
+      cache$defaultAoI <- NULL
 
       if(skip == FALSE){
 
@@ -864,11 +953,12 @@ step4_server <- function(id, minThresh, i18n, currentLang,
             DULN_all <- terra::unwrap(DULN_all_wrapped)
 
             progress1$set(1/2)
-            #includes the lake-loop pass (R/lakeLoopAoI.R): it reads the lakes and
-            #the paths near them HERE, in the worker - the path network itself is
-            #not loaded for it. Adds one ~5 s paths read, only when a lake qualifies.
+            #the plain threshold areas: split = FALSE. The destination split
+            #(VFT_AOI_SPLIT_METHOD, with its lake anchoring) runs only when the
+            #user presses "Automatic Cuts" - see that observer above.
             finalAOI <- generateAoI2(minThresh = minThresh, perimeter = shape,
-                                     walkNat = walkNat, DULN_all = DULN_all) #, lake_path = lake_path
+                                     walkNat = walkNat, DULN_all = DULN_all,
+                                     split = FALSE) #, lake_path = lake_path
             progress1$set(2/2)
             progress1$close()
             finalAOI
@@ -887,7 +977,10 @@ step4_server <- function(id, minThresh, i18n, currentLang,
             if(is.null(r$startingPolygons$id) & !is.null(nrow(r$startingPolygons)) ){
               r$startingPolygons$id <- 1:nrow(r$startingPolygons)
             }
-            r$polygonsList <- r$startingPolygons
+            r$polygonsList  <- r$startingPolygons
+            r$resetPolygons <- r$startingPolygons
+            #what Reset goes back to on a later return to this working set
+            cache$defaultAoI <- r$startingPolygons
 
             #the lakes cutout, for free. generateAoI2() has to mask the lakes out
             #of walkNat to score the polygons, so the raster the manual
@@ -923,6 +1016,7 @@ step4_server <- function(id, minThresh, i18n, currentLang,
       }else{
         r$startingPolygons <- sf::st_sfc(crs = 4326)
         r$polygonsList <- r$startingPolygons
+        r$resetPolygons <- r$startingPolygons
 
         plotMap()
         vftDbg("promise finished")
@@ -931,6 +1025,12 @@ step4_server <- function(id, minThresh, i18n, currentLang,
 
     }else{
       r$startingPolygons <- shiny::isolate(r$finalPolygons)
+      #Reset goes back to the generated areas when they are for the inputs in
+      #force (this session generated them), else to what was confirmed (a
+      #restored save, where nothing was generated)
+      aoiKey <- list(minThresh = minThresh, skip = skip, shape = shape)
+      r$resetPolygons <- if(!is.null(cache$defaultAoI) && identical(cache$aoiKey, aoiKey))
+        cache$defaultAoI else r$startingPolygons
       plotMap()
       vftDbg("promise finished")
 

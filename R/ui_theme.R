@@ -176,6 +176,10 @@ VFT_THEME_CSS <- "
   border-radius:8px; background:#e3f0f0; color:#006268; font-size:13px; font-weight:600;
   line-height:1.3; text-align:left; }
 .vft-tip svg{ flex:0 0 auto; }
+/* a tip with a button to its right (step 4's Automatic Cuts) */
+.vft-tip-row{ display:flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:10px; }
+.vft-tip-row .vft-tip{ margin:0; }
+.vft-tip-row .btn.vft-btn{ min-height:30px; padding:3px 12px; font-size:13px; }
 
 /* ---- buttons -------------------------------------------------------- */
 /* Two kinds on every page: the ONE filled teal button that finishes the step
@@ -190,6 +194,12 @@ VFT_THEME_CSS <- "
 .btn.vft-btn:hover, .btn.vft-btn:focus, .btn.vft-btn:active, .btn.vft-btn:active:hover,
 .btn.vft-btn:active:focus{ background:#ffffff; border-color:#9fb0ae; color:#1f2624; box-shadow:none; }
 .btn.vft-btn:active{ background:#f1f4f4; }
+/* a secondary-sized button filled teal (step 4's Automatic Cuts); the icon
+   is drawn in currentColor, so it turns white with the text */
+.btn.vft-btn.vft-btn-teal{ background:#006268; border-color:#006268; color:#ffffff; font-weight:700; }
+.btn.vft-btn.vft-btn-teal:hover, .btn.vft-btn.vft-btn-teal:focus, .btn.vft-btn.vft-btn-teal:active,
+.btn.vft-btn.vft-btn-teal:active:hover, .btn.vft-btn.vft-btn-teal:active:focus{
+  background:#004e53; border-color:#004e53; color:#ffffff; }
 .btn.vft-btn-primary, .btn-success, .btn-primary{ background:#006268; border-color:#006268; color:#ffffff; }
 .btn.vft-btn-primary{ min-height:48px; padding:8px 26px; border:0; border-radius:10px;
   font-size:16px; font-weight:700; }
