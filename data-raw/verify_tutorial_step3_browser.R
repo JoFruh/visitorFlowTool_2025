@@ -164,12 +164,12 @@ clickEl("#step3-confirmButton3"); Sys.sleep(1)
 ok("a tap on confirm, outside the window, is swallowed",
    isTRUE(js(atHint(3))) && isTRUE(js(ringIs("vftNav_step3"))))
 
-#the handle's centre runs from half a handle in from the line's left end (20)
-#to half a handle in from its right end (0), over 201 choices
+#the handle's centre runs from half a handle in from the line's left end (0)
+#to half a handle in from its right end (20), over 201 choices
 IRS <- "jQuery('#step3-AOISlider').data('ionRangeSlider')"
 xFor <- function(v) js(sprintf("(function(){ var d = %s,
   line = d.$cache.line[0].getBoundingClientRect(), hw = d.$cache.s_single[0].getBoundingClientRect().width;
-  return line.left + hw / 2 + (line.width - hw) * Math.round((20 - %f) * 10) / 200; })()", IRS, v))
+  return line.left + hw / 2 + (line.width - hw) * Math.round(%f * 10) / 200; })()", IRS, v))
 handle <- function() js(sprintf("(function(){ var r = %s.$cache.s_single[0].getBoundingClientRect();
   return [r.left + r.width / 2, r.top + r.height / 2]; })()", IRS))
 h <- handle()

@@ -47,13 +47,16 @@ VFT_TUTORIAL_TOURS <- c("step1", "step2", "step3", "step4", "step5", "newVersion
 #' How many hints of its own each tour has; its texts are `:tut_<key>_1:` ..
 #' `_<n>:`. `hitze` also plays three of the scenarios page's hints, with their
 #' texts, when there is no scenario to paint on (`borrowed()` in the JS).
-VFT_TUTORIAL_HINTS <- c(step1 = 6L, step2 = 13L, step3 = 5L, step4 = 5L, step5 = 10L,
-                        newVersions = 19L, toHitze = 1L, hitze = 18L)
+VFT_TUTORIAL_HINTS <- c(step1 = 6L, step2 = 13L, step3 = 5L, step4 = 6L, step5 = 10L,
+                        newVersions = 23L, toHitze = 1L, hitze = 26L)
 
 #' The alternative texts of hints that change with the app - a hint's
-#' `variant()` in the JS picks one as the hint starts. `"6b"` is hint 6's
-#' variant b, text `:tut_step5_6b:`.
-VFT_TUTORIAL_VARIANTS <- list(step5 = c("6b", "9b"))
+#' `variant()` in the JS picks one as the hint starts, its `textWhen()` while
+#' it is on. `"9b"` is hint 9's variant b, text `:tut_step5_9b:`; `"7b"` is
+#' hint 7's text while the image's name modal is open. (Hint 6 had one too,
+#' for an area without a sensitivity matrix; it is passed over there now.)
+#' The scenarios page's `"21b"` is hint 21's text while the rename modal is open.
+VFT_TUTORIAL_VARIANTS <- list(step5 = c("7b", "9b"), newVersions = "21b")
 
 #' English stand-ins for a translation row that has not been added yet.
 #'
@@ -64,6 +67,9 @@ VFT_TUTORIAL_VARIANTS <- list(step5 = c("6b", "9b"))
 #'
 #' Step texts may use `<br>`, `<b>` (teal), `<em>` (bold, one size larger) and
 #' `<em class=vftTutAoi>` (the same, in the areas of interest's green),
+#' `<em class=vftTutAoiRed>` (the same, in step 3's map red),
+#' `<em class=vftTutShape>` (the same, in the blue of a shape being drawn),
+#' `<i class=vftTutPolyDraw></i>` (a shape being drawn, two lines high),
 #' `<em class=vftTutBio>` (the same, in the biodiversity sensitivity's dark red),
 #' `<em class=vftTutGrey>` (the same, dark grey: the reset button, the
 #' Original scenario), `<em class=vftTutDelete>`, `vftTutParking`,
@@ -72,6 +78,10 @@ VFT_TUTORIAL_VARIANTS <- list(step5 = c("6b", "9b"))
 #' `<em class=vftTutHeat>` (heat mitigation, dark red),
 #' `<em class=vftTutGrass>`, `<em class=vftTutTree>` (a paint material, in its
 #' paint's colour), `<em class=vftTutBlack>` (a tool's name, black),
+#' `<em class=vftTutHot>` ("heat", orange), `<em class=vftTutArtificial>` /
+#' `vftTutCanopyArt` (the plan import's two artificial materials),
+#' `<span class=vftTutIconRow><i class=vftTutCut1></i><i class=vftTutCut2></i><i class=vftTutCut3></i></span>`
+#' (step 4's cut, numbered: one vertex, the scissors, the area cut in two),
 #' `<i class=vftTutScissors></i>` (step 4's scissors button) and
 #' `<i class=vftTutNode></i>` / `<i class=vftTutNodeSel></i>` (a path network
 #' node, and the selected one) - see
@@ -80,7 +90,7 @@ VFT_TUTORIAL_VARIANTS <- list(step5 = c("6b", "9b"))
 #' quoted one would not match the fallback.
 VFT_TUTORIAL_FALLBACK <- list(
   ":tut_step1_1:" = "Welcome to Visitor Flow Tool.<br>Here you can quickly and easily explore the impacts of planning on biodiversity and heat mitigation, <em>anywhere in Switzerland</em>.<br>Let's explore how!",
-  ":tut_step1_2:" = "You can upload shapefiles or a .kml file to determine your area of interest.",
+  ":tut_step1_2:" = "You can upload shapefiles or a .kml file to determine the full area you wish to work on.",
   ":tut_step1_3:" = "Or quickly draw your own area on the map.<br>Let's take this area as an example.<br>Draw a polygon around Birmensdorf.",
   ":tut_step1_4:" = "Now that we have an area, we can hit <b>Confirm</b> to finish this step.",
   ":tut_step1_5:" = "There are now various stages you can choose from, depending on your interests.<br>Choose the one you're interested in!",
@@ -96,26 +106,27 @@ VFT_TUTORIAL_FALLBACK <- list(
   ":tut_step2_9:"  = "You can also set the weights automatically, based on priority or Red List status.<br>More vulnerable species get more weight.",
   ":tut_step2_10:" = "If the sensitivity map gets too crowded, you can raise the threshold to focus on the most sensitive areas.<br>Let's hide the bottom 25% of sensitive areas.",
   ":tut_step2_11:" = "We now have a Biodiversity Sensitivity map!<br>We can download it as a GeoTIFF here.",
-  ":tut_step2_12:" = "We can also confirm our map and head to the next step!<br>Our map will be used in the next steps.",
+  ":tut_step2_12:" = "Our <b><em>Biodiversity Sensitivity</em></b> map will be used in the next steps.<br>We can also confirm our map and head to the next step!",
   ":tut_step2_13:" = "We have come to the end of this step.<br>Choose your next step!",
   ":tut_step3_1:" = "To simulate recreation, we first need to specify <em class=vftTutAoi>Areas of Interest</em>.<br>These are the areas recreationists go to, to recreate.<br>For example: parks, forests, lakesides.",
-  ":tut_step3_2:" = "In this sub-step, we quickly define Areas of Interest by sliding a bar.",
+  ":tut_step3_2:" = "In this sub-step, we quickly define <em class=vftTutAoiRed>Areas of Interest</em> by sliding a bar.",
   ":tut_step3_3:" = "Slide the bar to the value of <b>8</b>.",
-  ":tut_step3_4:" = "Now all areas with an attractivity above 8 are Areas of Interest.",
+  ":tut_step3_4:" = "Now all areas with an attractivity value above 8 are shown in red.<br>These areas will become <em class=vftTutAoi>Areas of Interest</em>.",
   ":tut_step3_5:" = "<b>Confirm</b> to go to the next sub-step and precisely edit the Areas of Interest.",
   ":tut_step4_1:" = "In this sub-step, we can further refine the Areas of Interest.",
-  ":tut_step4_2:" = "You can cut <i class=vftTutScissors></i> existing polygons by drawing a line across them.<br>The second point becomes a scissor, if pressed it cuts along the dotted red line.<br>Cut across a polygon.",
-  ":tut_step4_3:" = "You can also create new polygons like in step 1.<br>Adding polygons over existing ones will combine them.<br>Add a new polygon!",
-  ":tut_step4_4:" = "In case of errors, you can <em class=vftTutGrey>reset</em> back to the original shapes.",
-  ":tut_step4_5:" = "Let's <b><em>confirm</em></b> these AoIs as is.",
+  ":tut_step4_2:" = "You can cut existing polygons by drawing a line across them:<br>Click two points onto the map, the second point will be a scissor.<span class=vftTutIconRow><i class=vftTutCut1></i><i class=vftTutCut2></i><i class=vftTutCut3></i></span>Clicking the scissor cuts along the red dotted line, cutting polygons.",
+  ":tut_step4_3:" = "Add 3 points on the map, to start a <em class=vftTutShape>shape</em> (like in step 1).<br><i class=vftTutPolyDraw></i><br>Adding <em class=vftTutShape>shapes</em> over existing ones will combine them!<br>Create a new <em class=vftTutShape>shape</em> on the map.",
+  ":tut_step4_4:" = "You can always <em class=vftTutGrey>Reset</em> back to the original shapes.<br>Let's reset to remove our modifications.",
+  ":tut_step4_5:" = "You can also choose to correct Areas of Interest automatically!<br>This will attempt to create realistic Areas of Interest.<br>For example, making a lake's contour its own area of interest.",
+  ":tut_step4_6:" = "Let's <b><em>confirm</em></b> these AoIs as is.",
   ":tut_step5_1:" = "In this step, we can simply launch a recreation simulation!",
   ":tut_step5_2:" = "Path data is downloaded and the simulation is run.<br>This can take a bit of time.",
   ":tut_step5_3:" = "We now see the path usage.<br>Wider and bluer paths have more usage.",
   ":tut_step5_4:" = "Many details can be shown.",
   ":tut_step5_5:" = "Let's show the simulated recreationists' (agents') starting points.",
   ":tut_step5_6:" = "You can show your previously generated <em class=vftTutBio>Biodiversity Sensitivity</em> Map here.",
-  ":tut_step5_6b:" = "This is where you can show the Sensitivity Matrix.<br>You can create one in the <em class=vftTutBio>Biodiversity Sensitivity</em> step.",
   ":tut_step5_7:" = "You can create a PDF showing and detailing your map and choices.",
+  ":tut_step5_7b:" = "Give a name to the image and confirm.",
   ":tut_step5_8:" = "Here you can select your scenarios to simulate them.",
   ":tut_step5_9:" = "You only have the original scenario for now.<br>Let's create a new one!",
   ":tut_step5_9b:" = "Select another scenario here.",
@@ -124,40 +135,53 @@ VFT_TUTORIAL_FALLBACK <- list(
   ":tut_newVersions_2:"  = "To change anything, we first need to create a new <b><em>Scenario</em></b>.<br>We cannot alter the <em class=vftTutGrey>Original</em> scenario.",
   ":tut_newVersions_3:"  = "Submit a name for the new scenario.",
   ":tut_newVersions_4:"  = "To change anything, we first need to select a new <b><em>Scenario</em></b>.<br>We cannot alter the <em class=vftTutGrey>Original</em> scenario.",
-  ":tut_newVersions_5:"  = "We can alter many different components through the different contexts here.",
-  ":tut_newVersions_6:"  = "In the Paths/Roads context, we can see all paths, their qualities and their intersections (nodes).<br>The legend explains it all.",
-  ":tut_newVersions_7:"  = "You can click on a path to either remove it, or change its qualities.<br>Click on any path.",
-  ":tut_newVersions_8:"  = "You can now see the path's qualities and change them.",
-  ":tut_newVersions_9:"  = "We can also <em class=vftTutDelete>delete</em> the path.<br>Click the button.",
-  ":tut_newVersions_10:" = "You will notice the path is now gone.",
-  ":tut_newVersions_11:" = "You can also select nodes <i class=vftTutNode></i>.<br>Select one by clicking on it.",
-  ":tut_newVersions_12:" = "You can create a new path from the selected node <i class=vftTutNodeSel></i>,<br>either by clicking on the map to create a new attached node,<br>or by clicking another existing node to connect them.",
-  ":tut_newVersions_13:" = "As you are creating a new path, you have to determine its qualities.<br>Submit the new path qualities.",
-  ":tut_newVersions_14:" = "You can also delete a node by clicking on the selected node <i class=vftTutNodeSel></i>,<br>all paths connected to the node will also be deleted.<br>Delete a node.",
-  ":tut_newVersions_15:" = "Now let's change the parking spaces and residences.",
-  ":tut_newVersions_16:" = "Simply create a new polygon, as you have done in step 1.",
-  ":tut_newVersions_17:" = "Now choose if the area will be a <em class=vftTutResidence>residence</em>, or a <em class=vftTutParking>parking space</em>.",
-  ":tut_newVersions_18:" = "All these changes are saved in the selected scenarios.<br>A <em class=vftTutNew>New</em> scenario is automatically created on your first visit, but you can change its name.<br>You cannot alter the <em class=vftTutGrey>Original</em> scenario.",
-  ":tut_newVersions_19:" = "Once you've got your new scenarios, you can <b><em>confirm</em></b> them to return to the Simulate Recreation step.",
+  ":tut_newVersions_5:"  = "We can change many different things in a scenario, through the contexts available here.",
+  ":tut_newVersions_6:"  = "Let's first focus on <em class=vftTutGrey>Paths/Roads</em>.",
+  ":tut_newVersions_7:"  = "Here, we see paths, roads, their qualities and crossroads <i class=vftTutNode></i>(nodes).",
+  ":tut_newVersions_8:"  = "You can click on a path to either remove it, or change its qualities.<br>Click on any path.",
+  ":tut_newVersions_9:"  = "You can now see the path's qualities and change them.",
+  ":tut_newVersions_10:" = "We can also <em class=vftTutDelete>delete</em> the path.<br>Click the button.",
+  ":tut_newVersions_11:" = "You will notice the path is now gone.",
+  ":tut_newVersions_12:" = "You can also select nodes <i class=vftTutNode></i>.<br>Select one by clicking on it.",
+  ":tut_newVersions_13:" = "You can create a new path from the selected node <i class=vftTutNodeSel></i>,<br>either by clicking on the map to create a new attached node,<br>or by clicking another existing node to connect them.",
+  ":tut_newVersions_14:" = "As you are creating a new path, you have to determine its qualities.<br>Submit the new path qualities.",
+  ":tut_newVersions_15:" = "Your new path now exists!",
+  ":tut_newVersions_16:" = "You can delete the selected node <i class=vftTutNodeSel></i> by clicking on it a second time,<br>all paths connected to the deleted node will also be deleted.<br>Delete a node.",
+  ":tut_newVersions_17:" = "Now let's change the parking spaces and residences.<br>Click the new context.",
+  ":tut_newVersions_18:" = "Create a new <em class=vftTutShape>shape</em> with at least 3 clicks on the map.",
+  ":tut_newVersions_19:" = "Now choose if the area will be a <em class=vftTutResidence>residence</em>, or a <em class=vftTutParking>parking space</em>.",
+  ":tut_newVersions_20:" = "All these changes are saved to the selected scenario.",
+  ":tut_newVersions_21:" = "A <em class=vftTutNew>New</em> scenario was automatically created on your first visit, you can change the name by clicking on it.",
+  ":tut_newVersions_21b:" = "Submit a name for the scenario.",
+  ":tut_newVersions_22:" = "You cannot modify the <em class=vftTutGrey>Original</em> scenario.",
+  ":tut_newVersions_23:" = "Once you've got your new scenarios, you can <b><em>confirm</em></b> them to return to the Simulate Recreation step.",
   ":tut_toHitze_1:" = "We can now explore the last context: <em class=vftTutHeat>Heat mitigation</em>.",
-  ":tut_hitze_1:"    = "Heat mitigation is another context for building scenarios.<br>However, it also works independently from the Recreation Simulation.",
-  ":tut_hitze_2:"    = "Here we see the main landscape materials mapped.",
-  ":tut_hitze_3:"    = "We can repaint these materials as we wish!<br>Choose the <em class=vftTutGrass>Grass</em> material from your palette.",
-  ":tut_hitze_4:"    = "Now let's paint the new material on the map.<br>Zoom in to be more precise with your brush.",
-  ":tut_hitze_5:"    = "You can paint the ground level, or the canopy (trees, roofs, buildings).<br>You can switch between the two here.",
-  ":tut_hitze_6:"    = "Now let's paint <em class=vftTutTree>trees</em>!",
-  ":tut_hitze_7:"    = "The <em class=vftTutTree>tree</em> material can have different heights.<br>This will affect the projected shade.<br>Choose a height.",
-  ":tut_hitze_8:"    = "Now paint some trees.",
-  ":tut_hitze_9:"    = "Careful! Planting trees on underground structures, such as parking spaces, is not recommended.<br><br>If you insist, you can ignore the element and continue painting.",
-  ":tut_hitze_10:"   = "After altering the map's materials, you can calculate the impact on heat.",
-  ":tut_hitze_11:"   = "This can take a few seconds, as the interaction of different materials and shade, at different scales, are combined into a single map.",
-  ":tut_hitze_12:"   = "We now have a heat map for this scenario. It was calculated at noon.<br><br>We can also calculate it for the morning or the afternoon.",
-  ":tut_hitze_13:"   = "These heat maps are saved to the selected scenario.<br>You can show them again by clicking the icons directly.",
-  ":tut_hitze_14:"   = "Let's now hide the heat map.",
-  ":tut_hitze_15:"   = "Here are the last few useful tools.<br>The <em class=vftTutBlack>Eraser</em> will remove your modifications at precise areas of the map.<br><em class=vftTutBlack>Reset</em> will remove all your modifications on the selected scenario.",
-  ":tut_hitze_16:"   = "<em class=vftTutBlack>Load Existing Plan</em> will allow you to quickly change materials with an existing map/image!<br>For the sake of the tutorial, we will provide the map.",
-  ":tut_hitze_17:"   = "Align the uploaded map to your location and hit <b><em>Next</em></b>.<br>These will not necessarily align as the provided map may not be from this location.",
-  ":tut_hitze_18:"   = "Now you can assign a material to every color of the map.<br>Though most of these will have been done automatically.",
+  ":tut_hitze_1:"  = "This step allows you to observe the impact of landscape changes on <em class=vftTutHot>heat</em> and its consequences.",
+  ":tut_hitze_2:"  = "Heat mitigation is another context for building scenarios, which can affect Outdoor Recreation.<br><br>However, it also works independently from the Recreation Simulation.",
+  ":tut_hitze_3:"  = "Here we see the main landscape materials mapped.",
+  ":tut_hitze_4:"  = "We can repaint these materials as we wish!<br>Choose the <em class=vftTutGrass>Grass</em> material from your palette.",
+  ":tut_hitze_5:"  = "Now let's paint the new material on the map.<br>Zoom in to be more precise with your brush.",
+  ":tut_hitze_6:"  = "You can paint the ground level, or the canopy (trees, roofs, buildings).<br>You can switch between the two here.",
+  ":tut_hitze_7:"  = "Let's now choose to paint <em class=vftTutTree>trees</em>!",
+  ":tut_hitze_8:"  = "The <em class=vftTutTree>tree</em> material can have different heights.<br>This will affect the projected shade.<br>Choose a height.",
+  ":tut_hitze_9:"  = "Now paint some trees.",
+  ":tut_hitze_10:" = "Careful! Planting trees on underground structures, such as parking spaces, is not recommended.<br><br>If you insist, you can ignore the element and continue painting.",
+  ":tut_hitze_11:" = "After altering the map's materials, you can calculate the impact on <em class=vftTutHot>heat</em>.<br>Click here.",
+  ":tut_hitze_12:" = "This can take a few seconds, as the interaction of different materials and shade, at different scales, are combined into a single map.",
+  ":tut_hitze_13:" = "We now have a heat map for this scenario. It was calculated at noon.<br><br>We can also calculate it for the morning or the afternoon.",
+  ":tut_hitze_14:" = "These heat maps are saved to the selected scenario.<br>You can show them again instantly by clicking the active icons.<br>Click the one for noon.",
+  ":tut_hitze_15:" = "Let's now hide the heat map.<br>To be able to paint again.",
+  ":tut_hitze_16:" = "The <em class=vftTutBlack>Eraser</em> will remove your modifications at precise areas of the map.<br><em class=vftTutBlack>Reset</em> will remove all your modifications on the selected scenario.",
+  ":tut_hitze_17:" = "The last tool, <em class=vftTutBlack>Load Existing Plan</em>, will allow you to quickly change materials with an existing map/image!<br>For the sake of the tutorial, we will provide the map.",
+  ":tut_hitze_18:" = "Align the uploaded map to your location and hit <b><em>Next</em></b>.<br>These will not necessarily align as the provided map may not be from this location.",
+  ":tut_hitze_19:" = "Now you can assign a material to every color of the map.<br>Though most of these will have been done automatically.",
+  ":tut_hitze_20:" = "But say the brown paths actually represent <em class=vftTutArtificial>Artificial</em> paths.<br>Change the material assigned.",
+  ":tut_hitze_21:" = "You can see the end result here.",
+  ":tut_hitze_22:" = "If specific color nuances are missing, you can add them.<br>Here, the darker grey area is an artificial roof.<br>Let's use <b><em>Pick colour</em></b> and click on it.",
+  ":tut_hitze_23:" = "Now, assign <em class=vftTutCanopyArt>Artificial canopy</em> to it.",
+  ":tut_hitze_24:" = "Now <b><em>Apply</em></b> your choices.",
+  ":tut_hitze_25:" = "The uploaded map is now painted onto the map's ground and canopy layers!",
+  ":tut_hitze_26:" = "Now <b><em>confirm</em></b> this new scenario.<br>The heat information can be used in a Recreation Simulation.",
   ":tut_next:"       = "Next",
   ":tut_stop:"       = "Stop tutorial",
   ":tut_offer:"      = "New here? Take a short guided tour.",
@@ -209,7 +233,7 @@ vftTutorialTexts <- function(session = shiny::getDefaultReactiveDomain(),
   tours <- lapply(stats::setNames(VFT_TUTORIAL_TOURS, VFT_TUTORIAL_TOURS), function(k)
     vapply(sprintf(":tut_%s_%d:", k, seq_len(VFT_TUTORIAL_HINTS[[k]])),
            tr, character(1), USE.NAMES = FALSE))
-  #an object per tour, {"6b": "..."}: as.list() keeps each an object in JSON
+  #an object per tour, {"9b": "..."}: as.list() keeps each an object in JSON
   alts <- lapply(stats::setNames(names(VFT_TUTORIAL_VARIANTS), names(VFT_TUTORIAL_VARIANTS)),
                  function(k) {
                    v <- VFT_TUTORIAL_VARIANTS[[k]]

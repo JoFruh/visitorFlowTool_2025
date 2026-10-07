@@ -2083,6 +2083,13 @@ vftDbg("CHOSEN")
         # tempTIF_SM <- tempfile(pattern = "SM_", fileext = ".tif")
         terra::writeRaster(r$SM_pres, filename = tifFile, filetype = "GTiff")
 
+        #the threshold slider. This used to read a `minCutThresh` that only
+        #exists in step 5 (where this module's return value hands it over), so
+        #every download died here with "object not found" and the browser got
+        #an error page instead of the zip.
+        minCutThresh <- input$minValThreshold
+        if(is.null(minCutThresh)) minCutThresh <- 0
+
         #text info
         # tempTXT_info <- tempfile(pattern = "INFO_", fileext = ".txt")
         # fileConn<-file(tempTXT_info)

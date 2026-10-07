@@ -11,7 +11,7 @@ out <- file.path("inst", "app", "www", "vft-tutorial-plan.png")
 S <- 720
 
 GRASS <- "#c8e6b0"; ROAD <- "#c0c0c0"; PATH <- "#d2b48c"; BUILDING <- "#404040"
-TREE  <- "#2e6b34"; HEDGE <- "#6aa84f"; WATER <- "#87ceeb"
+TREE  <- "#2e6b34"; HEDGE <- "#6aa84f"; WATER <- "#87ceeb"; ROOF <- "#b0b0b0"
 
 grDevices::png(out, width = S, height = S, type = "cairo", antialias = "none", bg = GRASS)
 op <- graphics::par(mar = c(0, 0, 0, 0), xaxs = "i", yaxs = "i")
@@ -37,9 +37,17 @@ box(14, 214, 400, 222, HEDGE)
 box(402, 14, 410, 222, HEDGE)
 blob(c(140, 270, 140, 270), c(104, 104, 200, 200), 11, TREE)
 
-#NORTH-EAST: a hall and its yard
+#NORTH-EAST: a hall and, beside it, a lower roof in a darker grey. The tour's
+#"pick colour" hint has the user add that grey to the palette (it is an
+#artificial roof, not road), so the import must NOT find it by itself: its
+#panels are separated by 1 px seams in road grey, every 4 px. Interleaved
+#like that, a fill under 5 % of the plan is merged into its neighbour as a
+#JPEG shade would be (MIX_SMALL/MIX_T in planimport.js); the darker grey still
+#sits in other colour bins than the road's, so a pick on it takes every
+#panel pixel, and the import's 3x3 majority filter closes the seams.
 box(470, 30, 660, 140, BUILDING)
-box(470, 160, 700, 224, ROAD)
+box(470, 160, 700, 224, ROOF)
+for(y in seq(163, 223, 4)) box(470, y, 700, y + 1, ROAD)
 blob(c(690, 690), c(60, 110), 12, TREE)
 
 #SOUTH-WEST: a park - pond, gravel paths, groups of trees

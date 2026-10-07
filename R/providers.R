@@ -1114,6 +1114,45 @@ vftClearPendingStep <- function(session){
   invisible(nms)
 }
 
+#' Lend a progress bar to a provider's next load, or take the loan back
+#' (`bar = NULL`).
+#'
+#' A caller that is about to wait on a provider and then do work of its own -
+#' step 5's launch: the path network, then the preparation - would otherwise
+#' show two bars for what the user sees as one wait. With a loan, the provider
+#' drives the caller's bar over its first `share` instead of raising its own,
+#' and leaves it open (vftProgress()'s `bar`); the caller carries on from where
+#' it was left. If the provider is not dispatched for this - the key is already
+#' there, or a load is already under way - the loan is simply never taken, which
+#' is why the caller takes it back itself once it has its answer.
+#'
+#' @param message,detail the bar's caption as German keys, for the queue display
+#'   to put back when it has painted over it.
+vftProviderLendBar <- function(session, name, bar, share = 0.5,
+                               message = NULL, detail = NULL){
+  ud <- tryCatch(session$userData, error = function(e) NULL)
+  if(is.null(ud)) return(invisible(NULL))
+  loans <- ud$vftProviderBar
+  if(is.null(loans)) loans <- list()
+  loans[[name]] <- if(is.null(bar)) NULL else
+    list(bar = bar, share = share, message = message, detail = detail)
+  ud$vftProviderBar <- loans
+  invisible(NULL)
+}
+
+#' The bar lent for provider `name`, taken off the loan; NULL if none.
+.vftProviderBarTake <- function(session, name){
+  ud <- tryCatch(session$userData, error = function(e) NULL)
+  lent <- if(is.null(ud)) NULL else ud$vftProviderBar[[name]]
+  if(is.null(lent)) return(NULL)
+  ud$vftProviderBar[[name]] <- NULL
+  #shiny::Progress has no public "closed?"; a closed one would only warn on
+  #every update, so it is not lent on
+  closed <- tryCatch(isTRUE(lent$bar$.__enclos_env__$private$closed),
+                     error = function(e) TRUE)
+  if(closed) NULL else lent
+}
+
 #' Start one provider.
 .vftDispatchProvider <- function(r, name, session){
   prov <- VFT_PROVIDERS[[name]]
@@ -1143,10 +1182,19 @@ vftClearPendingStep <- function(session){
 
   #vftProgress, not ipc::AsyncProgress: the latter drags the whole session into
   #the worker. See R/async_helpers.R.
-  progress <- vftProgress(message = prov$label,
-                          detail  = "Daten werden vorbereitet...",  #translated in vftProgress()
-                          queue   = ipc::shinyQueue(),
-                          millis  = 1000)
+  #
+  #A bar lent for this provider (vftProviderLendBar()) is driven instead of a
+  #bar of its own - taken off the loan as it is used, so a later load cannot
+  #find a bar its owner has closed since.
+  lent <- .vftProviderBarTake(session, name)
+  progress <- if(is.null(lent))
+    vftProgress(message = prov$label,
+                detail  = "Daten werden vorbereitet...",  #translated in vftProgress()
+                queue   = ipc::shinyQueue(),
+                millis  = 1000)
+  else
+    vftProgress(message = lent$message, detail = lent$detail, millis = 1000,
+                bar = lent$bar, span = c(0, lent$share))
 
   .vftInflightSet(session, name)
 

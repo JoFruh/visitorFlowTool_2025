@@ -10,6 +10,9 @@
  *   <em>   a word in bold, one size larger, in the text's own colour
  *   <em class=vftTutAoi>, <em class=vftTutBio>   the same, in the areas of
  *          interest's green / the biodiversity sensitivity's dark red
+ *   <em class=vftTutAoiRed>   the same, in step 3's map red (areas of interest)
+ *   <em class=vftTutShape>   the same, in the blue of a shape being drawn
+ *   <i class=vftTutPolyDraw></i>   a shape being drawn, two lines high
  *   <b><em>   teal and one size larger (a teal button's name: confirm)
  *   <em class=vftTutGrey>   dark grey and one size larger (reset)
  *   <i class=vftTutScissors></i>   step 4's scissors button, as an icon
@@ -21,6 +24,12 @@
  *   <em class=vftTutGrass>, vftTutTree   a paint material's name, in the
  *          colour it paints (grass, tree)
  *   <em class=vftTutBlack>   a tool's name, in black (eraser, reset, plan)
+ *   <em class=vftTutHot>   "heat", in orange (#e05119)
+ *   <em class=vftTutArtificial>, vftTutCanopyArt   the plan import's
+ *          "Artificial" (grey, not bold) and "Artificial canopy" materials
+ *   <span class=vftTutIconRow><i class=vftTutCut1></i><i class=vftTutCut2></i><i class=vftTutCut3></i></span>
+ *          step 4's cut, numbered: one vertex, then two (the scissors), then
+ *          the area cut in two; centred
  *   <i class=vftTutNode></i>, <i class=vftTutNodeSel></i>   a node of the
  *          path network, and the selected one, as the map draws them
  * ------------------------------------------------------------------ */
@@ -38,6 +47,10 @@
   --vftTut-accent-text: #ffffff;
   /* the areas of interest: the border step 5 draws them with (R "green4") */
   --vftTut-aoi: #008b00;
+  /* ...and on step 3, the red its map paints them with (R "red3") */
+  --vftTut-aoi-red: #cd0000;
+  /* a shape being drawn: polydraw.js's light blue */
+  --vftTut-draw: #5ab4f0;
   /* the biodiversity sensitivity: dark red */
   --vftTut-bio: #8b0000;
   /* a secondary button's name (reset): the dark grey of its label */
@@ -51,6 +64,10 @@
   /* paint materials, as PAINT_CATEGORIES has them (R/paintbrush_helpers.R) */
   --vftTut-grass: lightgreen;
   --vftTut-tree: #004200;
+  --vftTut-artificial: grey;
+  --vftTut-canopy-art: #e0e0e0;
+  /* "heat" on the heat mitigation step */
+  --vftTut-hot: #e05119;
 
   /* the text card */
   --vftTut-card-bg: #ffffff;
@@ -161,8 +178,51 @@
   border-top-width: 0;
 }
 
+/* beside the windows: the caret on the side edge, --vftTut-caret-y down it */
+.vftTutorialBox[data-side="left"]::after,
+.vftTutorialBox[data-side="right"]::after {
+  top: var(--vftTut-caret-y, 50%);
+  margin-left: 0;
+  margin-top: calc(-1 * var(--vftTut-caret-size));
+}
+
+.vftTutorialBox[data-side="left"]::after {
+  left: 100%;
+  border-left-color: var(--vftTut-card-bg);
+  border-right-width: 0;
+}
+
+.vftTutorialBox[data-side="right"]::after {
+  left: auto;
+  right: 100%;
+  border-right-color: var(--vftTut-card-bg);
+  border-left-width: 0;
+}
+
 .vftTutorialBox[data-side="none"]::after {
   display: none;
+}
+
+/* A card pops in as a window does: out of its caret's tip (transform-origin,
+   set by the script), past its size, then back to it - 0.25 s in all */
+.vftTutorialBox.vftTutorialPop {
+  animation: vftTutCardPop 0.25s ease-out;
+}
+
+@keyframes vftTutCardPop {
+  0%   { transform: scale(0.15); opacity: 0; }
+  60%  { transform: scale(1.08); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+/* the language card of step 1's first hint: left of the selector (its
+   dropdown opens below it), in three languages, with nothing to press */
+.vftTutorialBox.vftTutorialTip {
+  display: none;
+}
+
+.vftTutorialBox.vftTutorialTip.vftTutorialTipOn {
+  display: block;
 }
 
 .vftTutorialCount {
@@ -194,6 +254,100 @@
 /* <em class="vftTutAoi">: the term "areas of interest", in their map colour */
 .vftTutorialText .vftTutAoi {
   color: var(--vftTut-aoi);
+}
+
+/* <em class="vftTutAoiRed">: the same term on step 3, in the red its map
+   paints the areas above the threshold with (R "red3") */
+.vftTutorialText .vftTutAoiRed {
+  color: var(--vftTut-aoi-red);
+}
+
+/* <em class="vftTutShape">: a shape drawn on the map, in the light blue
+   polydraw.js draws its outline with */
+.vftTutorialText .vftTutShape {
+  color: var(--vftTut-draw);
+}
+
+/* <i class="vftTutPolyDraw"></i>: a shape being drawn, as polydraw.js shows
+   it - three vertices joined by edges (the first one ringed), the pointer's
+   crosshair, the rubber band from the last vertex through it back to the
+   first, and the area it would make. Two lines high, on a line of its own,
+   centred (a <br> right after it would add an empty line: hidden). */
+.vftTutorialText .vftTutPolyDraw {
+  display: block;
+  width: 7em;
+  height: 2.8em;
+  margin: 0.15em auto;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 48'%3E%3Cpath d='M14 36 40 10 78 14 100 37Z' fill='%235ab4f0' fill-opacity='.25'/%3E%3Cpath d='M14 36 40 10 78 14' fill='none' stroke='%235ab4f0' stroke-width='3' stroke-linejoin='round'/%3E%3Cpath d='M78 14 100 37 14 36' fill='none' stroke='%235ab4f0' stroke-width='2' stroke-linejoin='round'/%3E%3Ccircle cx='14' cy='36' r='7.5' fill='%235ab4f0'/%3E%3Ccircle cx='14' cy='36' r='6.5' fill='%235ab4f0' stroke='%23fff' stroke-width='2'/%3E%3Ccircle cx='40' cy='10' r='5' fill='%235ab4f0'/%3E%3Ccircle cx='78' cy='14' r='5' fill='%235ab4f0'/%3E%3Cpath d='M100 28v18M91 37h18' stroke='%23fff' stroke-width='3.5'/%3E%3Cpath d='M100 28v18M91 37h18' stroke='%23000' stroke-width='1.4'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.vftTutorialText .vftTutPolyDraw + br,
+.vftTutorialText .vftTutIconRow + br {
+  display: none;
+}
+
+/* <span class="vftTutIconRow">...</span>: pictures side by side, centred, on
+   a line of their own (step 4's three cut pictures); they wrap on a narrow
+   card */
+.vftTutorialText .vftTutIconRow {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 0.3em 1em;
+  margin: 0.25em 0;
+}
+
+/* Step 4's cut, in three pictures of one area of interest as the map draws
+   it (black outline, translucent green), each numbered on its left: the
+   number takes the margin, so the row centres number and picture together.
+   <i> is italic by default - the numbers are not. */
+.vftTutorialText .vftTutCut1,
+.vftTutorialText .vftTutCut2,
+.vftTutorialText .vftTutCut3 {
+  position: relative;
+  display: inline-block;
+  width: 7.1em;
+  height: 4em;
+  margin-left: 1.4em;
+  font-style: normal;
+}
+
+.vftTutorialText .vftTutCut1::before,
+.vftTutorialText .vftTutCut2::before,
+.vftTutorialText .vftTutCut3::before {
+  position: absolute;
+  right: 100%;
+  top: 50%;
+  margin-right: 0.3em;
+  transform: translateY(-50%);
+  font-weight: var(--vftTut-emph-weight);
+  line-height: 1;
+}
+
+.vftTutorialText .vftTutCut1::before { content: "1)"; }
+.vftTutorialText .vftTutCut2::before { content: "2)"; }
+.vftTutorialText .vftTutCut3::before { content: "3)"; }
+
+/* <i class="vftTutCut1"></i>: the cut begun - one vertex placed outside the
+   area (the first, ringed), the rubber band from it across the area to the
+   pointer's crosshair */
+.vftTutorialText .vftTutCut1 {
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 110 62'%3E%3Cpath d='M22 14 56 8 84 16 88 44 58 56 24 50Z' fill='%23008000' fill-opacity='.25' stroke='%23000' stroke-width='2.2' stroke-linejoin='round'/%3E%3Cpath d='M10 50 98 16' stroke='%235ab4f0' stroke-width='2'/%3E%3Ccircle cx='10' cy='50' r='6.5' fill='%235ab4f0'/%3E%3Ccircle cx='10' cy='50' r='4.6' fill='%235ab4f0' stroke='%23fff' stroke-width='1.8'/%3E%3Cpath d='M98 7v18M89 16h18' stroke='%23fff' stroke-width='3.5'/%3E%3Cpath d='M98 7v18M89 16h18' stroke='%23000' stroke-width='1.4'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+/* <i class="vftTutCut2"></i>: the second vertex placed on the far side - it
+   is the scissors button, joined to the first by the dashed dark red cut
+   line - and the pointer moved on, the rubber band (and its faint triangle)
+   running from the second vertex through it back to the first */
+.vftTutorialText .vftTutCut2 {
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 110 62'%3E%3Cpath d='M22 14 56 8 84 16 88 44 58 56 24 50Z' fill='%23008000' fill-opacity='.25' stroke='%23000' stroke-width='2.2' stroke-linejoin='round'/%3E%3Cpath d='M10 50 98 16 101 44Z' fill='%235ab4f0' fill-opacity='.25'/%3E%3Cpath d='M98 16 101 44 10 50' fill='none' stroke='%235ab4f0' stroke-width='2' stroke-linejoin='round'/%3E%3Cpath d='M10 50 98 16' stroke='%238b0000' stroke-width='2.6' stroke-dasharray='6 4.5'/%3E%3Ccircle cx='10' cy='50' r='6.5' fill='%235ab4f0'/%3E%3Ccircle cx='10' cy='50' r='4.6' fill='%235ab4f0' stroke='%23fff' stroke-width='1.8'/%3E%3Ccircle cx='98' cy='16' r='10.5' fill='%23fff' stroke='%238b0000' stroke-width='2.4'/%3E%3Cg transform='translate(92.36 10.36) scale(.47)' fill='none' stroke='%238b0000' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='6' cy='6' r='3'/%3E%3Ccircle cx='6' cy='18' r='3'/%3E%3Cpath d='M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12'/%3E%3C/g%3E%3Cpath d='M101 36v16M93 44h16' stroke='%23fff' stroke-width='3.5'/%3E%3Cpath d='M101 36v16M93 44h16' stroke='%23000' stroke-width='1.4'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+/* <i class="vftTutCut3"></i>: after the scissors - the area in two along the
+   cut line, the halves drawn a little apart */
+.vftTutorialText .vftTutCut3 {
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 110 62'%3E%3Cg fill='%23008000' fill-opacity='.25' stroke='%23000' stroke-width='2.2' stroke-linejoin='round'%3E%3Cpath d='M23.7 44.7 22 14 56 8 84 16 84.7 21.1Z' transform='translate(-.8 -2.1)'/%3E%3Cpath d='M23.7 44.7 84.7 21.1 88 44 58 56 24 50Z' transform='translate(.8 2.1)'/%3E%3C/g%3E%3C/svg%3E") center / contain no-repeat;
 }
 
 /* <em class="vftTutBio">: the term "biodiversity sensitivity" */
@@ -230,6 +384,19 @@
 .vftTutorialText .vftTutGrass { color: var(--vftTut-grass); }
 .vftTutorialText .vftTutTree { color: var(--vftTut-tree); }
 .vftTutorialText .vftTutBlack { color: #000000; }
+/* "heat", in the heat mitigation step's orange */
+.vftTutorialText .vftTutHot { color: var(--vftTut-hot); }
+/* the plan import's materials: artificial ground (plain grey, one size
+   larger but not bold), and the artificial canopy - its paint's very light
+   grey, outlined so it can be read on the white card */
+.vftTutorialText .vftTutArtificial {
+  color: var(--vftTut-artificial);
+  font-weight: inherit;
+}
+.vftTutorialText .vftTutCanopyArt {
+  color: var(--vftTut-canopy-art);
+  text-shadow: -1px 0 #6b6b6b, 1px 0 #6b6b6b, 0 -1px #6b6b6b, 0 1px #6b6b6b;
+}
 .vftTutorialText .vftTutNew {
   color: var(--vftTut-new);
   font-style: italic;
@@ -258,16 +425,11 @@
   background: url("selectedNode.png") center / contain no-repeat;
 }
 
-/* A modal the scenarios page opens over its map (a path's qualities, a new
-   path's) moves to the right edge while its hint is on, off the path it is
-   about, and its backdrop all but goes: the tutorial's dim already does that
-   job, and the window on the path would show it darkened. */
-body.vftTutModalAside #shiny-modal .modal-dialog {
-  margin-left: auto;
-  margin-right: 16px;
-}
-
-body.vftTutModalAside .modal-backdrop.in {
+/* A modal the scenarios page opens over its map keeps only a faint backdrop
+   while its hint is on: the tutorial's dim already does that job, and a
+   window on the map would show it darkened. The modal stays where it always
+   is, centred (a path's qualities, a new path's). */
+body.vftTutModalLight .modal-backdrop.in {
   opacity: 0.1;
 }
 
@@ -363,7 +525,7 @@ body.vftTutModalAside .modal-backdrop.in {
 
 /* teal like the next-step modal, under the help button with its caret
    pointing at it (placed by the script). It pops in out of the caret's tip:
-   grows past its size, then settles on it */
+   grows past its size, then settles on it, in 0.25 s like the cards */
 .vftTutorialOffer {
   position: fixed;
   left: 0;
@@ -379,7 +541,7 @@ body.vftTutModalAside .modal-backdrop.in {
   box-shadow: var(--vftTut-card-shadow);
   font-family: var(--vftTut-font-family);
   text-align: center;
-  animation: vftTutOfferPop 0.46s ease-out;
+  animation: vftTutOfferPop 0.25s ease-out;
 }
 
 .vftTutorialOffer::after {
@@ -452,6 +614,7 @@ body.vftTutModalAside .modal-backdrop.in {
 @media (prefers-reduced-motion: reduce) {
   .vftTutorialBox,
   .vftTutorialBox.vftTutorialPlaced { transition: none; }
-  .vftTutorialOffer { animation: none; }
+  .vftTutorialOffer,
+  .vftTutorialBox.vftTutorialPop { animation: none; }
   .vftTutorialDots i { animation: none; opacity: 0.8; }
 }

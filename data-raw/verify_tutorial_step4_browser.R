@@ -2,8 +2,9 @@
 ## app, in headless Chrome, with real mouse events through the DevTools
 ## protocol. Steps 1 and 3's tours are walked quickly to get there, and step
 ## 4's tour has to start by itself when the ring lands on step 4 (chaining).
-## Then its five hints: step 4's nav button, a cut with the scissors (the area
-## count has to go up), a new area drawn, reset, and confirm - whose tap ends
+## Then its six hints: step 4's nav button, a cut with the scissors (the area
+## count has to go up), a new area drawn, reset, the automatic corrections
+## (read only), and confirm - whose tap ends
 ## the tour, and step 5's tour has to follow.
 ## data-raw/verify_tutorial_step3_browser.R covers step 3's tour in detail.
 ##
@@ -198,7 +199,7 @@ Sys.sleep(0.6)
 IRS <- "jQuery('#step3-AOISlider').data('ionRangeSlider')"
 xFor <- function(v) js(sprintf("(function(){ var d = %s,
   line = d.$cache.line[0].getBoundingClientRect(), hw = d.$cache.s_single[0].getBoundingClientRect().width;
-  return line.left + hw / 2 + (line.width - hw) * Math.round((20 - %f) * 10) / 200; })()", IRS, v))
+  return line.left + hw / 2 + (line.width - hw) * Math.round(%f * 10) / 200; })()", IRS, v))
 h <- js(sprintf("(function(){ var r = %s.$cache.s_single[0].getBoundingClientRect();
   return [r.left + r.width / 2, r.top + r.height / 2]; })()", IRS))
 drag(h[[1]], h[[2]], xFor(7.9), h[[2]])
@@ -234,12 +235,39 @@ fr <- js("__t4.frame()")
 ok("one window, round the outline and the areas", length(w) == 1 && !is.null(fr) &&
      near(w[[1]], fr, 6), paste(c(unlist(w), "|", round(unlist(fr))), collapse = ","))
 ok("...and no Next button", !hasNext())
-ok("the card is clear of the window", length(w) == 1 && !overlap(cardRect(), w[[1]]),
-   paste(round(unlist(cardRect())), collapse = ","))
-sc <- js("(function(){ var e = document.querySelector('.vftTutorialText .vftTutScissors'); if (!e) return null;
-  var s = getComputedStyle(e); return [e.getBoundingClientRect().width, s.backgroundImage.indexOf('svg') >= 0, s.borderTopColor]; })()")
-ok("the scissors icon is drawn in the text", !is.null(sc) && sc[[1]] > 10 && isTRUE(sc[[2]]),
-   paste(unlist(sc), collapse = " "))
+## the window may be most of the map: the card goes above or below it, or
+## else hugs the top or bottom of the screen, covering as little of it as it
+## can - never parked in its middle
+k <- unlist(cardRect()); vh <- js("window.innerHeight")
+ov <- if (length(w) == 1) max(0, min(k[2] + k[4], w[[1]][[2]] + w[[1]][[4]]) - max(k[2], w[[1]][[2]])) else NA
+ok("the card is clear of the window, or at the top or bottom of the screen",
+   length(k) == 4 && !is.na(ov) && (ov == 0 || k[2] <= 20 || k[2] + k[4] >= vh - 20),
+   paste(round(k), collapse = ","))
+ok("...overlapping the window by less than half its own height", !is.na(ov) && ov < k[4] / 2,
+   sprintf("%.0f of %.0f px", ov, k[4]))
+## the same on a window too tall for that: the map zoomed in until the areas
+## fill it
+invisible(js("(function(){ __t4.map().zoomIn(2, {animate: false}); return null; })()")); Sys.sleep(1.2)
+w2 <- wins(); k <- unlist(cardRect())
+ov <- if (length(w2) == 1) max(0, min(k[2] + k[4], w2[[1]][[2]] + w2[[1]][[4]]) - max(k[2], w2[[1]][[2]])) else NA
+ok("zoomed in (window the whole map): the card hugs the top or bottom",
+   length(k) == 4 && (k[2] <= 20 || k[2] + k[4] >= vh - 20) && !is.na(ov) && ov < k[4] / 2,
+   sprintf("card %s, overlap %.0f", paste(round(k), collapse = ","), ov))
+shot("2_cut_zoomed")
+invisible(js("(function(){ __t4.map().zoomOut(2, {animate: false}); return null; })()")); Sys.sleep(1.2)
+w <- wins()
+ic <- js("(function(){ var row = document.querySelector('.vftTutorialText .vftTutIconRow'); if (!row) return null;
+  var t = document.querySelector('.vftTutorialText').getBoundingClientRect();
+  var out = Array.from(row.querySelectorAll('i')).map(function (e) {
+    var r = e.getBoundingClientRect(); return [e.className, r.width, getComputedStyle(e).backgroundImage.indexOf('svg') >= 0,
+      getComputedStyle(e, '::before').content]; });
+  var r = row.getBoundingClientRect();
+  return {icons: out, centred: Math.abs((r.left + r.right) / 2 - (t.left + t.right) / 2) < 3}; })()")
+ok("the three cut pictures are drawn side by side, centred in the text, numbered",
+   !is.null(ic) && length(ic$icons) == 3 && all(vapply(ic$icons, function(x) x[[2]] > 40 && isTRUE(x[[3]]), NA)) &&
+   isTRUE(ic$centred) &&
+   identical(vapply(ic$icons, function(x) gsub("\"", "", x[[4]]), ""), c("1)", "2)", "3)")),
+   jsonlite::toJSON(ic, auto_unbox = TRUE))
 shot("2_cut")
 
 clickEl("#step4-confirmButton4"); Sys.sleep(1)
@@ -278,6 +306,12 @@ Sys.sleep(0.8)
 w <- wins()
 ok("one window, round the outline and the areas again", length(w) == 1 && near(w[[1]], js("__t4.frame()"), 6))
 ok("...and no Next button", !hasNext())
+pd <- js("(function(){ var e = document.querySelector('.vftTutorialText .vftTutPolyDraw'); if (!e) return null;
+  var r = e.getBoundingClientRect(), t = document.querySelector('.vftTutorialText').getBoundingClientRect();
+  var prev = e.previousSibling, next = e.nextElementSibling;
+  return [Math.abs((r.left + r.right) / 2 - (t.left + t.right) / 2), next && next.tagName === 'BR' ? next.offsetHeight : -1]; })()")
+ok("the three-vertex picture is centred, no empty line under it",
+   !is.null(pd) && pd[[1]] < 3 && pd[[2]] <= 0, paste(unlist(pd), collapse = " "))
 shot("3_new_area")
 p <- unlist(js(sprintf("__t4.freeIn([%s])", paste(unlist(w[[1]]), collapse = ","))))
 ok("a free spot to draw in", length(p) == 2)
@@ -304,7 +338,20 @@ ok("the tap moves on to hint 5", waitFor(atHint(5), 15))
 ok("...and the areas are step 3's again", waitFor(sprintf("__t4.count() === %d", start), 10),
    js("__t4.count()"))
 
-cat("\n=== 6. hint 5: confirm ===\n")
+cat("\n=== 6. hint 5: the automatic corrections ===\n")
+Sys.sleep(0.6)
+w <- wins()
+ok("one window, on the 'Automatic Corrections' button",
+   length(w) == 1 && near(w[[1]], rectOf("#step4-autoCutButton")))
+ok("...with a Next button: it may be used, but need not be", hasNext())
+ok("the button is renamed",
+   grepl("Korrekturen|Corrections", js("document.getElementById('step4-autoCutButton').innerText")),
+   js("document.getElementById('step4-autoCutButton').innerText"))
+shot("5_autocorrect")
+clickEl(".vftTutorialNext")
+
+cat("\n=== 7. hint 6: confirm ===\n")
+ok("Next moves on to hint 6", waitFor(atHint(6), 10))
 Sys.sleep(0.6)
 w <- wins()
 ok("one window, on the confirm button", length(w) == 1 && near(w[[1]], rectOf("#step4-confirmButton4")))
@@ -314,13 +361,17 @@ teal <- js("(function(){ var e = document.querySelector('.vftTutorialText b em')
   return [getComputedStyle(e).color, parseFloat(getComputedStyle(e).fontSize), parseFloat(getComputedStyle(t).fontSize)]; })()")
 ok("'confirm' teal", !is.null(teal) && identical(teal[[1]], "rgb(0, 98, 104)"), paste(unlist(teal), collapse = " "))
 ok("...and one size larger", !is.null(teal) && teal[[2]] > teal[[3]])
-shot("5_confirm")
+shot("6_confirm")
 clickEl("#step4-confirmButton4")
 ok("the tap ends the tour", waitFor("(function(){ var s = vftTutorialState(); return s.key !== 'step4'; })()", 5))
 ok("...stored as done", identical(stored(), "done"))
 ok("...and the app moves on to step 5", waitFor(ringIs("vftNav_step5"), 120))
-ok("step 5's tour starts by itself", waitFor(atHint(1, "step5"), 120), paste(unlist(tut()), collapse = ","))
-shot("6_step5")
+#the Original simulates itself as step 5 opens, so its launch hint is passed
+#over and the tour opens on the progress bars
+ok("step 5's tour starts by itself, on the running simulation (hint 2)",
+   waitFor(atHint(2, "step5"), 120) && identical(tut()$count, "1 / 8"),
+   paste(unlist(tut()), collapse = ","))
+shot("7_step5")
 
 cat(sprintf("\nscreenshots in %s\n", SHOTS))
 b$close()

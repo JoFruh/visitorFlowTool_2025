@@ -21,6 +21,15 @@
 # goals is data preparation and drives the first; the ABM proper drives the
 # second, which is not created until the ABM starts. See vftProgressPair() in
 # R/async_helpers.R for how one worker drives two bars over one queue.
+#
+# The load, when there is one, shows on that same first bar: step 5 makes the
+# bar before asking for the network and lends it to the provider for its first
+# VFT_SIM_NETWORK_SHARE (vftProviderLendBar() in R/providers.R), and this job
+# fills the rest. One bar for the data, one for the ABM.
+
+#' How much of step 5's data bar the path network's load fills, when the launch
+#' has to load it first.
+VFT_SIM_NETWORK_SHARE <- 0.4
 
 #' Prepare a scenario if it needs it, then simulate on it.
 #'

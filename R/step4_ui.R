@@ -30,7 +30,7 @@ vftDbg("UI5")
                 shiny::div(class = "vft-tip-row",
                   vftTip(i18n$t("Tipp: Jede einzelne Fläche sollte ein spezifisches Erholungsziel darstellen.")),
                   shiny::actionButton(shiny::NS(id, "autoCutButton"), class = "vft-btn vft-btn-teal",
-                                      label = vftBtnLabel("scissors", i18n$t("Automatische Schnitte"))))),
+                                      label = vftBtnLabel("scissors", i18n$t("Automatische Korrekturen"))))),
 
         shiny::fluidRow(class = "vft-grow",
           shiny::column(12, align = "center",

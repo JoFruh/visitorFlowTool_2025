@@ -562,15 +562,13 @@ vftStepNav <- function(i18n = NULL){
       #vftNav .vft-nav-center { flex:1 0 auto; min-width:0; display:flex;
                                 align-items:center; justify-content:center;
                                 gap:var(--nav-sep); }
-      /* ---- the session control, between the title and the buttons -------
-         The first and last children of .vft-nav-center: the session zone on
-         the left and an empty spacer of the same flex on the right. The two
-         share the centre's free space equally, so the buttons stay centred in
-         the centre zone exactly as before, and the save/load control sits in
-         the middle of the gap between the title and the first button. */
-      #vftNav .vft-nav-session-zone,
-      #vftNav .vft-nav-session-spacer { flex:1 1 0; min-width:0; display:flex;
-                                        align-items:center; justify-content:center; }
+      /* ---- the session control, first in the right-hand cluster ----------
+         It used to sit in .vft-nav-center, in a zone sharing the centre's free
+         space with an empty spacer on the other side of the buttons. Once the
+         Simulation chain unfolded, that free space was gone and the save
+         button ran into the title. It now stands where the language selector
+         stood, in the right-hand cluster, whose flex:0 0 auto means it is
+         never squeezed; the title is still the only zone that gives way. */
       /* save everywhere except step 1, load on step 1 - one class on the bar,
          written by vftNavBarServer() in R/navigation.R. It ships WITH the
          class, since every session starts on step 1. */
@@ -708,12 +706,26 @@ vftStepNav <- function(i18n = NULL){
                                  opacity:1; }
 
       /* ---- the right-hand cluster ---------------------------------------
-         The language selector lives here now, not on the left. It used to sit
+         session control | logo over language selector | help/info.
+         The language selector lives here, not on the left. It used to sit
          stacked above the title inside .vft-nav-left, which is what the
          `margin-top:-15px` on that h2 was there to undo; moving it here puts
-         all the chrome in one place and gives the title the whole left zone. */
+         all the chrome in one place and gives the title the whole left zone.
+         It now sits UNDER the logo rather than beside it, which frees its old
+         slot for the session control. The logo gives up height for it: half
+         the banner rather than 70%, so logo + gap + selector come to about
+         85% of --nav-h at every width and the stack, centred, puts the logo
+         near the top edge. */
+      #vftNav .vft-nav-brand { flex:0 0 auto; display:flex; flex-direction:column;
+                               align-items:center;
+                               gap:calc(var(--nav-h) * 0.04); }
       #vftNav .vft-nav-lang { width:calc(var(--nav-logo) * 0.62); min-width:62px; }
       #vftNav .vft-nav-lang .form-group { margin-bottom:0; }
+      /* the empty <label> shiny emits for label = NULL is still an
+         inline-block with a line box and a 5px margin - ~20px of nothing
+         above the select. Invisible beside the logo, but under it that is
+         what pushed the stack out of the banner. */
+      #vftNav .vft-nav-lang .control-label { display:none; }
       /* `.selectize-input` is what actually renders in the app - shiny turns the
          <select> into a selectize widget - and the other two cover the plain
          <select> that is left if selectize does not initialise. */
@@ -726,8 +738,18 @@ vftStepNav <- function(i18n = NULL){
         border-radius:2px; border:none;
       }
       #vftNav .vft-nav-lang .selectize-input:after { margin-top:-2px; }
-      #vftNav .vft-nav-logo { width:var(--nav-logo); height:70%;
-                              object-fit:contain; flex:0 0 auto; }
+      /* selectize keeps a typing <input> beside the chosen item, and in a box
+         this narrow it wraps onto a second line - out of sight behind the
+         fixed height, but inline-block baseline alignment still sized the
+         control to both lines (40px for a 21px box), which pushed the
+         logo/language stack past the top of the banner. nowrap keeps the
+         input on the one line, clipped; block drops the baseline line box. */
+      #vftNav .vft-nav-lang .selectize-input { display:block; white-space:nowrap; }
+      /* height-bound, width follows the image (~3:1). max-width keeps the
+         old --nav-logo ceiling in case the file is ever swapped for a wider one. */
+      #vftNav .vft-nav-logo { height:calc(var(--nav-h) * 0.5); width:auto;
+                              max-width:var(--nav-logo);
+                              object-fit:contain; flex:0 0 auto; display:block; }
       /* the two icon buttons had their 30px squares written inline. They scale
          with the bar now, and stay STACKED because vertical space is what this
          banner has spare and horizontal space is exactly what it does not. */
@@ -1055,8 +1077,6 @@ vftStepNav <- function(i18n = NULL){
         #vftNav { flex-wrap:wrap; height:auto;
                   padding-top:8px; padding-bottom:8px; row-gap:8px; }
         #vftNav .vft-nav-center { order:3; flex:1 0 100%; justify-content:flex-start; }
-        #vftNav .vft-nav-session-zone,
-        #vftNav .vft-nav-session-spacer { flex:0 0 auto; }
         #vftNav .vft-nav-left   { flex:1 1 auto; }
       }
 
@@ -1078,7 +1098,7 @@ vftStepNav <- function(i18n = NULL){
 
          Centred on the PAGE, not on the button row: .vft-nav-center is the
          middle item of a flex row whose left zone (the title) and right zone
-         (language, logo, icons) are not exactly equal, so the two centres are
+         (session, logo/language, icons) are not exactly equal, so the two centres are
          a few dozen pixels apart. That is well inside the width of the row it
          points at - the arrow lands under a button either way - and matching
          them exactly would mean duplicating both zones here as hidden spacers.
@@ -1119,13 +1139,15 @@ vftStepNav <- function(i18n = NULL){
         withData(shiny::tags$div(class = "vft-nav-title", titleTxt[["de"]]),
                  "data-i18n-", titleTxt)
       ),
-      shiny::tags$div(class = "vft-nav-center",
+      shiny::tags$div(class = "vft-nav-center", center),
+      shiny::tags$div(class = "vft-nav-right",
         #### the explicit save, and on step 1 the load ####
         #
-        #Between the name of the tool and the step buttons rather than in the
-        #icon stack on the right, because it is the one control in this bar
-        #that acts on the session as a whole rather than on the step being
-        #shown.
+        #First in the right-hand cluster, where the language selector used to
+        #be, and apart from the help/info icon stack, because it is the one
+        #control in this bar that acts on the session as a whole rather than on
+        #the step being shown. It used to sit between the title and the step
+        #buttons, and ran into the title when the Simulation chain unfolded.
         #
         #Save: an actionButton, not a downloadButton: pressing it opens a dialog that
         #asks for a name, and the real download link lives in that dialog's
@@ -1142,22 +1164,19 @@ vftStepNav <- function(i18n = NULL){
         #Load: forwarded to step 1's own (hidden) loadSavedData button by
         #vftNavBannerProxyServer() in R/navigation.R, so the upload dialog and
         #everything after it stay step 1's.
-        shiny::tags$div(class = "vft-nav-session-zone",
-          sessionBtn("saveButton", "save", saveTip),
-          sessionBtn("loadButton", "load", loadTip)),
-        center,
-        shiny::tags$div(class = "vft-nav-session-spacer")
-      ),
-      shiny::tags$div(class = "vft-nav-right",
-        withData(
-          shiny::tags$div(class = "vft-nav-lang", title = langTip[["de"]],
-            shiny::selectInput(inputId = "languageSelect", label = NULL,
-                               choices = c("Deutsch" = "de", "Français" = "fr",
-                                           "English" = "en"),
-                               selected = "de", width = "100%")
-          ),
-          "data-tip-", langTip),
-        shiny::tags$img(class = "vft-nav-logo", src = "www/BiodivCenterLogo_w.png"),
+        sessionBtn("saveButton", "save", saveTip),
+        sessionBtn("loadButton", "load", loadTip),
+        shiny::tags$div(class = "vft-nav-brand",
+          shiny::tags$img(class = "vft-nav-logo", src = "www/BiodivCenterLogo_w.png"),
+          withData(
+            shiny::tags$div(class = "vft-nav-lang", title = langTip[["de"]],
+              shiny::selectInput(inputId = "languageSelect", label = NULL,
+                                 choices = c("Deutsch" = "de", "Français" = "fr",
+                                             "English" = "en"),
+                                 selected = "de", width = "100%")
+            ),
+            "data-tip-", langTip)
+        ),
         shiny::tags$div(class = "vft-nav-icons",
           shiny::actionButton(inputId = "helpButton", label = "",
                               class = "vft-nav-icon",

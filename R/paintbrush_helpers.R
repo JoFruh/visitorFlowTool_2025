@@ -901,7 +901,7 @@ planImportLabels <- function(tr){
     cancel     = t("Abbrechen"),
     mapColors  = t("Farben zuordnen"),
     original   = t("Original"),
-    assigned   = t("Zuordnung"),
+    assigned   = t("Ergebnis anzeigen"),
     pickColor  = t("Farbe aufnehmen"),
     removeColor = t("Farbe entfernen"),
     readError  = t("Die Datei konnte nicht gelesen werden."),

@@ -116,6 +116,19 @@ ok("one window, on Switzerland's bounds", length(w) == 1 && near(w[[1]], ch, 6),
 ok("...and the bubble is gone", !isTRUE(js("!!document.querySelector('.vftTutorialOffer')")))
 ok("the card has its Next button", isTRUE(js("!!document.querySelector('.vftTutorialBox .vftTutorialNext')")))
 ok("'anywhere in Switzerland' is emphasised", nzchar(js("(document.querySelector('.vftTutorialText em')||{}).textContent || ''")))
+#left of the selector, clear of it, level with it - not under it, where its
+#dropdown opens
+ok("a second card left of the language selector, in three languages", {
+  tip <- unlist(rectOf(".vftTutorialTip.vftTutorialTipOn")); lang <- unlist(rectOf("#vftNav .vft-nav-lang"))
+  txt <- js("(document.querySelector('.vftTutorialTip')||{}).textContent || ''")
+  length(tip) == 4 && tip[1] + tip[3] <= lang[1] && tip[2] <= lang[2] + lang[4] && tip[2] + tip[4] >= lang[2] &&
+    all(vapply(c("Change language", "Modifiez la langue", "Sprache"), grepl, logical(1), x = txt, fixed = TRUE))
+})
+ok("...the cards do not overlap", {
+  a <- unlist(rectOf(".vftTutorialTip")); b2 <- unlist(rectOf(".vftTutorialBox:not(.vftTutorialTip)"))
+  a[1] + a[3] <= b2[1] || b2[1] + b2[3] <= a[1] || a[2] + a[4] <= b2[2] || b2[2] + b2[4] <= a[2]
+})
+ok("...and both popped in", isTRUE(js("document.querySelectorAll('.vftTutorialBox.vftTutorialPop').length === 2")))
 shot("1_switzerland")
 p <- centre(MAP); click(p[[1]], p[[2]])
 ok("a tap on the map in a hint to read does nothing", isTRUE(js(atHint(1))) &&
@@ -124,6 +137,7 @@ clickEl(".vftTutorialNext")
 
 cat("\n=== 3. hint 2: the upload card ===\n")
 ok("Next moves on to hint 2", waitFor(atHint(2), 10))
+ok("...and the language card goes with hint 1", isTRUE(js("!document.querySelector('.vftTutorialTip.vftTutorialTipOn')")))
 Sys.sleep(0.6)
 w <- wins()
 ok("one window, on the upload card",
@@ -142,9 +156,10 @@ w <- wins()
 ok("two windows: the draw card and the map", length(w) == 2 &&
    any(vapply(w, near, logical(1), r = rectOf(".vft-step1-options > .vft-step1-opt:last-child"))) &&
    any(vapply(w, near, logical(1), r = rectOf(MAP))))
-ok("the card does not cover the map", {
-  bx <- unlist(rectOf(".vftTutorialBox")); mp <- unlist(rectOf(MAP))
-  bx[2] + bx[4] <= mp[2] + 1 || bx[2] >= mp[2] + mp[4] - 1
+ok("the card sits left of the draw card, pointing at it", {
+  bx <- unlist(rectOf(".vftTutorialBox"))
+  dc <- unlist(rectOf(".vft-step1-options > .vft-step1-opt:last-child"))
+  bx[1] + bx[3] <= dc[1] && identical(js("document.querySelector('.vftTutorialBox').getAttribute('data-side')"), "left")
 })
 shot("3_draw")
 clickEl("#infoButton"); Sys.sleep(1)

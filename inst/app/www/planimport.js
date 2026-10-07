@@ -66,7 +66,7 @@
     placeHint: "Ziehen Sie den Plan an seinen Platz und ziehen Sie an seinen Ecken, bis er passt. Die Karte kann weiterhin verschoben und gezoomt werden. Der Plan muss nach Norden ausgerichtet sein.",
     opacity: "Deckkraft", page: "Seite", nextStep: "Weiter", back: "Zurück",
     apply: "Anwenden", cancel: "Abbrechen", mapColors: "Farben zuordnen",
-    original: "Original", assigned: "Zuordnung",
+    original: "Original", assigned: "Ergebnis anzeigen",
     pickColor: "Farbe aufnehmen", removeColor: "Farbe entfernen",
     readError: "Die Datei konnte nicht gelesen werden.",
     outside: "Der Plan liegt ausserhalb des Untersuchungsgebiets.",
@@ -1110,6 +1110,9 @@
 
     var tOrig = button(labels.original, function () { imp.view = "original"; syncToggle(); drawView(); });
     var tAss  = button(labels.assigned, function () { imp.view = "assigned"; syncToggle(); drawView(); });
+    //named for the guided tutorial, which points at them (vft-tutorial.js)
+    tOrig.classList.add("vft-plan-show-original");
+    tAss.classList.add("vft-plan-show-result");
     function syncToggle() {
       tOrig.classList.toggle("active", imp.view === "original");
       tAss.classList.toggle("active", imp.view === "assigned");
@@ -1379,6 +1382,8 @@
     //the guided tutorial starts an import with a plan of its own, in place of
     //the file picker (givePlan() in vft-tutorial.js)
     window.__vftPlanImportStart = start;
+    //...and, as Apply is clicked, asks where the plan lies, to show it painted
+    window.__vftPlanImportBounds = function () { return imp && imp.geo ? geoBounds() : null; };
 
     Shiny.addCustomMessageHandler("plan-import-labels", function (msg) {
       labels = Object.assign({}, L_, msg || {});

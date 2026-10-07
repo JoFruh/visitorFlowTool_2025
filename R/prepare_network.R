@@ -367,8 +367,16 @@ vftPrepareNetwork <- function(network, finalPolygons, minThresh,
 #'   failure does not leave the user looking at a dead button.
 #' @param session the module's session; its userData is shared with the root's,
 #'   which is how the provider layer is reached.
+#' @param onFail called, after `enable`, wherever `then` will not be: no
+#'   scenario, no provider layer, or a load that failed - for what else the
+#'   caller set up before asking (step 5's progress bar).
 vftScenarioNetworkThen <- function(r, pos, then, enable = NULL,
-                                   session = shiny::getDefaultReactiveDomain()){
+                                   session = shiny::getDefaultReactiveDomain(),
+                                   onFail = NULL){
+  fail <- function(){
+    for(el in enable) try(shinyjs::enable(el), silent = TRUE)
+    if(is.function(onFail)) try(onFail(), silent = TRUE)
+  }
 
   #Guarded rather than a bare [[ ]]: this runs inside an observer, and a
   #subscript error here would take that observer down with it rather than
@@ -385,7 +393,7 @@ vftScenarioNetworkThen <- function(r, pos, then, enable = NULL,
     #so put back whatever the caller disabled before asking, or the user is left
     #looking at a dead button.
     vftDbg(paste0("PREPARE: no scenario at position ", pos, " - nothing to do"))
-    for(el in enable) try(shinyjs::enable(el), silent = TRUE)
+    fail()
     return(invisible(FALSE))
   }
 
@@ -420,21 +428,20 @@ vftScenarioNetworkThen <- function(r, pos, then, enable = NULL,
     "network",
     session = session,
     then = function(){
-      vftScenarioNetworkThen(r, pos, then, enable = enable, session = session)
+      vftScenarioNetworkThen(r, pos, then, enable = enable, session = session,
+                             onFail = onFail)
     },
-    #the provider layer opens and closes its own progress bar and shows its
-    #own error notification, so there is nothing to report here - only the
-    #caller's buttons to put back.
-    onFail = function(){
-      for(el in enable) try(shinyjs::enable(el), silent = TRUE)
-    })
+    #the provider layer opens and closes its own progress bar (or drives the
+    #one the caller lent it) and shows its own error notification, so there is
+    #nothing to report here - only what the caller set up to put back.
+    onFail = fail)
 
   if(!isTRUE(ok)){
     #no provider server on this session (tests, or a build without one).
     #Nothing can produce the network, so behave like the missing-scenario
     #case above rather than dispatching a preparation against a NULL graph.
     vftDbg("PREPARE: no provider layer to load the network from")
-    for(el in enable) try(shinyjs::enable(el), silent = TRUE)
+    fail()
   }
   invisible(ok)
 }

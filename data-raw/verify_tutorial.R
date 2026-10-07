@@ -90,12 +90,16 @@ if (!nzchar(tables) || !dir.exists(tables)) {
   ok("hint 1 carries its <em> in every language", all(grepl("<em>.+</em>", firsts)))
   ok("the tours array survives JSON as an array",
      grepl("\"step1\":\\[", as.character(jsonlite::toJSON(pay$de, auto_unbox = TRUE))))
-  alts <- vapply(pay, function(p) p$alts$step5[["6b"]], character(1))
+  alts <- unlist(lapply(pay, function(p) c(p$alts$step5[["7b"]], p$alts$step5[["9b"]])))
   ok("step 5's variant texts are there, and differ by language",
-     length(unique(alts)) == 3 && !any(grepl("^:", alts)))
-  ok("...and reach the browser as an object keyed '6b', '9b'",
-     grepl("\"alts\":\\{\"step5\":\\{\"6b\":\"[^\"]+\",\"9b\":",
+     length(alts) == 6 && length(unique(alts)) == 6 && !any(grepl("^:", alts)))
+  ok("...and reach the browser as an object keyed '7b', '9b'",
+     grepl("\"alts\":\\{\"step5\":\\{\"7b\":\"[^\"]+\",\"9b\":\"[^\"]+\"\\}",
            as.character(jsonlite::toJSON(pay$fr, auto_unbox = TRUE))))
+  ok("step 3's areas of interest in its map red, step 4's shapes in the drawing blue",
+     all(vapply(pay, function(p) grepl("<em class=vftTutAoiRed>", p$tours$step3[2]) &&
+                  grepl("<em class=vftTutShape>.+<i class=vftTutPolyDraw></i>", p$tours$step4[3]) &&
+                  grepl("<em class=vftTutGrey>", p$tours$step4[4]), NA)))
   ok("'Biodiversity Sensitivity' carries its dark-red class",
      all(grepl("<em class=vftTutBio>", vapply(pay, function(p) p$tours$step5[6], ""))))
   s2 <- lapply(pay, function(p) as.character(p$tours$step2))
@@ -105,30 +109,57 @@ if (!nzchar(tables) || !dir.exists(tables)) {
   ok("step 2: the step's name and 'Amphibians' teal and larger (<b><em>)",
      all(vapply(s2, function(s) all(grepl("<b><em>.+</em></b>", s[c(1, 4)])), NA)))
   nv <- lapply(pay, function(p) as.character(p$tours$newVersions))
-  ok("newVersions: nineteen translated strings in every language",
-     all(vapply(nv, function(s) length(s) == 19 && all(nzchar(s)) && !any(grepl("^:.*:$", s)), NA)) &&
+  ok("newVersions: twenty-three translated strings in every language",
+     all(vapply(nv, function(s) length(s) == 23 && all(nzchar(s)) && !any(grepl("^:.*:$", s)), NA)) &&
      !any(unlist(nv[c("de", "fr")]) %in% unlist(VFT_TUTORIAL_FALLBACK)))
   ok("newVersions: the classes of its terms and icons survive the CSV",
-     all(vapply(nv, function(s) grepl("<em class=vftTutDelete>", s[9]) &&
-                  grepl("<i class=vftTutNode></i>", s[11]) &&
-                  grepl("<i class=vftTutNodeSel></i>", s[14]) &&
-                  grepl("<em class=vftTutResidence>.+<em class=vftTutParking>", s[17]) &&
-                  grepl("<em class=vftTutNew>", s[18]), NA)))
+     all(vapply(nv, function(s) grepl("<em class=vftTutGrey>", s[6]) &&
+                  grepl("<i class=vftTutNode></i>", s[7]) &&
+                  grepl("<em class=vftTutDelete>", s[10]) &&
+                  grepl("<i class=vftTutNode></i>", s[12]) &&
+                  grepl("<i class=vftTutNodeSel></i>", s[16]) &&
+                  grepl("<em class=vftTutShape>", s[18]) &&
+                  grepl("<em class=vftTutResidence>.+<em class=vftTutParking>", s[19]) &&
+                  grepl("<em class=vftTutNew>", s[21]) &&
+                  grepl("<em class=vftTutGrey>", s[22]), NA)))
+  ok("newVersions: the rename modal's text (21b) in every language",
+     all(vapply(pay, function(p) {
+       a <- as.character(p$alts$newVersions[["21b"]])
+       length(a) == 1 && nzchar(a) && !grepl("^:.*:$", a)
+     }, NA)) &&
+     length(unique(vapply(pay, function(p) as.character(p$alts$newVersions[["21b"]]), ""))) == 3)
   ok("the heat mitigation hint (toHitze) is there in every language",
      all(vapply(pay, function(p) grepl("<em class=vftTutHeat>", p$tours$toHitze[1]), NA)) &&
      length(unique(vapply(pay, function(p) p$tours$toHitze[1], ""))) == 3)
+  s4 <- lapply(pay, function(p) as.character(p$tours$step4))
+  ok("step 4: six translated strings in every language, the cut's three pictures in hint 2",
+     all(vapply(s4, function(s) length(s) == 6 && all(nzchar(s)) && !any(grepl("^:.*:$", s)) &&
+                  grepl("<span class=vftTutIconRow><i class=vftTutCut1></i><i class=vftTutCut2></i><i class=vftTutCut3></i></span>",
+                        s[2], fixed = TRUE) &&
+                  grepl("<b><em>", s[6], fixed = TRUE), NA)) &&
+     !any(unlist(s4[c("de", "fr")]) %in% unlist(VFT_TUTORIAL_FALLBACK)))
   hz <- lapply(pay, function(p) as.character(p$tours$hitze))
-  ok("hitze: eighteen translated strings in every language",
-     all(vapply(hz, function(s) length(s) == 18 && all(nzchar(s)) && !any(grepl("^:.*:$", s)), NA)) &&
+  ok("hitze: twenty-six translated strings in every language",
+     all(vapply(hz, function(s) length(s) == 26 && all(nzchar(s)) && !any(grepl("^:.*:$", s)), NA)) &&
      !any(unlist(hz[c("de", "fr")]) %in% unlist(VFT_TUTORIAL_FALLBACK)))
   ok("hitze: the classes of its materials and tools survive the CSV",
-     all(vapply(hz, function(s) grepl("<em class=vftTutGrass>", s[3]) &&
-                  all(grepl("<em class=vftTutTree>", s[6:7])) &&
-                  grepl("<em class=vftTutBlack>.+<em class=vftTutBlack>", s[15]) &&
-                  grepl("<em class=vftTutBlack>", s[16]) &&
-                  grepl("<b><em>.+</em></b>", s[17]), NA)))
-  ok("hitze: the plan's Next button by the name the import gives it",
-     all(mapply(function(s, lg) grepl(sprintf("<em>%s</em>", i18n$get_translations()["Weiter", lg]), s[17]),
+     all(vapply(hz, function(s) all(grepl("<em class=vftTutHot>", s[c(1, 11)])) &&
+                  grepl("<em class=vftTutGrass>", s[4]) &&
+                  all(grepl("<em class=vftTutTree>", s[7:8])) &&
+                  grepl("<em class=vftTutBlack>.+<em class=vftTutBlack>", s[16]) &&
+                  grepl("<em class=vftTutBlack>", s[17]) &&
+                  grepl("<b><em>.+</em></b>", s[18]) &&
+                  grepl("<em class=vftTutArtificial>", s[20]) &&
+                  grepl("<em class=vftTutCanopyArt>", s[23]) &&
+                  all(grepl("<b><em>.+</em></b>", s[c(22, 24, 26)])), NA)))
+  tb <- i18n$get_translations()
+  ok("hitze: the plan import's buttons by the names the import gives them (Next, Pick, Apply)",
+     all(mapply(function(s, lg) grepl(sprintf("<em>%s</em>", tb["Weiter", lg]), s[18], fixed = TRUE) &&
+                  grepl(sprintf("<em>%s</em>", tb["Farbe aufnehmen", lg]), s[22], fixed = TRUE) &&
+                  grepl(sprintf("<em>%s</em>", tb["Anwenden", lg]), s[24], fixed = TRUE),
+                hz, names(hz))))
+  ok("hitze: the plan import's material names in its hints (Artificial canopy)",
+     all(mapply(function(s, lg) grepl(sprintf(">%s<", tb["Kuenstliche Krone", lg]), s[23], fixed = TRUE),
                 hz, names(hz))))
 }
 ok("the plan the heat mitigation tour hands over is in www",

@@ -61,6 +61,11 @@
   var PLAY = '<svg class="vftTutorialPlay" viewBox="0 0 10 12" aria-hidden="true">' +
              '<path d="M0 0L10 6L0 12Z"/></svg>';
 
+  // the second card of a hint with `langTip`, under the language selector: in
+  // all three languages at once, since it is there for whoever cannot read the
+  // one being shown
+  var LANG_TIP = 'Change language here.<br>Modifiez la langue ici.<br>Ändern Sie die Sprache hier.';
+
   // from the server: {lang, next_, stop, offer, start, tours: {step1: [...], step2: [...]}}
   var texts = null;
   var state = null;       // the running tour, null when none
@@ -514,7 +519,7 @@
   // prepared and step 1's page is still showing: wait for step 3's own page.
   function step3NotYet() { return !shown(aoiSliderBox()); }
 
-  // The slider runs from 20 on the left down to 0 on the right, and starts on
+  // The slider runs from 0 on the left up to 20 on the right, and starts on
   // 11: "reaching 8" is a value of 8 or below, sent once the slider rests.
   function watchAoiThreshold(ctx) {
     ctx.jq('shiny:inputchanged', function (e) {
@@ -645,6 +650,12 @@
     return !!b && b.disabled;
   }
 
+  // A simulation under way: the page starts one for an Original without one
+  // as the user arrives (autoLaunch in step5_server.R), so the launch hint
+  // has nothing to ask. The button alone, not the bars: a bar on arrival may
+  // be some other data's.
+  function simRunning() { return launchBusy(); }
+
   // the "no simulation yet" picture is off the map
   function step5MapShown() {
     return !shown(document.getElementById('step5-mapPlaceholder')) && !!step5Map();
@@ -703,6 +714,40 @@
   function smMissing() {
     var el = document.getElementById('step5-SMcheckbox');
     return !(el && el.classList.contains('vftSmReady'));
+  }
+
+  // the image button's name modal (obsGenImage in step5_server.R), once up
+  function imageModalUp() {
+    var input = document.getElementById('step5-nameInput');
+    return !!input && modalOpen() && shown(input);
+  }
+
+  // the image button; once its name modal is up, that modal instead - the
+  // card then points at it, with its own text (7b)
+  function imageTarget(ctx) {
+    var m = imageNameModal();
+    return m.length ? m : sel('#step5-imageButton')(ctx);
+  }
+
+  function imageNameModal() {
+    var input = document.getElementById('step5-nameInput');
+    var content = input && modalOpen() && input.closest('.modal-content');
+    var r = shown(content) && elRect(content, 4);
+    return r ? [{ key: 'nameModal', rect: r, hit: [content] }] : [];
+  }
+
+  // Next on the image hint waits for the image the button may have started:
+  // the server draws it before its name modal opens, and that modal would
+  // otherwise land in the next hint, whose taps it cannot take
+  function afterImage(ctx, done) {
+    (function wait() {
+      if (!state || state.ctx !== ctx) { return; }
+      if (modalOpen() || document.documentElement.classList.contains('shiny-busy')) {
+        setTimeout(wait, 200);
+        return;
+      }
+      done();
+    })();
   }
 
   // the scenario column: its title and the list of cards under it
@@ -940,12 +985,12 @@
     };
   }
 
-  // the "Signage:" and "Surface:" legends, as one window
+  // the signage and surface legends, as one window (networkLegends() in
+  // newVersions_server.R; translated, so found by class)
   function pathLegends() {
     var el = document.getElementById(NV_MAP);
-    var parts = el ? Array.prototype.filter.call(el.querySelectorAll('.leaflet-control'), function (c) {
-      return /^\s*(Signage|Surface)/.test(c.textContent || '');
-    }) : [];
+    var parts = el ? Array.prototype.slice.call(
+      el.querySelectorAll('.vft-legend-signage, .vft-legend-surface')) : [];
     var r = union(parts.filter(shown).map(function (c) { return elRect(c, 4); }));
     return r ? [{ key: 'legends', rect: r }] : [];
   }
@@ -961,19 +1006,43 @@
     });
   }
 
-  // the clicked path, however short, as a window; `hit` [] takes no taps
-  function edgeWindow() {
-    var map = nvMap();
-    var b = state.data.edge;
-    if (!map || !map._loaded || !b) { return []; }
-    var cr = elRect(map.getContainer(), 0);
-    var nw = map.latLngToContainerPoint(b.getNorthWest());
-    var se = map.latLngToContainerPoint(b.getSouthEast());
-    var r = { l: cr.l + nw.x - 10, t: cr.t + nw.y - 10, r: cr.l + se.x + 10, b: cr.t + se.y + 10 };
-    var dx = Math.max(0, EDGE_MIN - (r.r - r.l)) / 2, dy = Math.max(0, EDGE_MIN - (r.b - r.t)) / 2;
-    r = intersect({ l: r.l - dx, t: r.t - dy, r: r.r + dx, b: r.b + dy }, cr);
-    return r ? [{ key: 'edge', rect: r, hit: [] }] : [];
+  // A path remembered in state.data[name] (its bounds), however short, as a
+  // window; `hit` [] takes no taps
+  function pathWindow(name) {
+    return function () {
+      var map = nvMap();
+      var b = state.data[name];
+      if (!map || !map._loaded || !b) { return []; }
+      var cr = elRect(map.getContainer(), 0);
+      var nw = map.latLngToContainerPoint(b.getNorthWest());
+      var se = map.latLngToContainerPoint(b.getSouthEast());
+      var r = { l: cr.l + nw.x - 10, t: cr.t + nw.y - 10, r: cr.l + se.x + 10, b: cr.t + se.y + 10 };
+      var dx = Math.max(0, EDGE_MIN - (r.r - r.l)) / 2, dy = Math.max(0, EDGE_MIN - (r.b - r.t)) / 2;
+      r = intersect({ l: r.l - dx, t: r.t - dy, r: r.r + dx, b: r.b + dy }, cr);
+      return r ? [{ key: name, rect: r, hit: [] }] : [];
+    };
   }
+
+  // the clicked path
+  var edgeWindow = pathWindow('edge');
+
+  // Where the new path goes: from the selected node to the tap that made it -
+  // a new node on the map, or another node (that tap reaches the map's click
+  // too, so the node's wins). Remembered for the hint after its modal.
+  function watchNewPath(ctx) {
+    ctx.jq('shiny:inputchanged', function (e) {
+      var m = selectedNode();
+      var v = e.value;
+      if (!m || !v || v.lat == null || v.lng == null) { return; }
+      var toNode = e.name === NV + 'versionMap_marker_click';
+      if (toNode && v.id === 'XXX') { return; }
+      if (!toNode && (e.name !== NV + 'versionMap_click' || ctx.toNode)) { return; }
+      if (toNode) { ctx.toNode = true; }
+      state.data.newPath = L.latLngBounds([m.getLatLng(), L.latLng(v.lat, v.lng)]);
+    });
+  }
+
+  var newPathWindow = pathWindow('newPath');
 
   function modalWith(id) { return function () { return modalOpen() && shown(nvEl(id)); }; }
 
@@ -1031,9 +1100,11 @@
   }
 
   // Before the first vertex, a tap on a parking or residential area deletes it
-  // (obsShapeClick, context 3); once a polygon is under way it adds a vertex.
+  // (obsShapeClick, context 3); once polydraw.js has a drawing under way, the
+  // areas are click-through and the tap adds a vertex.
   function drawTap(x, y, el) {
-    var drawing = groupLayers(nvMap(), 'first').length > 0;
+    var map = nvMap();
+    var drawing = !!map && map.getContainer().classList.contains('vft-pd-drawing');
     return drawing || !(el && el.closest && el.closest('.leaflet-layer2-pane .leaflet-interactive'));
   }
 
@@ -1043,8 +1114,10 @@
     if (!map || !map._loaded || !window.L) { return []; }
     var b = outlineBounds(map);
     if (!b) { return []; }
-    if (!ctx.framed) {
-      ctx.framed = true;
+    // once per map instance: a render that lands after the framing builds a
+    // new map, at the view the page remembered
+    if (ctx.framed !== map) {
+      ctx.framed = map;
       holdForMove(map, function () {
         if (still()) { map.fitBounds(b, { animate: false, padding: [20, 20] }); }
         else { map.flyToBounds(b, { duration: 0.8, padding: [20, 20] }); }
@@ -1054,15 +1127,6 @@
     var out = boundsWindow(nvMap, b, 'outline')();
     if (out.length) { out[0].hitAt = drawTap; }
     return out;
-  }
-
-  // this page's scenario column: its title and the cards
-  function nvScenarioColumn() {
-    var top = document.getElementById('topPlaceHolder_newVersion');
-    var col = top && top.closest('.vft-scencol');
-    var parts = col ? [col.querySelector('h4'), col.querySelector('.vft-ws-listrow')] : [];
-    var r = union(parts.filter(shown).map(function (el) { return elRect(el, 4); }));
-    return r ? [{ key: 'scenarios', rect: r }] : [];
   }
 
   // the first scenario after the Original, picked once
@@ -1075,6 +1139,61 @@
     if (!ctx.card || !ctx.card.isConnected) { watchFirstOther(ctx); }
     var card = ctx.card;
     return clipped(card, card && card.closest('.vft-ws-list'), 4, 'card');
+  }
+
+  // a tap on a context's button - also when it is the one already on, which
+  // changes nothing and so fires no change
+  function watchContextTap(v) {
+    return function (ctx) {
+      ctx.on(window, 'click', function (e) {
+        var i = contextInput(v);
+        var lab = i && i.closest('label');
+        if (lab && e.target && lab.contains(e.target)) { ctx.flag = true; }
+      }, true);
+    };
+  }
+
+  function selectedCard() { return nvCards().filter(isSelected)[0] || null; }
+
+  function originalCard() { return nvCards().filter(isOriginal)[0] || null; }
+
+  // a card as a window, cut to the list it scrolls in
+  function cardWindow(card, key, hit) {
+    return clipped(card, card && card.closest('.vft-ws-list'), 4, key, hit);
+  }
+
+  // a card brought into sight in its list, as the hint starts
+  function showCard(pick) {
+    return function () {
+      var card = pick();
+      centreIn(card, card && card.closest('.vft-ws-list'));
+    };
+  }
+
+  function selectedTarget() { return cardWindow(selectedCard(), 'selected'); }
+
+  function originalTarget() { return cardWindow(originalCard(), 'original'); }
+
+  // The seeded scenario's placeholder name, on the selected card: a click on
+  // it asks for a real one (versionLabel() in newVersions_server.R)
+  function provisionalName() {
+    var card = selectedCard();
+    return card && card.querySelector('.vftProvisionalName');
+  }
+
+  function renameModalUp() { return modalOpen() && shown(nvEl('renameName')); }
+
+  // The selected card, only its name taking a tap; once that has opened the
+  // rename modal, the whole modal (and the text of its own, b)
+  function provisionalTarget(ctx) {
+    if (renameModalUp()) {
+      ctx.renaming = true;
+      var content = document.querySelector('#shiny-modal .modal-content');
+      var r = shown(content) && elRect(content, 4);
+      return r ? [{ key: 'rename', rect: r, hit: [content] }] : [];
+    }
+    var name = provisionalName();
+    return name ? cardWindow(selectedCard(), 'selected', [name]) : [];
   }
 
   /* ---------------------- heat mitigation's hints ---------------------- */
@@ -1319,13 +1438,17 @@
 
   // The heat icons of the card whose map is up (red border, showHeat()), or
   // else of the selected card. The server replaces the strip as maps arrive.
-  function heatIcons() {
+  function heatIconsStrip() {
     var cards = nvCards();
     var card = cards.filter(function (c) { return c.classList.contains('vftHeatCard'); })[0] ||
                cards.filter(isSelected)[0];
     var wrap = card && card.closest('.vftCard');
-    var strip = wrap && wrap.querySelector('.vftHeatIcons');
-    return clipped(strip, card && card.closest('.vft-ws-list'), 4, 'heatIcons');
+    return (wrap && wrap.querySelector('.vftHeatIcons')) || null;
+  }
+
+  function heatIcons() {
+    var strip = heatIconsStrip();
+    return clipped(strip, strip && strip.closest('.vft-ws-list'), 4, 'heatIcons');
   }
 
   // The plan button opens the file picker (its inline onclick). Here the tap
@@ -1374,6 +1497,145 @@
     return function () { return shown(document.querySelector(selector)); };
   }
 
+  // The heat icons with only the noon one taking a tap: shown again at once
+  // from the scenario's store (heatIconClick in newVersions_server.R)
+  var NOON_ICON = '.vftHeatIcon[data-bin="midday"]';
+
+  function noonIconTarget() {
+    var out = heatIcons();
+    var strip = heatIconsStrip();
+    var noon = strip && strip.querySelector(NOON_ICON);
+    if (out.length) { out[0].hit = noon ? [noon] : []; }
+    return out;
+  }
+
+  function noonShown() {
+    var strip = heatIconsStrip();
+    var noon = strip && strip.querySelector(NOON_ICON);
+    return !!noon && noon.classList.contains('vftHeatShown') && heatOn() && !heatBusy();
+  }
+
+  /* -- the plan's colour card, after the automatic assignment -- */
+
+  // the colour rows (renderRows() in planimport.js), rebuilt on every pick
+  function planRows() {
+    return Array.prototype.slice.call(document.querySelectorAll(PLAN_CARD + ' .vft-plan-colrow'));
+  }
+
+  function rowSelect(row) { return row && row.querySelector('select'); }
+
+  // a row as a window: its swatch and its material, only the latter taking taps
+  function rowWindow(row, key) {
+    var sw = row && row.querySelector('.vft-plan-swatch');
+    var se = rowSelect(row);
+    var list = row && row.closest('.vft-plan-rows');
+    var r = shown(sw) && shown(se) && union([elRect(sw, 4), elRect(se, 4)]);
+    var c = r && list && elRect(list, 2);
+    r = r && (c ? intersect(r, c) : r);
+    return r ? [{ key: key, rect: r, hit: [se] }] : [];
+  }
+
+  function swatchRgb(row) {
+    var sw = row && row.querySelector('.vft-plan-swatch');
+    var m = sw && /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(getComputedStyle(sw).backgroundColor);
+    return m ? [+m[1], +m[2], +m[3]] : null;
+  }
+
+  // The tour's plan draws its paths in tan (data-raw/make_tutorial_plan.R),
+  // which the import calls natural ground: the row nearest that colour,
+  // picked once.
+  var PLAN_PATH_RGB = [210, 180, 140];
+
+  function brownRow(ctx) {
+    if (ctx.row && ctx.row.isConnected) { return ctx.row; }
+    var best = null, bd = Infinity;
+    planRows().forEach(function (row) {
+      var c = swatchRgb(row);
+      if (!c) { return; }
+      var d = Math.pow(c[0] - PLAN_PATH_RGB[0], 2) + Math.pow(c[1] - PLAN_PATH_RGB[1], 2) +
+              Math.pow(c[2] - PLAN_PATH_RGB[2], 2);
+      if (d < bd) { bd = d; best = row; }
+    });
+    ctx.row = best;
+    return best;
+  }
+
+  function rowSetTo(row, material) {
+    var s = rowSelect(row);
+    return !!s && s.value === material;
+  }
+
+  // the material ids of the import's select (MATERIAL_ORDER in planimport.js)
+  var MAT_ARTIFICIAL = '3', MAT_CANOPY_ARTIFICIAL = '6';
+
+  // the toggle that shows the plan in its assigned materials, and the one
+  // that shows it as uploaded
+  var PLAN_RESULT = PLAN_CARD + ' .vft-plan-show-result';
+  var PLAN_ORIGINAL = PLAN_CARD + ' .vft-plan-show-original';
+  var PLAN_PICK = PLAN_CARD + ' .vft-plan-pickbtn';
+  var PLAN_VIEW = PLAN_CARD + ' canvas.vft-plan-view';
+  // the darker grey roof of the tour's plan, as fractions of it (x0, y0, x1,
+  // y1; the plan is 720 px square, the roof 470..700 x 160..224)
+  var PLAN_ROOF = [470 / 720, 160 / 720, 700 / 720, 224 / 720];
+
+  function planResultOn() {
+    var b = document.querySelector(PLAN_RESULT);
+    return !!b && b.classList.contains('active');
+  }
+
+  // back to the plan as uploaded, where the darker grey can be seen
+  function showOriginalPlan() {
+    var b = document.querySelector(PLAN_ORIGINAL);
+    if (b && !b.classList.contains('active')) { b.click(); }
+  }
+
+  // the roof on the card's picture of the plan, and the pick button
+  function roofAndPick() {
+    var cv = document.querySelector(PLAN_VIEW);
+    var out = [];
+    var r = shown(cv) && elRect(cv, 0);
+    if (r) {
+      var w = r.r - r.l, h = r.b - r.t;
+      out.push({ key: 'roof', hit: [cv],
+                 rect: { l: r.l + PLAN_ROOF[0] * w - 3, t: r.t + PLAN_ROOF[1] * h - 3,
+                         r: r.l + PLAN_ROOF[2] * w + 3, b: r.t + PLAN_ROOF[3] * h + 3 } });
+    }
+    return out.concat(sel(PLAN_PICK)());
+  }
+
+  // the colour the pick added: the last of the picked rows
+  function pickedRow() {
+    var rows = document.querySelectorAll(PLAN_CARD + ' .vft-plan-colrow.vft-plan-picked');
+    return rows.length ? rows[rows.length - 1] : null;
+  }
+
+  // Apply: where the plan lay is kept for the hint after it, which shows it
+  // painted (the import forgets it as it closes)
+  function watchApply(ctx) {
+    ctx.on(window, 'click', function (e) {
+      if (!(e.target && e.target.closest && e.target.closest(PLAN_APPLY))) { return; }
+      var f = window.__vftPlanImportBounds;
+      var b = null;
+      try { b = f ? f() : null; } catch (err) { b = null; }
+      state.data.planBounds = b ? [[b.getSouth(), b.getWest()], [b.getNorth(), b.getEast()]] : null;
+      ctx.flag = true;
+    }, true);
+  }
+
+  function planArea() {
+    var b = state && state.data.planBounds;
+    return b ? boundsWindow(nvMap, b, 'planArea')() : heatArea(false)();
+  }
+
+  var NV_CONFIRM = '#' + NV + 'newVersionsConfirmButton';
+
+  // Confirming leads to step 5's simulation, so it stays disabled while the
+  // page has no path network (Hitzeminderung entered from step 1)
+  function confirmShut() {
+    var b = document.querySelector(NV_CONFIRM);
+    return !shown(b) || b.disabled;
+  }
+
   /* ------------------------------ tours ----------------------------- */
   // targets: the windows. A window's `hit` lists the elements a tap in it has
   //   to land on; its `hitAt(x, y, el)` decides instead, for a map whose
@@ -1388,15 +1650,30 @@
   // escPass: Escape is left to the page (polydraw.js takes a vertex back
   //   with it) instead of stopping the tour.
   // avoid: selectors the card must not cover. cardOver: a selector the card
-  //   sits on instead of beside the windows. wide: a wider card, for a hint
-  //   with little height to spare.
+  //   sits on instead of beside the windows. cardNear: a selector the card
+  //   goes above (or below) instead of the windows - it stays put while they
+  //   come and go. wide: a wider card, for a hint with little height to spare.
+  // hug: when there is no room above or below the windows (a whole map), the
+  //   card goes to the top or bottom of the screen, covering as little of
+  //   them as it can, rather than into the middle.
+  // stay: the card keeps the place it first took (the windows move as the
+  //   user zooms).
+  // side: 'left' or 'right' - the card beside the windows (or beside the
+  //   element `sideOf` names), pointing at them, rather than above or below.
+  // langTip: a second card, left of the language selector, in all three
+  //   languages (LANG_TIP).
+  // delay: ms added to the pause before this hint shows.
   // hold(ctx): true keeps the hint hidden. center: the text is centred.
   // end: the tour ends once this hint is done, whatever comes after it.
   // skip(): asked as the hint is reached; true passes over it. The counter
   //   leaves out the hints passed over, and those it expects to pass over.
+  // skipWhen(ctx): asked every frame while the hint is on; true passes over
+  //   it then - as skip() does if it was not shown yet, as done if it was.
   // bodyClass: a class on <body> while the hint is on (vft-tutorial.css).
   // variant(): asked once as the hint starts; a name it returns lays
   //   variants[name] over the hint, and its text is the alternative one.
+  // textWhen(ctx): asked every frame; a name it returns shows the variant
+  //   text of that name (as variant() does) for as long as it returns it.
   // text: [key, index] - the hint shows another tour's text (borrowed()).
   // Texts are texts.tours[<key>][<n>], n counting the tour's own hints (a
   // hint with `text` has no number); a variant's are
@@ -1404,11 +1681,13 @@
 
   var TOURS = {
     step1: [
-      { // 1 - a word of welcome over Switzerland, framed whole on the map
+      { // 1 - a word of welcome over Switzerland, framed whole on the map,
+        // and a second card on the language selector
         targets: boundsWindow(step1Map, CH_BOUNDS, 'switzerland'),
         enter: viewSwitzerland,
         hold: textsBehind,
         center: true,
+        langTip: true,
         look: true
       },
       { // 2 - the upload card
@@ -1416,7 +1695,7 @@
         look: true
       },
       { // 3 - draw around Birmensdorf. The map and the drawing card; the card
-        // sits over the upload card, out of both windows. A refused polygon's
+        // sits left of the drawing card, pointing at it. A refused polygon's
         // modal can be dismissed through the dim.
         targets: function () {
           var map = step1Map();
@@ -1426,8 +1705,8 @@
           if (r) { out.push({ key: 'map', rect: r, hit: [c] }); }
           return out;
         },
-        cardOver: UPLOAD_CARD,
-        wide: true,
+        side: 'left',
+        sideOf: DRAW_CARD,
         enter: watchDrawing,
         advance: drawingAccepted,
         escPass: true,
@@ -1496,12 +1775,16 @@
         enter: watchClick('#step2-redListWeights'),
         advance: flagged
       },
-      { // 10 - hide the bottom 25 %
+      { // 10 - hide the bottom 25 %, a second later than usual (the weights
+        // just changed redraw the map). The card goes right of the slider,
+        // off the map.
         targets: function () {
           var box = sliderBox();
           var r = shown(box) && elRect(box, 4);
           return r ? [{ key: 'threshold', rect: r, hit: [box] }] : [];
         },
+        delay: 1000,
+        side: 'right',
         enter: watchThreshold,
         advance: flagged
       },
@@ -1565,11 +1848,13 @@
         hold: step4NotYet,
         look: true
       },
-      { // 2 - cut an area in two with the scissors
+      { // 2 - cut an area in two with the scissors. The window is most of
+        // the map: the card goes to the top or bottom of the screen.
         targets: areasWindow,
         enter: watchCut,
         advance: cutSplitArea,
         wide: true,
+        hug: true,
         escPass: true
       },
       { // 3 - draw a new area
@@ -1584,7 +1869,14 @@
         enter: watchClick('#step4-resetButton'),
         advance: flagged
       },
-      { // 5 - confirm. The tour ends with the tap, and step 5's tour follows.
+      { // 5 - the automatic corrections: may be used, Next moves on either
+        // way. While they run, the confirm is disabled (step4_server.R), so
+        // hint 6 simply waits for them.
+        targets: sel('#step4-autoCutButton'),
+        look: true,
+        live: true
+      },
+      { // 6 - confirm. The tour ends with the tap, and step 5's tour follows.
         // Confirming over later steps' work first asks whether to discard it:
         // that modal takes taps too.
         targets: sel('#step4-confirmButton4'),
@@ -1596,8 +1888,11 @@
 
     step5: [
       { // 1 - launch the simulation. A failure's modal can be dismissed.
+        // Passed over while one runs: the page launches the Original's itself
+        // when it has none.
         targets: sel(LAUNCH),
         hold: step5NotYet,
+        skipWhen: simRunning,
         enter: watchClick(LAUNCH),
         advance: flagged,
         pass: '#shiny-modal'
@@ -1623,20 +1918,26 @@
         enter: watchSwitch('step5-startingCheckbox'),
         advance: flagged
       },
-      { // 6 - a: switch the sensitivity matrix on. b: there is none to show
-        // (the switch would offer to go and make one) - read only
+      { // 6 - switch the sensitivity matrix on; passed over when there is
+        // none to show
         targets: switchRow('step5-SMcheckbox'),
+        skip: smMissing,
         enter: watchSwitch('step5-SMcheckbox'),
-        advance: flagged,
-        variant: function () { return smMissing() ? 'b' : null; },
-        variants: { b: { enter: null, advance: null, look: true } }
+        advance: flagged
       },
-      { // 7 - the export
-        targets: sel('#step5-imageButton'),
-        look: true
+      { // 7 - the export: may be used - its name modal too, which gets the
+        // window and a text of its own (7b) - Next moves on either way, once
+        // the image is done
+        targets: imageTarget,
+        textWhen: function () { return imageModalUp() ? 'b' : null; },
+        look: true,
+        live: true,
+        pass: '#shiny-modal',
+        onNext: afterImage
       },
-      { // 8 - the scenario column
+      { // 8 - the scenario column, the card on its left
         targets: scenarioColumn,
+        side: 'left',
         look: true
       },
       { // 9 - a: only the original - go and make a scenario; the tour ends
@@ -1685,61 +1986,75 @@
         enter: watchFirstOther,
         advance: function () { return !originalSelected(); }
       },
-      { // 5 - the three contexts
+      { // 5 - the contexts
         targets: sel('#' + NV + 'contextChoice .shiny-options-group', 4),
         look: true
       },
-      { // 6 - the network, 1 km in its middle, and its legends. On context 1,
+      { // 6 - Paths/Roads first: Next, or a tap on it, moves on
+        targets: contextLabel('1'),
+        enter: watchContextTap('1'),
+        advance: flagged,
+        look: true,
+        live: true
+      },
+      { // 7 - the network, 1 km in its middle, and its legends. On context 1,
         // the map zoomed onto the square.
         targets: each(networkSquare(), pathLegends),
         hold: networkNotYet,
         look: true
       },
-      { // 7 - click a path: its modal opens (moved aside, see bodyClass)
+      { // 8 - click a path: its modal opens, where it always does, over a
+        // faint backdrop (see bodyClass)
         targets: networkSquare(function (x, y) { return onPath(x, y) && !onNode(x, y); }),
         enter: watchPathClick,
         advance: modalWith('deleteEdge'),
-        bodyClass: 'vftTutModalAside'
+        bodyClass: 'vftTutModalLight'
       },
-      { // 8 - its qualities: may be changed, Next moves on. The card keeps
+      { // 9 - its qualities: may be changed, Next moves on. The card keeps
         // off the delete button and the title above them.
         targets: qualityRadios,
         avoid: ['#shiny-modal .modal-body h3', '#' + NV + 'deleteEdge'],
         look: true,
         live: true,
-        bodyClass: 'vftTutModalAside'
+        bodyClass: 'vftTutModalLight'
       },
-      { // 9 - delete it; a window on it, on the map, until it is gone
-        targets: each(sel('#' + NV + 'deleteEdge'), edgeWindow),
+      { // 10 - delete it
+        targets: sel('#' + NV + 'deleteEdge'),
         enter: watchClick('#' + NV + 'deleteEdge'),
         advance: clickedAndClosed,
-        bodyClass: 'vftTutModalAside'
+        bodyClass: 'vftTutModalLight'
       },
-      { // 10 - it is gone
+      { // 11 - it is gone
         targets: edgeWindow,
         look: true
       },
-      { // 11 - select a node
+      { // 12 - select a node
         targets: networkSquare(function (x, y) { return onNode(x, y) && !onSelectedNode(x, y); }),
         advance: function () { return !!selectedNode(); }
       },
-      { // 12 - a new path from it: to a new node on the map, or to another
+      { // 13 - a new path from it: to a new node on the map, or to another
         // node. Not onto a path (that cancels the selection) nor onto the
-        // selected node (that deletes it).
+        // selected node (that deletes it). Its modal opens in its usual place.
         targets: networkSquare(function (x, y) {
           return !onSelectedNode(x, y) && (onNode(x, y) || !onPath(x, y));
         }),
         wide: true,
+        enter: watchNewPath,
         advance: modalWith('submitNewPath'),
-        bodyClass: 'vftTutModalAside'
+        bodyClass: 'vftTutModalLight'
       },
-      { // 13 - its qualities, submitted
+      { // 14 - its qualities, submitted
         targets: newPathModal,
         enter: watchClick('#' + NV + 'submitNewPath'),
         advance: clickedAndClosed,
-        bodyClass: 'vftTutModalAside'
+        bodyClass: 'vftTutModalLight'
       },
-      { // 14 - delete a node: select one, then tap it again. Once one is
+      { // 15 - the new path, on the map
+        targets: newPathWindow,
+        hold: modalOpen,
+        look: true
+      },
+      { // 16 - delete a node: select one, then tap it again. Once one is
         // selected, only it takes a tap - another node would link the two.
         targets: networkSquare(function (x, y) {
           return selectedNode() ? onSelectedNode(x, y) : onNode(x, y);
@@ -1748,29 +2063,49 @@
         enter: watchNodeDelete,
         advance: function (ctx) { return !!ctx.flag && !selectedNode(); }
       },
-      { // 15 - the parking and residences context
+      { // 17 - the parking and residences context
         targets: contextLabel('3'),
         enter: watchContext('3'),
         advance: flagged
       },
-      { // 16 - draw a polygon, closed on its first vertex: the type modal
+      { // 18 - draw an area (polydraw.js, as in step 1), closed on its first
+        // vertex or with a double-click: the type modal. Escape takes a
+        // vertex back.
         targets: outlineWindow,
         hold: parkingNotYet,
-        advance: modalWith('chooseParking')
+        advance: modalWith('chooseParking'),
+        escPass: true
       },
-      { // 17 - parking or residence. A refused overlap raises a modal of its
-        // own, which can be dismissed.
+      { // 19 - parking or residence. A refused overlap raises a modal of its
+        // own, which can be dismissed; the type modal's cancel is kept shut.
         targets: buttonRow('#' + NV + 'chooseParking, #' + NV + 'chooseResidential'),
         avoid: ['#shiny-modal .modal-body h4'],
         enter: watchClick('#' + NV + 'chooseParking, #' + NV + 'chooseResidential'),
         advance: clickedAndClosed,
-        pass: '#shiny-modal'
+        pass: '#shiny-modal [data-dismiss]'
       },
-      { // 18 - the scenarios keep all this
-        targets: nvScenarioColumn,
+      { // 20 - the selected scenario keeps all this
+        targets: selectedTarget,
+        enter: showCard(selectedCard),
         look: true
       },
-      { // 19 - confirm, back to step 5. The tour ends with the tap, and the
+      { // 21 - only on the seeded scenario: its name can be changed. A tap on
+        // it opens the rename modal, which then gets the window and a text of
+        // its own (21b); its submit or cancel moves on, as Next does.
+        targets: provisionalTarget,
+        skip: function () { return !provisionalName(); },
+        enter: showCard(selectedCard),
+        textWhen: function () { return renameModalUp() ? 'b' : null; },
+        advance: function (ctx) { return !!ctx.renaming && !modalOpen(); },
+        look: true,
+        live: true
+      },
+      { // 22 - the Original cannot be altered
+        targets: originalTarget,
+        enter: showCard(originalCard),
+        look: true
+      },
+      { // 23 - confirm, back to step 5. The tour ends with the tap, and the
         // heat mitigation hint follows there (NEXT below).
         targets: sel('#' + NV + 'newVersionsConfirmButton'),
         enter: watchClick('#' + NV + 'newVersionsConfirmButton'),
@@ -1793,56 +2128,63 @@
     ],
 
     // Heat mitigation. Three of the scenarios page's hints are played after
-    // hint 2 when there is no scenario to paint on (see below the tours).
+    // hint 3 when there is no scenario to paint on (see below the tours).
     hitze: [
-      { // 1 - this context's button, beside parking/residences
+      { // 1 - the Hitzeminderung button in the nav bar: what this step is for
+        targets: sel('#vftNav_hitze', 4),
+        hold: settled(hitzeNotYet, 1500),
+        look: true
+      },
+      { // 2 - this context's button, beside parking/residences
         targets: contextLabel('4'),
         hold: settled(hitzeNotYet, 1500),
         look: true
       },
-      { // 2 - the materials on the map, the area framed whole
+      { // 3 - the materials on the map, the area framed whole
         targets: heatArea(true),
         hold: materialsNotYet,
         look: true
       },
-      { // 3 - pick grass in the palette (armed already on a first visit: the
+      { // 4 - pick grass in the palette (armed already on a first visit: the
         // tap is what moves on)
         targets: sel(GRASS),
         hold: groundNotYet,
         enter: watchClick(GRASS),
         advance: flagged
       },
-      { // 4 - paint with it; on 3 s after the stroke began. An attempt the
-        // page refuses says why in a modal, which can be dismissed.
+      { // 5 - paint with it; on 3 s after the stroke began. An attempt the
+        // page refuses says why in a modal, which can be dismissed. The card
+        // stays where it first appeared as the user zooms in.
         targets: heatArea(false),
         enter: watchPaint,
         advance: painted,
+        stay: true,
         pass: '#shiny-modal'
       },
-      { // 5 - the level switch, up to the canopy
+      { // 6 - the level switch, up to the canopy
         targets: sel(PAINT_PANEL + ' .paintLevelSwitch', 4),
         enter: watchLevel,
         advance: canopyOn
       },
-      { // 6 - arm the tree, unless the switch just did (the canopy level's
-        // remembered material, the tree on a first visit)
+      { // 7 - arm the tree. The canopy level opens on the artificial canopy
+        // on a first visit (newVersions_server.R), so this is a real choice.
         targets: sel(TREE),
-        skip: treeArmed,
-        advance: treeArmed
+        enter: watchClick(TREE),
+        advance: function (ctx) { return !!ctx.flag && treeArmed(); }
       },
-      { // 7 - its height bar: another height
+      { // 8 - its height bar: another height
         targets: sel(TREE_HEIGHTS, 4),
         enter: watchHeight,
         advance: flagged
       },
-      { // 8 - paint trees; on 3 s after the stroke began, or as soon as it is
+      { // 9 - paint trees; on 3 s after the stroke began, or as soon as it is
         // stopped by an underground element
         targets: heatArea(false),
         enter: watchPaint,
         advance: function (ctx) { return painted(ctx) || (!!ctx.paintAt && !!ugIgnoreButton()); },
         pass: '#shiny-modal'
       },
-      { // 9 - only if the stroke ran into an underground element: the
+      { // 10 - only if the stroke ran into an underground element: the
         // warning's ignore button. It may be used (on 3 s later); Next moves
         // on either way.
         targets: ugTarget,
@@ -1855,60 +2197,106 @@
         look: true,
         live: true
       },
-      { // 10 - calculate the heat
+      { // 11 - calculate the heat
         targets: sel(HEAT),
         hold: ugBoxUp,
         enter: watchHeatLaunch,
         advance: flagged,
         pass: '#shiny-modal'
       },
-      { // 11 - the progress bar, until the map is up. Passed over when it
-        // already is: a stored map is shown at once.
+      { // 12 - the progress bar, until the map is up. Passed over when it
+        // already is: a stored map is shown at once. The card sits above the
+        // heat button, so it stays put as the bars come and go.
         targets: heatProgress,
         skip: heatOn,
         enter: watchSim,
         hold: noHeatBarYet,
         advance: heatOn,
+        cardNear: HEAT,
         pass: '#shiny-modal'
       },
-      { // 12 - the times of day: another one
+      { // 13 - the times of day: another one
         targets: sel(HEAT_BINS + ' .shiny-options-group', 4),
         hold: heatBusy,
         enter: watchHeatBin,
         advance: flagged
       },
-      { // 13 - the icons on the scenario's card, once that map is in. The
-        // card goes under the scenario cards, not over them.
-        targets: heatIcons,
+      { // 14 - the icons on the scenario's card, once that map is in: the
+        // noon one shows its map again, at once. The card goes under the
+        // scenario cards, not over them.
+        targets: noonIconTarget,
         avoid: ['#placeholder .vftCard'],
         hold: settled(heatBusy, 600),
-        look: true
+        advance: noonShown
       },
-      { // 14 - hide the heat map
+      { // 15 - hide the heat map
         targets: sel(HEAT),
         skip: function () { return !heatOn(); },
         advance: function () { return !heatOn(); }
       },
-      { // 15 - the eraser and the reset
+      { // 16 - the eraser and the reset
         targets: buttonRow('#' + NV + 'paintEraser, #' + NV + 'paintReset'),
         look: true
       },
-      { // 16 - load a plan: the tour's own, no file picker
+      { // 17 - load a plan: the tour's own, no file picker
         targets: sel(PLAN_BTN),
         enter: givePlan,
         advance: shownNow(PLAN_PANEL)
       },
-      { // 17 - place it and go on. The card sits on the scenario column, off
+      { // 18 - place it and go on. The card sits on the scenario column, off
         // the plan; Escape would cancel the import, so it stops the tour only.
         targets: planPlacing,
         cardOver: '#topPlaceHolder_newVersion',
         advance: shownNow(PLAN_CARD)
       },
-      { // 18 - the colours' materials; the tour ends on Apply
+      { // 19 - the colours' materials, to read
         targets: planColours,
         cardOver: '#topPlaceHolder_newVersion',
-        enter: watchClick(PLAN_APPLY),
+        look: true
+      },
+      { // 20 - the tour plan's brown paths, natural ground: make them artificial
+        targets: function (ctx) { return rowWindow(brownRow(ctx), 'brownRow'); },
+        cardOver: '#topPlaceHolder_newVersion',
+        advance: function (ctx) { return rowSetTo(brownRow(ctx), MAT_ARTIFICIAL); }
+      },
+      { // 21 - the plan in its materials
+        targets: sel(PLAN_RESULT),
+        cardOver: '#topPlaceHolder_newVersion',
+        enter: watchClick(PLAN_RESULT),
+        advance: function (ctx) { return !!ctx.flag && planResultOn(); }
+      },
+      { // 22 - the darker grey roof was merged into the road grey: pick it.
+        // The plan is shown as uploaded again, where the darker grey shows.
+        targets: roofAndPick,
+        cardOver: '#topPlaceHolder_newVersion',
+        enter: showOriginalPlan,
+        advance: function () { return !!pickedRow(); }
+      },
+      { // 23 - the picked grey: artificial canopy (a roof)
+        targets: function () { return rowWindow(pickedRow(), 'pickedRow'); },
+        cardOver: '#topPlaceHolder_newVersion',
+        advance: function () { return rowSetTo(pickedRow(), MAT_CANOPY_ARTIFICIAL); }
+      },
+      { // 24 - apply
+        targets: sel(PLAN_APPLY),
+        cardOver: '#topPlaceHolder_newVersion',
+        enter: watchApply,
         advance: flagged
+      },
+      { // 25 - where the plan was placed, now painted
+        targets: planArea,
+        hold: modalOpen,
+        delay: 600,
+        look: true
+      },
+      { // 26 - confirm, on to step 5. Passed over while it is disabled (no
+        // path network: Hitzeminderung entered from step 1), which ends the
+        // tour on hint 25.
+        targets: sel(NV_CONFIRM),
+        skip: confirmShut,
+        enter: watchClick(NV_CONFIRM),
+        advance: flagged,
+        pass: '#shiny-modal'
       }
     ]
   };
@@ -1922,8 +2310,9 @@
 
   // Painting needs a scenario that is not the Original. The page seeds one
   // and selects it, so there usually is one; if not, the scenarios page's
-  // hints 2-4 make, name and select one before the palette is used.
-  TOURS.hitze.splice(2, 0, borrowed('newVersions', 2), borrowed('newVersions', 3),
+  // hints 2-4 make, name and select one before the palette is used (after
+  // hint 3, the materials on the map).
+  TOURS.hitze.splice(3, 0, borrowed('newVersions', 2), borrowed('newVersions', 3),
                      borrowed('newVersions', 4));
 
   // a hint's number among its tour's own hints, which is its text's
@@ -1939,7 +2328,10 @@
     newVersions: function (key) {
       if (key !== 'step5') { return key; }
       return toursDone().hitze ? null : 'toHitze';
-    }
+    },
+    // heat mitigation ends on its confirm, which leads to step 5: its tour
+    // only if it has not been played on this device yet
+    hitze: function (key) { return toursDone()[key] ? null : key; }
   };
 
   function tourTexts(key) {
@@ -1952,8 +2344,9 @@
   function hintText() {
     var step = state.step;
     if (step.text) { return tourTexts(step.text[0])[step.text[1]] || ''; }
-    var alts = state.variant && texts && texts.alts && texts.alts[state.key];
-    var alt = alts && alts[(step.n + 1) + state.variant];
+    var name = state.textAlt || state.variant;
+    var alts = name && texts && texts.alts && texts.alts[state.key];
+    var alt = alts && alts[(step.n + 1) + name];
     return alt || tourTexts(state.key)[step.n] || '';
   }
 
@@ -1991,8 +2384,15 @@
     box.setAttribute('aria-live', 'polite');
     root.appendChild(box);
 
+    // the language card (`langTip`), shown only by the hints that have one
+    var tip = document.createElement('div');
+    tip.className = 'vftTutorialBox vftTutorialTip vftTutorialCentered';
+    tip.setAttribute('aria-hidden', 'true');
+    tip.innerHTML = '<div class="vftTutorialText">' + LANG_TIP + '</div>';
+    root.appendChild(tip);
+
     document.body.appendChild(root);
-    return { root: root, canvas: canvas, box: box };
+    return { root: root, canvas: canvas, box: box, tip: tip };
   }
 
   // the dim's colours, from the CSS variables
@@ -2202,6 +2602,19 @@
   // and of the hint's avoid areas (plus `extra` rects).
   function cardPos(bw, bh, goals, step, vp, extra) {
     var rects = goals.map(function (g) { return g.rect; });
+    // beside them, level with their middle, when the screen has room on that
+    // side - otherwise as any other card
+    if (step.side === 'left' || step.side === 'right') {
+      var at = step.sideOf ? elRect(document.querySelector(step.sideOf), PAD)
+                           : (rects.length ? union(rects) : null);
+      if (at) {
+        var x = step.side === 'left' ? at.l - GAP - bw : at.r + GAP;
+        var cy = (at.t + at.b) / 2;
+        if (x >= vp.l && x + bw <= vp.r) {
+          return { left: x, top: clamp(cy - bh / 2, vp.t, vp.b - bh), side: step.side, cx: 0, cy: cy };
+        }
+      }
+    }
     // centred on that element, but never down into a window below it - the
     // card is usually taller than what it sits on
     if (step.cardOver) {
@@ -2223,7 +2636,11 @@
     });
 
     var cands = [];
-    if (rects.length) {
+    // above or below that element rather than the windows, clear of them too
+    var near = step.cardNear && elRect(document.querySelector(step.cardNear), PAD);
+    if (near) {
+      cands.push({ side: 'above', a: near }, { side: 'below', a: near });
+    } else if (rects.length) {
       var u = union(rects);
       cands.push({ side: 'above', a: u }, { side: 'below', a: u });
       rects.slice().sort(function (a, b) { return a.t - b.t; }).forEach(function (r) {
@@ -2251,6 +2668,24 @@
       if (avoid.some(function (r) { return overlaps(br, r); })) { continue; }
       return { left: left, top: top, side: c.side, cx: cx };
     }
+    // A window too tall for the card to fit above or below it (a whole map):
+    // the card goes to the top or the bottom of the screen, whichever covers
+    // less of it, rather than into its middle
+    if (step.hug && rects.length) {
+      var all = union(rects);
+      var hx = clamp((all.l + all.r) / 2 - bw / 2, vp.l, vp.r - bw);
+      var best = null;
+      [vp.t, vp.b - bh].forEach(function (top) {
+        var br = { l: hx, t: top, r: hx + bw, b: top + bh };
+        if ((extra || []).some(function (r) { return overlaps(br, r); })) { return; }
+        var o = intersect(br, all);
+        var cover = o ? (o.r - o.l) * (o.b - o.t) : 0;
+        if (!best || cover < best.cover) {
+          best = { cover: cover, pos: { left: hx, top: top, side: 'none', cx: 0 } };
+        }
+      });
+      if (best) { return best.pos; }
+    }
     // nowhere beside them: the top or bottom edge if either is clear,
     // otherwise the middle of the screen
     var mid = Math.max(vp.l, (vp.W - bw) / 2);
@@ -2264,36 +2699,84 @@
     return edge || { left: mid, top: Math.max(vp.t, (vp.H - bh) / 2), side: 'none', cx: 0 };
   }
 
+  // The caret's tip, in the card's own pixels: the point the card pops out of
+  function popOrigin(el, side, caret) {
+    var size = parseFloat(getComputedStyle(el).getPropertyValue('--vftTut-caret-size')) || 0;
+    var w = el.offsetWidth, h = el.offsetHeight;
+    switch (side) {
+      case 'above': return caret + 'px ' + (h + size) + 'px';
+      case 'below': return caret + 'px ' + (-size) + 'px';
+      case 'left':  return (w + size) + 'px ' + caret + 'px';
+      case 'right': return (-size) + 'px ' + caret + 'px';
+      default:      return '50% 50%';
+    }
+  }
+
+  // A card beside its windows has its caret on a side edge, at the height of
+  // their middle (cy); above or below them, on the top or bottom edge (cx).
   function applyPos(el, pos) {
-    var w = el.offsetWidth;
-    var caret = Math.round(clamp(pos.cx - pos.left, 20, w - 20));
+    var sideways = pos.side === 'left' || pos.side === 'right';
+    var len = sideways ? el.offsetHeight : el.offsetWidth;
+    var caret = Math.round(sideways ? clamp(pos.cy - pos.top, 20, len - 20)
+                                    : clamp(pos.cx - pos.left, 20, len - 20));
     var last = el._vftTutPos;
     if (last && last.side === pos.side && Math.abs(last.left - pos.left) < 2 &&
         Math.abs(last.top - pos.top) < 2 && Math.abs(last.caret - caret) < 2) { return; }
     el.style.left = Math.round(pos.left) + 'px';
     el.style.top = Math.round(pos.top) + 'px';
     el.setAttribute('data-side', pos.side);
-    el.style.setProperty('--vftTut-caret-x', caret + 'px');
+    el.style.setProperty(sideways ? '--vftTut-caret-y' : '--vftTut-caret-x', caret + 'px');
     if (!last) {
-      // the first placement of a card jumps; later ones glide
+      // the first placement of a card jumps, popping in out of its caret as
+      // the windows do; later ones glide
+      el.style.transformOrigin = popOrigin(el, pos.side, caret);
+      el.classList.remove('vftTutorialPop');
       void el.offsetWidth;
-      el.classList.add('vftTutorialPlaced');
+      el.classList.add('vftTutorialPlaced', 'vftTutorialPop');
     }
     pos.caret = caret;
     el._vftTutPos = pos;
   }
 
-  // the card jumps to its next place instead of gliding there
-  function unplace() {
-    state.box._vftTutPos = null;
-    state.box.classList.remove('vftTutorialPlaced');
+  // the card jumps to its next place (and pops in) instead of gliding there
+  function unplace(el) {
+    el = el || state.box;
+    el._vftTutPos = null;
+    el.classList.remove('vftTutorialPlaced', 'vftTutorialPop');
   }
 
-  function placeCard(goals, step) {
+  function placeCard(goals, step, extra) {
     var vp = viewport();
     var bw = state.box.offsetWidth, bh = state.box.offsetHeight;
     if (!bw || !bh) { return; }
-    applyPos(state.box, cardPos(bw, bh, goals, step, vp, state.langWins));
+    // where it first appeared, however the windows change after that
+    if (step.stay && state.box._vftTutPos) { return; }
+    applyPos(state.box, cardPos(bw, bh, goals, step, vp, state.langWins.concat(extra || [])));
+  }
+
+  // The language card, left of the selector with its caret on it - not under
+  // it, where the selector's dropdown opens; the area it covers, for the
+  // hint's own card to keep clear of. Not while a modal is up - its backdrop
+  // is over the bar.
+  function placeTip() {
+    var el = state.tip;
+    var wrap = document.querySelector('#vftNav .vft-nav-lang');
+    var r = !modalOpen() && shown(wrap) && elRect(wrap, 3);
+    if (!r) { hideTip(); return null; }
+    el.classList.add('vftTutorialTipOn');
+    var vp = viewport();
+    var w = el.offsetWidth, h = el.offsetHeight;
+    var cy = (r.t + r.b) / 2;
+    var pos = { left: Math.max(vp.l, r.l - GAP - w), top: clamp(cy - h / 2, vp.t, vp.b - h),
+                side: 'left', cx: 0, cy: cy };
+    applyPos(el, pos);
+    return { l: pos.left, t: pos.top, r: r.l, b: pos.top + h };
+  }
+
+  function hideTip() {
+    if (!state.tip.classList.contains('vftTutorialTipOn')) { return; }
+    state.tip.classList.remove('vftTutorialTipOn');
+    unplace(state.tip);
   }
 
   // nothing but the dim: between hints, while the map moves, and for a short
@@ -2302,7 +2785,7 @@
     if (q === state.quiet) { return; }
     state.quiet = q;
     state.root.classList.toggle('vftTutorialQuiet', q);
-    if (q) { unplace(); }
+    if (q) { unplace(); hideTip(); }
   }
 
   /* ------------------------ blocking the rest ----------------------- */
@@ -2378,6 +2861,8 @@
     state.idx = idx;
     state.stepStart = now;
     state.wins = [];
+    state.seen = false;
+    state.textAlt = null;
 
     var offs = [];
     var ctx = state.ctx = {
@@ -2424,7 +2909,8 @@
     state.wins = [];
     setQuiet(true);
     drawDim();
-    state.pause = { until: now + PAUSE, next: idx };
+    var next = hints()[idx];
+    state.pause = { until: now + PAUSE + ((next && next.delay) || 0), next: idx };
   }
 
   function frame(now) {
@@ -2446,8 +2932,17 @@
     if (!state) { return; }
 
     var step = state.step;
-    var done = false;
-    try { done = !!(step.advance && step.advance(state.ctx)); } catch (e) { done = false; }
+    var gone = false;
+    try { gone = !!(step.skipWhen && step.skipWhen(state.ctx)); } catch (e) { gone = false; }
+    if (gone && !state.seen) {
+      // never on screen: passed over, and not counted
+      state.skipped[state.idx] = true;
+      if (state.idx >= last || step.end) { finish(); return; }
+      go(state.idx + 1, now);
+      return;
+    }
+    var done = gone;
+    try { done = done || !!(step.advance && step.advance(state.ctx)); } catch (e) { done = false; }
     if (done) {
       if (state.ctx) { state.ctx.off(); }
       if (state.idx >= last || step.end) { finish(); return; }
@@ -2464,12 +2959,19 @@
     var quiet = held || moving ||
                 (!!step.targets && !goals.length && now - state.stepStart < WAIT_SHOW);
 
+    var alt = null;
+    try { alt = (step.textWhen && step.textWhen(state.ctx)) || null; } catch (e) { alt = null; }
+    if (alt !== state.textAlt) { state.textAlt = alt; renderBox(); }
+
     setQuiet(quiet);
     updateWindows(goals, now);
     drawDim();
     state.box.classList.toggle('vftTutorialWaiting', !!step.targets && !goals.length);
     updateCount();
-    if (!quiet) { placeCard(goals, step); }
+    if (quiet) { return; }
+    state.seen = true;
+    var tip = step.langTip ? placeTip() : (hideTip(), null);
+    placeCard(goals, step, tip ? [tip] : []);
   }
 
   function start(key) {
@@ -2477,8 +2979,9 @@
     chain = null;
     var ui = buildOverlay();
     state = {
-      key: key, root: ui.root, canvas: ui.canvas, box: ui.box,
+      key: key, root: ui.root, canvas: ui.canvas, box: ui.box, tip: ui.tip,
       wins: [], langWins: [], data: {}, idx: 0, step: null, variant: null, ctx: null,
+      seen: false, textAlt: null,
       skipped: {}, bodyClass: null, quiet: true, pause: null,
       moving: false, downOk: false, dimSig: null
     };
@@ -2570,9 +3073,18 @@
     });
     return out;
   };
+  // A card still popping in counts as quiet here: its box is scaled, so a
+  // test measuring a button in it would aim at the wrong place
+  function popping() {
+    if (!state || !document.getAnimations) { return false; }
+    return document.getAnimations().some(function (a) {
+      return a.animationName === 'vftTutCardPop' && a.playState === 'running';
+    });
+  }
   window.vftTutorialState = function () {
     var lang = texts ? texts.lang : null;
-    return state ? { key: state.key, idx: state.idx, variant: state.variant, quiet: state.quiet,
+    return state ? { key: state.key, idx: state.idx, variant: state.variant,
+                     quiet: state.quiet || popping(),
                      pause: !!state.pause, choice: state.data.choice || null, lang: lang,
                      count: countText() }
                  : { key: null, chain: chain ? chain.from : null, lang: lang };

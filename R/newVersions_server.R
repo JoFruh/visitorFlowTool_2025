@@ -87,6 +87,29 @@ newVersions_server <- function(id, networkList, i18n, currentLang, isFirstRun,
   # r$mapRefresh <- 0
   shiny::moduleServer(id, function(input, output, session) {
 
+    #The body of the three path modals (a clicked path; a new path to a new
+    #node; a new path to an existing node): a title and the three quality
+    #radios, in the current language. Built per click, so plain text
+    #(vftTrText) is enough - a modal is never open across a language change
+    #that matters. The values c1..c4 are what the submit observers switch on.
+    pathQualityModalBody <- function(title, signage = NULL, type = NULL, width = NULL){
+      tr  <- function(k) vftTrText(i18n(), k)
+      opt <- function(keys) list(choiceNames = unname(vapply(keys, tr, character(1))),
+                                 choiceValues = paste0("c", seq_along(keys)))
+      radio <- function(inputId, label, keys, selected){
+        o <- opt(keys)
+        shiny::radioButtons(shiny::NS(id, inputId), tr(label), choiceNames = o$choiceNames,
+                            choiceValues = o$choiceValues, selected = selected, inline = TRUE)
+      }
+      shiny::tagList(
+        shiny::fluidRow(shiny::column(12, align = "center", shiny::tags$h3(tr(title)))),
+        radio("pathSignage", "Beschilderung",
+              c("Wanderwege", "Wander- und Velowege", "Velowege", "Nichts"), signage),
+        radio("pathType", "Wegtyp", c("Natur", "Hart"), type),
+        radio("pathWidth", "Wegbreite",
+              c("gross", "mittel (3m)", "schmal (2m)", "sehr schmal (1m)"), width))
+    }
+
     #per-visit snapshots. enter() refills these; the body and every closure in it
     #resolve them lexically from here, so nothing else in this file changes.
     networkList   <- NULL
@@ -524,7 +547,7 @@ if(is.null(r$updateNetworkPlot)){
       #initialize memory of last selected paint color button, per paint level, so flipping the
       #ground/canopy switch restores that level's own previously selected material
       r$lastSelectedGroundButton <- "paintColor_grass"
-      r$lastSelectedCanopyButton <- "paintColor_canopyTree"
+      r$lastSelectedCanopyButton <- "paintColor_canopyArtificial"
       #the one button currently highlighted, which may be a "both" material belonging
       #to neither level. Matches the class the UI ships paintColor_grass with.
       r$selectedPaintButton      <- "paintColor_grass"
@@ -791,9 +814,7 @@ if(is.null(r$updateNetworkPlot)){
 
                 )%>%
                 leaflet::addLayersControl(overlayGroups = c("paths", "nodes"))%>%
-                leaflet::addLegend(position = "topright", title = "Signage:",  values = c(1, 2, 4, 3), colors = c("black", "#e8e22e", "#35caf0",  "#3ddb68"), labels = c("none", "walking routes", "cycling routes", "both"))%>%
-                leaflegend::addLegendImage(position = "topright", title = "Surface:", images = c("www/solid.png", "www/dashed.png"), labels = c("asphalt", "natural"),
-                                           labelStyle = "font-size: 15px; vertical-align: left")
+                networkLegends()
 
               #
               #
@@ -893,8 +914,8 @@ if(is.null(r$updateNetworkPlot)){
             }
           }else if(shiny::isolate(input$contextChoice == 3)){
 
-            #reset mapPoints
-            shiny::isolate(r$mapPoints <- NULL)
+            #an area waiting for its type is gone with the old map
+            shiny::isolate(r$newPolygon <- NULL)
 
             # RENDER PARKING/HOUSING ####
             if(r$position != 1){
@@ -1220,6 +1241,15 @@ if(is.null(r$updateNetworkPlot)){
           usageNow <- if(isTRUE(r$usageOn)) usageSource() else NULL
           if(is.null(usageNow)) map else drawUsage(map, usageNow)
         })
+
+        #THE AREA DRAWER ####
+        #Parking and residential areas are drawn in the browser by polydraw.js,
+        #as in steps 1 and 4 - on context 3, and not on the Original, which
+        #cannot be altered. A click on an existing area (pane layer2) is left to
+        #obsShapeClick, which deletes it. See obsPolyDrawn.
+        if(shiny::isolate(isTRUE(input$contextChoice == 3) && !isTRUE(r$position == 1))){
+          map <- vftPolyDraw(map, session)
+        }
 
         #add or remove dummy group (this is to trigger an observer that determines when the map finished rendering)
         #in isolation to avoid linking input$versionMap_groups
@@ -2761,6 +2791,9 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
   #change (see the isolate() in output$versionMap), so they are re-issued
   #in place: both carry a layerId and replace themselves.
   railLegend(leaflet::leafletProxy("versionMap"))
+  #the network's legends exist on the paths context only
+  if(isTRUE(shiny::isolate(input$contextChoice) == 1))
+    networkLegends(leaflet::leafletProxy("versionMap"))
   if(!is.null(usageDrawn))
     usageLegend(leaflet::leafletProxy("versionMap"), sub("^.* ", "", usageDrawn))
 })
@@ -3880,25 +3913,12 @@ vftDbg("add versions")
                     shiny::showModal(
                       shiny::modalDialog(
 
-                        fluidRow(
-                          shiny::column(12, align = "center",
-                                        shiny::tags$h3('Wählen Sie die Merkmale des neuen Weges:')
-                          )
-                        ),
-                        shiny::radioButtons(shiny::NS(id, 'pathSignage'), 'Beschilderung',
-                                            choices = c("Wanderwege" = "c1", "Wander- und Velowege" = "c2", "Veloweg" = "c3", "Nichts" = "c4"),
-                                            selected = NULL, inline = TRUE),
-                        shiny::radioButtons(shiny::NS(id, 'pathType'), 'Wegtyp',
-                                            choices = c("Natur" = "c1", "Hardt" = "c2"),
-                                            selected = NULL, inline = TRUE),
-                        shiny::radioButtons(shiny::NS(id, 'pathWidth'), 'die Wegbreite',
-                                            choices = c("gross" = "c1", "mittel (3m)" = "c2", "schmal (2m)" = "c3", "sehr schmal (1m)" = "c4"),
-                                            selected = NULL, inline = TRUE),
+                        pathQualityModalBody("Wählen Sie die Eigenschaften des neuen Weges:"),
                         # shiny::checkboxInput(shiny::NS(id,"areStairs"), label = "Are they stairs?", value = FALSE),
 
                         footer=shiny::tagList(
-                          shiny::actionButton(inputId = shiny::NS(id, 'submitNewPath'), 'Einreichen'),
-                          shiny::actionButton(inputId = shiny::NS(id,'cnclEdg'), "Abbrechen") )
+                          shiny::actionButton(inputId = shiny::NS(id, 'submitNewPath'), vftTrText(i18n(), 'Einreichen')),
+                          shiny::actionButton(inputId = shiny::NS(id,'cnclEdg'), vftTrText(i18n(), "Abbrechen")) )
                       ) )
                   })
 
@@ -3952,35 +3972,9 @@ vftDbg("add versions")
             }else if(input$contextChoice == 3){
 
             #### CONTEXT 3: HOUSING/PARKING ####
+              #nothing to do: a new area is drawn in the browser by polydraw.js,
+              #whose vertices are not R's markers (see obsPolyDrawn)
               vftDbg("CONTEXT IS NOW HOUSING/PARKING")
-
-              r$markerWasClicked <- TRUE
-              if(!is.null(input[["versionMap_marker_click"]]$group) ){#& r$step1Refreshing != TRUE
-                #FINALISE POLYGON ####
-                #If first vertex of polygon is clicked, Finalise polygon
-                if( input[["versionMap_marker_click"]]$group == "first"){
-                  if(nrow(r$mapPoints) > 2){
-
-                    #DETERMINE TYPE (PARKING OR RESIDENTIAL)
-                    shiny::showModal(
-                      shiny::modalDialog(
-                        shiny::fluidRow(
-                          shiny::column(12, align = "center",
-                                        h4("Welche Art von Polygon möchten Sie erstellen?")),
-                          shiny::column(6, align = "center",
-                                        shiny::actionButton(shiny::NS(id, "chooseParking"), label = "Parkplatz",
-                                                            style = "border-color: #000000;background-color: #1127b8; color: #ffffff; font-weight: bold;")),
-                          shiny::column(6, align = "center",
-                                        shiny::actionButton(shiny::NS(id, "chooseResidential"), label = "Wohnen",
-                                                                      style = "border-color: #000000;background-color: #ba8e16; color: #ffffff; font-weight: bold;")))
-                        )
-                      )
-
-
-                }
-              }
-
-              }
             }
           }else{
             vftDbg("ORIGINAL CANNOT BE ALTERED")
@@ -4103,25 +4097,14 @@ vftDbg("EDGE CLICK")
                                                             style = "border-color: #000000;background-color: #ed3737; color: #ffffff; font-weight: bold;"),
                           )
                         ),
-                        h3("ODER", align = "center"),
-                        fluidRow(
-                          shiny::column(12, align = "center",
-                                        shiny::tags$h3(i18n()$t('Wählen Sie die Qualitäten des angeklickten Weges:'))
-                          )
-                        ),
-                        shiny::radioButtons(shiny::NS(id, 'pathSignage'), 'Signage',
-                                            choices = c("Wanderwege" = "c1", "Wander- und Velowege" = "c2", "Velowege" = "c3", "Nichts" = "c4"),
-                                            selected = walkBikeStatus, inline = TRUE),
-                        shiny::radioButtons(shiny::NS(id, 'pathType'), 'Path Type',
-                                            choices = c("Natur" = "c1", "Hardt" = "c2"),
-                                            selected = hardNaturStatus, inline = TRUE),
-                        shiny::radioButtons(shiny::NS(id, 'pathWidth'), 'die Wegbreite',
-                                            choices = c("gross" = "c1", "mittel (3m)" = "c2", "schmal (2m)" = "c3", "sehr schmal (1m)" = "c4"),
-                                            selected = roadWidthStatus, inline = TRUE),
+                        h3(vftTrText(i18n(), "ODER"), align = "center"),
+                        pathQualityModalBody("Wählen Sie die Eigenschaften des angeklickten Weges:",
+                                             signage = walkBikeStatus, type = hardNaturStatus,
+                                             width = roadWidthStatus),
 
                         footer=shiny::tagList(
                           shiny::actionButton(inputId = shiny::NS(id, 'submitPath'), i18n()$t('Einreichen')),
-                          shiny::modalButton('Abbrechen'))
+                          shiny::modalButton(vftTrText(i18n(), 'Abbrechen')))
                       )
                     )
 
@@ -4197,8 +4180,9 @@ vftDbg("EDGE CLICK")
 
           }else if(input$contextChoice == 3){
             #CONTEXT 3: PARKING ####
-            #if parking polygon is clicked, and no polygon was being generated
-            if(input[["versionMap_shape_click"]]$group == "eraseable" & is.null(nrow(r$mapPoints) ) ){
+            #if parking polygon is clicked (while an area is being drawn,
+            #polydraw.js makes them click-through, so this is never a vertex)
+            if(identical(input[["versionMap_shape_click"]]$group, "eraseable")){
 
               ###REMOVE PARKING SPACE####
               idToRemove <- input[["versionMap_shape_click"]]$id
@@ -4501,14 +4485,63 @@ obsEvent_submitNewPath <- shiny::observeEvent(input$submitNewPath, {
 
 }, ignoreInit = TRUE)
 
+#A NEW PARKING/RESIDENTIAL AREA ####
+#Drawn in the browser by polydraw.js, as in steps 1 and 4 (attached in the
+#map render, context 3 on a scenario other than the Original). The closed ring
+#waits on the map, not clickable, while the modal asks what it is; the two
+#choose handlers below take it from r$newPolygon.
+obsPolyDrawn <- shiny::observeEvent(input$polyDrawn, {
+  if(!isTRUE(input$contextChoice == 3) || isTRUE(r$position == 1)) return(invisible(NULL))
+  poly <- vftPolyDrawSf(input$polyDrawn)
+  if(is.null(poly)) return(invisible(NULL))
+  #a ring that crosses itself: keep the area it encloses. Repaired in LV95,
+  #as step 4 does: under s2, st_make_valid() hands a bow-tie back as the same
+  #invalid loop, and st_intersects()/st_union() in the handlers die on it.
+  if(!isTRUE(all(sf::st_is_valid(poly)))){
+    fixed <- sf::st_transform(sf::st_make_valid(sf::st_transform(poly, "epsg:2056")), "epsg:4326")
+    fixed <- suppressWarnings(sf::st_collection_extract(fixed, "POLYGON"))
+    if(nrow(fixed) == 0) return(invisible(NULL))
+    poly <- sf::st_sf(polygons = sf::st_union(fixed))
+  }
+  r$newPolygon <- poly
+
+  leaflet::leafletProxy("versionMap") %>%
+    leaflet::clearGroup("pending") %>%
+    leaflet::addPolygons(data = poly, stroke = TRUE, weight = 3, color = "#5ab4f0",
+                         fill = TRUE, fillColor = "#5ab4f0", fillOpacity = 0.25,
+                         group = "pending",
+                         options = leaflet::pathOptions(pane = "layer2", interactive = FALSE))
+
+  #DETERMINE TYPE (PARKING OR RESIDENTIAL)
+  shiny::showModal(
+    shiny::modalDialog(
+      shiny::fluidRow(
+        shiny::column(12, align = "center",
+                      h4("Welche Art von Polygon möchten Sie erstellen?")),
+        shiny::column(6, align = "center",
+                      shiny::actionButton(shiny::NS(id, "chooseParking"), label = "Parkplatz",
+                                          style = "border-color: #000000;background-color: #1127b8; color: #ffffff; font-weight: bold;")),
+        shiny::column(6, align = "center",
+                      shiny::actionButton(shiny::NS(id, "chooseResidential"), label = "Wohnen",
+                                          style = "border-color: #000000;background-color: #ba8e16; color: #ffffff; font-weight: bold;"))),
+      #cancelling takes the waiting area off the map as well
+      footer = shiny::actionButton(shiny::NS(id, "cancelNewPolygon"), label = i18n()$t("Abbrechen"))
+    )
+  )
+}, ignoreInit = TRUE)
+
+obsCancelNewPolygon <- shiny::observeEvent(input$cancelNewPolygon, {
+  shiny::removeModal()
+  r$newPolygon <- NULL
+  leaflet::clearGroup(leaflet::leafletProxy("versionMap"), "pending")
+}, ignoreInit = TRUE)
+
 #OBSERVE CHOOSE PARKING ####
 obsEvent_chooseParking <- shiny::observeEvent(input$chooseParking, {
   shiny::removeModal()
-  #polygon creation is done by observe events using r$mapPoints
-
-  #create polygon with points
-  poly <- sf::st_cast(sf::st_combine(r$mapPoints), "POLYGON")
-  poly <- sf::st_sf(poly)
+  #the polygon is the one polydraw.js sent (obsPolyDrawn)
+  poly <- r$newPolygon
+  if(is.null(poly)) return(invisible(NULL))
 
   # poly$type <- "parking"
 
@@ -4519,7 +4552,6 @@ obsEvent_chooseParking <- shiny::observeEvent(input$chooseParking, {
   }
   vftDbg(paste0("NEWPOLY ID: ", poly$id, " ", class(poly$id)))
   # poly <- concaveman(mapPoints, 1) Doesn't work well
-  poly <- dplyr::rename(poly, polygons = "poly")
 
 
 
@@ -4536,14 +4568,13 @@ obsEvent_chooseParking <- shiny::observeEvent(input$chooseParking, {
     if(residentialIntersectCount > 0){
       #abort
       #TODO: Modal window with warning (you cannot overlap parking and residential areas)
-      r$mapPoints <- sf::st_sfc(crs = 4326)
+      r$newPolygon <- NULL
 
       # proxy <- leaflet::leafletProxy("versionMap", data = r$parkingPolygons)%>%
       #   leaflet::clearGroup("eraseable")
       proxy <- leaflet::leafletProxy("versionMap")
       #clear points for creating polygon
-      leaflet::clearGroup(proxy, "first")
-      leaflet::clearGroup(proxy, "after")
+      leaflet::clearGroup(proxy, "pending")
 
       shiny::showModal(
         shiny::modalDialog(
@@ -4607,7 +4638,7 @@ obsEvent_chooseParking <- shiny::observeEvent(input$chooseParking, {
 
     r$polyFinished <- TRUE
 
-    r$mapPoints <- sf::st_sfc(crs = 4326)
+    r$newPolygon <- NULL
     vftDbg(r$parkingPolygons)
 
     # proxy <- leaflet::leafletProxy("versionMap", data = r$parkingPolygons)%>%
@@ -4627,8 +4658,7 @@ obsEvent_chooseParking <- shiny::observeEvent(input$chooseParking, {
         highlightOptions = leaflet::highlightOptions(fillColor = "#f2778d")) %>%
       leaflet::removeShape(layerId = intersectingPolysID)
 
-    leaflet::clearGroup(proxy, "first")
-    leaflet::clearGroup(proxy, "after")
+    leaflet::clearGroup(proxy, "pending")
 
 
     #insert parkingPolygons into r$networkList
@@ -4672,11 +4702,9 @@ obsEvent_chooseParking <- shiny::observeEvent(input$chooseParking, {
 obsEvent_chooseResidential <- shiny::observeEvent(input$chooseResidential, {
 
   shiny::removeModal()
-  #polygon creation is done by observe events using r$mapPoints
-
-  #create polygon with points
-  poly <- sf::st_cast(sf::st_combine(r$mapPoints), "POLYGON")
-  poly <- sf::st_sf(poly)
+  #the polygon is the one polydraw.js sent (obsPolyDrawn)
+  poly <- r$newPolygon
+  if(is.null(poly)) return(invisible(NULL))
 
   # poly$type <- "residential"
 
@@ -4687,7 +4715,6 @@ obsEvent_chooseResidential <- shiny::observeEvent(input$chooseResidential, {
   }
   vftDbg(paste0("NEWPOLY ID: ", poly$id, " ", class(poly$id)))
   # poly <- concaveman(mapPoints, 1) Doesn't work well
-  poly <- dplyr::rename(poly, polygons = "poly")
 
 
   ##CHECK INTERSECTIONS ####
@@ -4703,14 +4730,13 @@ obsEvent_chooseResidential <- shiny::observeEvent(input$chooseResidential, {
     if(parkingIntersectCount > 0){
       #abort
       #TODO: Modal window with warning (you cannot overlap parking and residential areas)
-      r$mapPoints <- sf::st_sfc(crs = 4326)
+      r$newPolygon <- NULL
 
       # proxy <- leaflet::leafletProxy("versionMap", data = r$parkingPolygons)%>%
       #   leaflet::clearGroup("eraseable")
       proxy <- leaflet::leafletProxy("versionMap")
       #clear points for creating polygon
-      leaflet::clearGroup(proxy, "first")
-      leaflet::clearGroup(proxy, "after")
+      leaflet::clearGroup(proxy, "pending")
 
       shiny::showModal(
         shiny::modalDialog(
@@ -4775,7 +4801,7 @@ if(!is.null(r$residentialPolygons)){
 
   r$polyFinished <- TRUE
 
-  r$mapPoints <- sf::st_sfc(crs = 4326)
+  r$newPolygon <- NULL
   vftDbg(r$residentialPolygons)
 
   # proxy <- leaflet::leafletProxy("versionMap", data = r$parkingPolygons)%>%
@@ -4799,8 +4825,7 @@ if(!is.null(r$residentialPolygons)){
     leaflet::removeShape(proxy, layerId = intersectingPolysID)
   }
 
-  leaflet::clearGroup(proxy, "first")
-  leaflet::clearGroup(proxy, "after")
+  leaflet::clearGroup(proxy, "pending")
 
 
   #insert parkingPolygons into r$networkList
@@ -5197,25 +5222,14 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
                     shiny::showModal(
                       shiny::modalDialog(
 
-                        fluidRow(
-                          shiny::column(12, align = "center",
-                                        shiny::tags$h3('Choose qualities of new path:')
-                          )
-                        ),
-                        shiny::radioButtons(shiny::NS(id, 'pathSignage'), 'Signage',
-                                            choices = c("Wanderwege" = "c1", "Wander- und Velowege" = "c2", "Velowege" = "c3", "Nichts" = "c4"),
-                                            selected = NULL, inline = TRUE),
-                        shiny::radioButtons(shiny::NS(id, 'pathType'), 'Path Type',
-                                            choices = c("Natur" = "c1", "Hardt" = "c2"),
-                                            selected = NULL, inline = TRUE),
-                        shiny::radioButtons(shiny::NS(id, 'pathWidth'), 'Path Width',
-                                            choices = c("gross" = "c1", "mittel (3m)" = "c2", "schmal (2m)" = "c3", "sehr schmal (1m)" = "c4"),
-                                            selected = NULL, inline = TRUE),
-                        shiny::checkboxInput(shiny::NS(id,"areStairs"), label = "Are they stairs?", value = FALSE),
+                        pathQualityModalBody("Wählen Sie die Eigenschaften des neuen Weges:"),
+                        shiny::checkboxInput(shiny::NS(id,"areStairs"),
+                                             label = vftTrText(i18n(), "Handelt es sich um eine Treppe?"),
+                                             value = FALSE),
 
                         footer=shiny::tagList(
-                          shiny::actionButton(inputId = shiny::NS(id, 'submitNewPath'), 'Einreichen'),
-                          shiny::actionButton(inputId = shiny::NS(id,'cnclEdgNode'), "Abbrechen") )
+                          shiny::actionButton(inputId = shiny::NS(id, 'submitNewPath'), vftTrText(i18n(), 'Einreichen')),
+                          shiny::actionButton(inputId = shiny::NS(id,'cnclEdgNode'), vftTrText(i18n(), "Abbrechen")) )
                       ) )
                   })
                   # EXTRACT ATTR FOR NEW EDGE AND NODE####
@@ -5349,29 +5363,9 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
 
             }else if(input$contextChoice == 3){
               #EMPTY CLICK IN PARKING/HOUSING CONTEXT ####
+              #the click is a vertex of the area polydraw.js is drawing, which
+              #R hears about once the ring is closed (see obsPolyDrawn)
 
-              if(!r$markerWasClicked ){ #& !r$shapeWasClicked
-                if(!r$shapeWasClicked | !is.null(nrow(r$mapPoints) ) ){
-                  if( !is.null(input[["versionMap_click"]]$lng) ){
-                    #add points
-                    r$mapPoints <- rbind(r$mapPoints,sf::st_as_sf( sf::st_sfc( sf::st_point(x = c(input[["versionMap_click"]]$lng, input[["versionMap_click"]]$lat)), crs = 4326) ) )
-                    #draw points
-                    vftDbg(r$mapPoints)
-
-                    proxy = leaflet::leafletProxy("versionMap" )
-
-                    circleMarker <- leaflet::addCircleMarkers(map = proxy,
-                                                              lng = input[["versionMap_click"]]$lng, lat = input[["versionMap_click"]]$lat,
-                                                              radius = ifelse(nrow(r$mapPoints) == 1, 7, 4),
-                                                              color = ifelse(nrow(r$mapPoints) == 1, "red", "blue"),
-                                                              stroke = ifelse(nrow(r$mapPoints) == 1, TRUE, FALSE),
-                                                              fillOpacity = 0.5,
-                                                              group = ifelse(nrow(r$mapPoints) == 1, "first", "after"),
-                                                              options = leaflet::pathOptions(pane = "layer2"))
-                  }
-              }
-
-              }
               #reset information if a marker was clicked
               r$markerWasClicked <- FALSE
               r$shapeWasClicked <- FALSE
@@ -5539,6 +5533,30 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
           leaflet::addCircleMarkers(map, lng = xy[, "X"], lat = xy[, "Y"], group = "startingPoints",
                                     color = "red", fill = FALSE, stroke = TRUE, opacity = 1,
                                     weight = 2, radius = 3, options = railShapeOptions())
+        }
+
+        #The path network's two legends (context 1): signage colours and
+        #surface line styles. Plain text in the current language (vftTrText),
+        #so langChangeObs re-issues them; each carries a layerId to replace
+        #itself, and a class the guided tutorial finds them by (pathLegends()
+        #in vft-tutorial.js), since their titles change with the language.
+        networkLegends <- function(map){
+          tr <- function(k) vftTrText(i18n(), k)
+          if(inherits(map, "leaflet_proxy"))
+            map <- leaflet::removeControl(leaflet::removeControl(map, "legendSignage"), "legendSurface")
+          map <- leaflet::addLegend(map, position = "topright", title = tr("Beschilderung:"),
+                                    values = c(1, 2, 4, 3),
+                                    colors = c("black", "#e8e22e", "#35caf0", "#3ddb68"),
+                                    labels = vapply(c("keine", "Wanderwege", "Velowege", "beide"),
+                                                    tr, character(1), USE.NAMES = FALSE),
+                                    layerId = "legendSignage", className = "info legend vft-legend-signage")
+          leaflegend::addLegendImage(map, position = "topright", title = tr("Belag:"),
+                                     images = c("www/solid.png", "www/dashed.png"),
+                                     labels = vapply(c("Asphalt", "Naturbelag"), tr, character(1),
+                                                     USE.NAMES = FALSE),
+                                     labelStyle = "font-size: 15px; vertical-align: left",
+                                     layerId = "legendSurface",
+                                     className = "info legend leaflet-control vft-legend-surface")
         }
 
         #"Formen:" - step 5's legendShapeRows(), rows, images and words, for the
@@ -6549,7 +6567,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
       #selected.
       r$selectedVersion <- selectedVersion
       r$DULN            <- DULN
-      r$mapPoints       <- NULL
+      r$newPolygon      <- NULL
       r$trigger         <- 1
       r$position        <- 1
       #WHICH CONTEXT THIS VISIT OPENS ON.
@@ -6598,7 +6616,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
       #So once per session regardless, with applyFirstRun()'s values.
       if(is.null(r$lastSelectedGroundButton)){
         r$lastSelectedGroundButton <- "paintColor_grass"
-        r$lastSelectedCanopyButton <- "paintColor_canopyTree"
+        r$lastSelectedCanopyButton <- "paintColor_canopyArtificial"
         r$selectedPaintButton      <- "paintColor_grass"
         r$paintHeightChoice        <- vapply(vftHeightRamps(), function(rp) rp$default, numeric(1))
         if(is.null(r$paintCanEdit)) r$paintCanEdit <- FALSE

@@ -489,6 +489,10 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
     #are per-VISIT and are set by enter(); these are the declarations only.
     obsEvent_sim <- NULL
     r$obsEventSelList <- list()
+    #a simulation in flight, from its launch until its result is in or it
+    #failed: the launch on arrival (autoLaunch) must not start a second one.
+    #Per SESSION, not per visit - a run outlives the visit it was started on.
+    simRunning <- FALSE
 
     selectedNetwork_position <- 1
 
@@ -881,6 +885,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
             leaflet::leaflet(data = passageTable, options = leaflet::leafletOptions(doubleClickZoom = FALSE, preferCanvas = TRUE), height = 500 ) |>
             leaflet::addMapPane("layer_SM", zIndex = 415)|>
             leaflet::addMapPane("layer1", zIndex = 410)|> leaflet::addMapPane("layer2", zIndex = 420)|> leaflet::addMapPane("layer3", zIndex = 450) |>
+            leaflet::addMapPane("layerStart", zIndex = 460) |>
             leaflet::addProviderTiles("OpenStreetMap.CH", options = leaflet::providerTileOptions(opacity = 0.5, zIndex = 400)))
 
             map <- vftMapLegends(map) |>
@@ -912,6 +917,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
             map <- leaflet::leaflet(data = passageTable, options = leaflet::leafletOptions(doubleClickZoom = FALSE, preferCanvas = TRUE), height = 500 ) |>
               leaflet::addMapPane("layer_SM", zIndex = 415)|>
               leaflet::addMapPane("layer1", zIndex = 410)|> leaflet::addMapPane("layer2", zIndex = 420)|> leaflet::addMapPane("layer3", zIndex = 450) |>
+              leaflet::addMapPane("layerStart", zIndex = 460) |>
               leaflet::addProviderTiles("OpenStreetMap.CH", options = leaflet::providerTileOptions(opacity = 0.5, zIndex = 400))
 
             map <- vftMapLegends(map) |>
@@ -980,7 +986,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
           if(input$startingCheckbox == TRUE){
             map <- map |> leaflet::addCircleMarkers(lng = startingPoints[,"X"], lat = startingPoints[,"Y"] , group = "startingPoints",
                                                      color = "red", fill = FALSE, stroke = TRUE, opacity = 1,
-                                                     options = leaflet::markerOptions(pane = "layer1"), weight = 2,
+                                                     options = leaflet::pathOptions(pane = "layerStart", interactive = FALSE), weight = 2,
                                                      radius = 3)
           }
 
@@ -1499,18 +1505,50 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
       #ones who actually simulate - and only once per SCENARIO, because
       #vftNetworkPrepared() tests the graph's own attribute names and the result
       #is written back into r$networkList[[pos]].
-      obsEvent_sim <- shiny::observeEvent(input$launchSim, {
+      #
+      #ONE BAR FOR ALL THE DATA. The path network's load, when this is the first
+      #simulation of the session, used to raise a bar of its own (the provider
+      #layer's, "Wegnetz") before the preparation's - two bars for one wait. The
+      #bar is made here now, before the load, lent to the provider for its
+      #first VFT_SIM_NETWORK_SHARE (see vftProviderLendBar() in
+      #R/providers.R), and then driven on by the preparation to the end. The
+      #ABM's bar is the only other one.
+      #
+      #A function rather than the observer's body: enter() starts it too, for
+      #an Original without a simulation (autoLaunch below). `pos` is the
+      #scenario launched, taken now - the user may pick another card while it
+      #runs, and the result belongs to this one.
+      launchSimulation <- function(){
+        if(simRunning) return(invisible(NULL))
+        pos <- selectedNetwork_position
 
         #disable launch sim button
         shinyjs::disable("launchSim")
+        simRunning <<- TRUE
 
         vftDbgCat("TEST16")
 
-        vftDbg("LAUNCH SIMULATION")
+        vftDbg(paste0("LAUNCH SIMULATION of scenario ", pos))
 
-        vftScenarioNetworkThen(r, selectedNetwork_position,
+        tr <- .vftT(session)
+        bar <- shiny::Progress$new(session = session)
+        bar$set(value = 0, message = .vftTrTxt("Daten werden vorbereitet", tr),
+                detail = .vftTrTxt("Wegnetz wird vorbereitet...", tr))
+        vftProviderLendBar(session, "network", bar, share = VFT_SIM_NETWORK_SHARE,
+                           message = "Daten werden vorbereitet",
+                           detail  = "Wegnetz wird vorbereitet...")
+        giveUp <- function(){
+          simRunning <<- FALSE
+          vftProviderLendBar(session, "network", NULL)
+          try(bar$close(), silent = TRUE)
+        }
+
+        vftScenarioNetworkThen(r, pos,
                                enable = "launchSim",
+                               onFail = giveUp,
                                then = function(scenario){
+
+        vftProviderLendBar(session, "network", NULL)
 
         #Read from the SCENARIO rather than from r$selectedNetwork_r(), which is
         #the older copy taken when the card was clicked.
@@ -1522,15 +1560,17 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
         #population, the adjacency lists and the agents' goals. The second covers
         #the ABM, and is not created until the ABM sends its first message, so
         #there is one bar on screen at a time. See vftProgressPair() in
-        #R/async_helpers.R.
+        #R/async_helpers.R. The first is the bar made above, carried on from
+        #where the network's load left it.
         #
         #vftProgressPair, not ipc::AsyncProgress: the latter was the worst site
         #in the app - 385 MB of session state serialised into the ABM worker,
         #against 3.6 MB for the `network` the job actually needs.
-        progress <- vftProgressPair(value    = 0,
-                                    message  = "Daten werden vorbereitet",
+        progress <- vftProgressPair(message  = "Daten werden vorbereitet",
                                     detail   = vftMsg("Dies sollte weniger als %d Sekunden dauern", 30),
-                                    message2 = "Simulation läuft")
+                                    message2 = "Simulation läuft",
+                                    bar      = bar,
+                                    from     = tryCatch(bar$getValue(), error = function(e) 0))
         progPrep <- progress$prep
         progSim  <- progress$sim
 
@@ -1545,62 +1585,55 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
 
         ## TREAT PROMISE RESULT ####
 
+        simRunning <<- FALSE
+        #the list can have changed under a long run (the newVersions page
+        #deletes scenarios); a result with no scenario left to hold it is dropped
+        if(pos > length(r$networkList)){
+          vftDbg(paste0("RESULTS DROPPED: no scenario ", pos, " any more"))
+          shinyjs::enable("launchSim")
+          return(invisible(NULL))
+        }
+        #the map shows this result only if its scenario is still the one shown
+        shown <- isTRUE(pos == selectedNetwork_position)
+
         #The prepared network and its parking table - but only when THIS run
         #prepared them. A re-run of an already-prepared card gets NULL for both
         #and the graph never makes the return trip. Written first, because
         #everything below reads r$networkList.
         if(!is.null(out$network))
-          r$networkList[[selectedNetwork_position]]$network <- out$network
+          r$networkList[[pos]]$network <- out$network
         if(!is.null(out$parking))
-          r$networkList[[selectedNetwork_position]]$parking <- out$parking
-
-        r$selectedNetwork_r(list(
-          shiny::isolate(r$networkList[[selectedNetwork_position]]$network)))
-
-        r$result <- out$results
-        #fresh simulation result: invalidate cached passageTable + starting points
-        r$passageTable <- NULL
-        r$startingPointsSf <- NULL
-
-        # gc()
-        vftDbg("RESULTS DONE")
-
-
+          r$networkList[[pos]]$parking <- out$parking
 
         #insert result into networkList
-        r$networkList[[selectedNetwork_position]]$pathUsage <- r$result$pathUsage
-        r$networkList[[selectedNetwork_position]]$dayPop <- r$result$dayPop
+        r$networkList[[pos]]$pathUsage <- out$results$pathUsage
+        r$networkList[[pos]]$dayPop <- out$results$dayPop
         #a conflict search describes the simulation it ran on, not this one
-        r$networkList[[selectedNetwork_position]]$conflicts <- NULL
+        r$networkList[[pos]]$conflicts <- NULL
 
         #update button to reflect presence of pathUsage
-        inputid <- r$versionsUI[[selectedNetwork_position]]$inputId_select
+        inputid <- r$versionsUI[[pos]]$inputId_select
 
         vftDbg(paste0("inputId: ", inputid))
 
         shinyjs::removeClass(inputid, "noSim")
         shinyjs::addClass(inputid, "withSim")
 
-        # updateActionButton(session = session, inputId = inputid, label = tags$div(
-        #   tags$img(src = "noSim.png", height = "120px") ,
-        #   tags$text(name, style = "position: absolute;top: 50%;left: 50%;transform: translate(-50%, -50%);"),
-        #   width = "120px",  style = "height: 120px; position: relative; text-align: center;  ",
-        #   class = "selected") )
+        vftDbg("RESULTS DONE")
 
-        # PLOT SELECTED SIMULATIONS
+        if(shown){
+          r$selectedNetwork_r(list(
+            shiny::isolate(r$networkList[[pos]]$network)))
 
-        vftDbg("Trying to plot:")
+          r$result <- out$results
+          #fresh simulation result: invalidate cached passageTable + starting points
+          r$passageTable <- NULL
+          r$startingPointsSf <- NULL
 
-        #PLOT OUTPUT####
-
-        # IF NO AGENT TYPE SELECTED,
-        #SELECT 1
-        # if(is.null(input$agentCheckbox)){
-        #   shiny::updateCheckboxGroupInput(inputId = "agentCheckbox",
-        #                                   selected = 1)
-        # }
-
-        plotPathUsage()
+          #PLOT OUTPUT####
+          vftDbg("Trying to plot:")
+          plotPathUsage()
+        }
 
         #enable launch sim button
         shinyjs::enable("launchSim")
@@ -1608,11 +1641,27 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
         #vftAsyncError() closes BOTH bars of the pair - a job that dies during
         #preparation must not leave the ABM bar armed for the rest of the
         #session. See R/async_helpers.R.
-        })%...!%(vftAsyncError(progress, "Agent-Based Model", "launchSim"))
+        })%...!%(function(e){
+          simRunning <<- FALSE
+          vftAsyncError(progress, "Agent-Based Model", "launchSim")(e)
+        })
 
         })  #end vftScenarioNetworkThen(then = ...)
+        invisible(NULL)
+      }
 
-      }, ignoreInit = TRUE)
+      obsEvent_sim <- shiny::observeEvent(input$launchSim, launchSimulation(), ignoreInit = TRUE)
+
+      #An Original without a simulation simulates itself as the user arrives:
+      #enter() bumps this. An observer rather than a call from enter() itself,
+      #because enter() runs from inside the navigation and the provider observe,
+      #and the launch asks the provider layer for the network. Not ignoreInit:
+      #the first visit's enter() runs during construction, before this observer
+      #has been evaluated once, so its bump is already there to be seen.
+      autoLaunch <- shiny::reactiveVal(0)
+      obsAutoLaunch <- shiny::observeEvent(autoLaunch(), {
+        if(autoLaunch() > 0) launchSimulation()
+      })
 
 
 #observe usage ####
@@ -1972,7 +2021,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
           proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet"
           ) |> leaflet::addCircleMarkers(lng = startingPoints[,"X"], lat = startingPoints[,"Y"] , group = "startingPoints",
                                                    color = "red", fill = FALSE, stroke = TRUE, opacity = 1,
-                                                   options = leaflet::markerOptions(pane = "layer1"), weight = 2,
+                                                   options = leaflet::pathOptions(pane = "layerStart", interactive = FALSE), weight = 2,
                                                    radius = 3)
         }else{
           proxy <- leaflet::leafletProxy(mapId = "mapAreaLeaflet"
@@ -2874,6 +2923,17 @@ vftDbgCat("FINISHED TIFF\n")
       if(!length(r$versionsUI)){
         vftDbg("ENTER: no versions to select - drawing the map on its own")
         plotPathUsage()
+      }
+
+      #--- 7. the Original simulates itself on arrival, when it has no
+      #simulation yet and is the scenario shown - another card selected is the
+      #user's choice to look at, and is left alone. Not without areas of
+      #interest to simulate towards, and not over a run still going.
+      if(selectedNetwork_position == 1 && length(r$networkList) >= 1 &&
+         is.null(r$networkList[[1]]$pathUsage) && !is.null(finalPolygons) &&
+         !simRunning){
+        vftDbg("ENTER: the Original has no simulation - launching one")
+        autoLaunch(autoLaunch() + 1)
       }
 
       vftDbg("RETURNING STEP 6")

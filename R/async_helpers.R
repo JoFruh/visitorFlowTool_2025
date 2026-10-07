@@ -405,7 +405,7 @@ vftMsg <- function(key, ...) structure(list(key = key, args = list(...)),
 #' reactive domain - the trap documented at R/providers.R#845. ipc's consumer does
 #' exactly the same thing one layer down, and drives the same shiny::Progress from
 #' it, so this is the established path rather than a new one.
-.vftQueueWatch <- function(sp, tid, message0 = NULL, detail0 = NULL){
+.vftQueueWatch <- function(sp, tid, message0 = NULL, detail0 = NULL, value0 = 0){
   noop <- list(handOver = function(closed = FALSE) invisible(NULL),
                stop     = function() invisible(NULL))
   if(is.null(sp) || is.null(tid)) return(noop)
@@ -432,7 +432,7 @@ vftMsg <- function(key, ...) structure(list(key = key, args = list(...)),
       #put the caller's own caption back, but only if nothing real has arrived to
       #overwrite it - otherwise we would undo the worker's first message.
       if(!st$handed)
-        tryCatch(sp$set(value = 0, message = message0, detail = detail0),
+        tryCatch(sp$set(value = value0, message = message0, detail = detail0),
                  error = function(e) NULL)
     }
     invisible(NULL)
@@ -525,8 +525,15 @@ vftMsg <- function(key, ...) structure(list(key = key, args = list(...)),
 #'   here rather than left in `...` so it can be translated before the
 #'   shiny::Progress is built with it - see the translation section above.
 #' @param millis how often the main thread drains the queue
+#' @param bar an open shiny::Progress of the caller's to drive INSTEAD of making
+#'   one - a bar lent through vftProviderLendBar(). Its caption is the owner's:
+#'   `message`/`detail` are then only what the queue display puts back. The
+#'   worker's close() leaves it open; its owner closes it.
+#' @param span with `bar`, the part of it this job fills: c(from, to). The
+#'   worker's values, 0 to 1, are laid onto it.
 #' @return a list with $set, $inc and $close, safe to capture in a future
-vftProgress <- function(..., message = NULL, detail = NULL, millis = 1000){
+vftProgress <- function(..., message = NULL, detail = NULL, millis = 1000,
+                        bar = NULL, span = NULL){
   #the domain is already required here: ipc::AsyncProgress$new() builds a
   #shiny::Progress from it two lines down. Translate against it BEFORE that, so
   #the bar is never briefly German on screen for a French user.
@@ -535,18 +542,25 @@ vftProgress <- function(..., message = NULL, detail = NULL, millis = 1000){
   msg0  <- .vftTrTxt(message, tr0)
   det0  <- .vftTrTxt(detail,  tr0)
 
-  progress <- ipc::AsyncProgress$new(..., message = msg0, detail = det0,
-                                     millis = millis)
+  if(is.null(bar)){
+    progress <- ipc::AsyncProgress$new(..., message = msg0, detail = det0,
+                                       millis = millis)
 
-  #The underlying shiny::Progress. We are on the main thread in the handler, so
-  #drive it directly rather than going back through AsyncProgress' own methods -
-  #those re-post to the queue, costing an extra drain cycle (up to `millis`) of
-  #lag on every update. Fall back to the public API if ipc ever changes shape.
-  sp <- tryCatch(progress$.__enclos_env__$private$progress,
-                 error = function(e) NULL)
-  target <- if(is.null(sp)) progress else sp
-
-  q      <- progress$.__enclos_env__$private$queue
+    #The underlying shiny::Progress. We are on the main thread in the handler, so
+    #drive it directly rather than going back through AsyncProgress' own methods -
+    #those re-post to the queue, costing an extra drain cycle (up to `millis`) of
+    #lag on every update. Fall back to the public API if ipc ever changes shape.
+    sp <- tryCatch(progress$.__enclos_env__$private$progress,
+                   error = function(e) NULL)
+    target <- if(is.null(sp)) progress else sp
+    q      <- progress$.__enclos_env__$private$queue
+  }else{
+    #someone else's bar: only the queue is ours, started as AsyncProgress
+    #starts its own
+    sp <- target <- bar
+    q  <- ipc::shinyQueue()
+    q$consumer$start(millis)
+  }
   signal <- basename(tempfile("vftProgress_"))
 
   #### the queue display ####
@@ -558,7 +572,8 @@ vftProgress <- function(..., message = NULL, detail = NULL, millis = 1000){
   #the UNTRANSLATED key goes on the ticket, the translated caption on the bar:
   #see .vftMsgKey().
   tid   <- .vftQueueTicket(label = .vftMsgKey(message), session = sess)
-  watch <- .vftQueueWatch(sp, tid, message0 = msg0, detail0 = det0)
+  watch <- .vftQueueWatch(sp, tid, message0 = msg0, detail0 = det0,
+                          value0 = if(is.null(span)) 0 else span[[1]])
 
   #This closure captures `target` and therefore the session - which is fine and
   #intended: it lives in the consumer, on this side, and is never serialised.
@@ -570,10 +585,11 @@ vftProgress <- function(..., message = NULL, detail = NULL, millis = 1000){
     #language switch mid-job takes effect on the next update.
     tryCatch({
       tr <- .vftT(sess)
+      args <- .vftSpanArgs(obj$op, obj$args, span)
       switch(obj$op,
-             set   = do.call(target$set, .vftTrArgs(obj$args, tr)),
-             inc   = do.call(target$inc, .vftTrArgs(obj$args, tr)),
-             close = target$close())
+             set   = do.call(target$set, .vftTrArgs(args, tr)),
+             inc   = do.call(target$inc, .vftTrArgs(args, tr)),
+             close = if(is.null(bar)) target$close())
     }, error = function(err) NULL)
     #a message from the worker is proof the job is executing: stop the queue
     #ticker before it can overwrite what the worker just wrote, and republish the
@@ -591,6 +607,21 @@ vftProgress <- function(..., message = NULL, detail = NULL, millis = 1000){
   #still holds.
   attr(handle, "vftTicket") <- tid
   handle
+}
+
+#' A worker's progress message laid onto the part `span` = c(from, to) of a
+#' bar: a value of 0..1 becomes from..to, an increment shrinks with it. NULL
+#' `span` leaves the message as it came.
+.vftSpanArgs <- function(op, args, span){
+  if(is.null(span) || !is.list(args)) return(args)
+  w <- span[[2]] - span[[1]]
+  v <- args$value
+  if(identical(op, "set") && length(v) == 1L && is.finite(v))
+    args$value <- span[[1]] + v * w
+  a <- args$amount
+  if(identical(op, "inc") && length(a) == 1L && is.finite(a))
+    args$amount <- a * w
+  args
 }
 
 #' The $set/$inc/$close triple a worker drives one bar with.
@@ -651,39 +682,60 @@ vftProgress <- function(..., message = NULL, detail = NULL, millis = 1000){
 #'   and translated at THAT moment, not here, so it follows a language switch
 #'   made while the first half was still running
 #' @param millis how often the main thread drains the queue
+#' @param bar an open shiny::Progress to use as the FIRST bar instead of making
+#'   one - step 5's, which the path network's load may already have driven part
+#'   of the way. It is the pair's from here on: its caption is set to
+#'   `message`/`detail`, and the first half's close() closes it.
+#' @param from with `bar`, where on it the first half starts; the worker's 0..1
+#'   fills from `from` to the end.
 #' @return list(prep = , sim = ), each a handle as vftProgress() returns, with the
 #'   queue ticket as an attribute on the LIST so vftFuture() finds it there
 vftProgressPair <- function(..., message = NULL, detail = NULL,
-                            message2 = NULL, detail2 = NULL, millis = 1000){
+                            message2 = NULL, detail2 = NULL, millis = 1000,
+                            bar = NULL, from = 0){
   sess0 <- shiny::getDefaultReactiveDomain()
   tr0   <- .vftT(sess0)
   msg0  <- .vftTrTxt(message, tr0)
   det0  <- .vftTrTxt(detail,  tr0)
 
-  progress <- ipc::AsyncProgress$new(..., message = msg0, detail = det0,
-                                     millis = millis)
-
-  sp     <- tryCatch(progress$.__enclos_env__$private$progress,
-                     error = function(e) NULL)
-  target <- if(is.null(sp)) progress else sp
+  span <- NULL
+  if(is.null(bar)){
+    progress <- ipc::AsyncProgress$new(..., message = msg0, detail = det0,
+                                       millis = millis)
+    sp <- tryCatch(progress$.__enclos_env__$private$progress,
+                   error = function(e) NULL)
+    target <- if(is.null(sp)) progress else sp
+    q <- progress$.__enclos_env__$private$queue
+  }else{
+    #the caller's bar, carried on from `from`: only the queue is new
+    if(length(from) != 1L || !is.finite(from)) from <- 0
+    from <- max(0, min(1, from))
+    span <- c(from, 1)
+    sp <- target <- bar
+    tryCatch(bar$set(value = from, message = msg0, detail = det0),
+             error = function(e) NULL)
+    q <- ipc::shinyQueue()
+    q$consumer$start(millis)
+  }
   sess   <- tryCatch(sp$.__enclos_env__$private$session, error = function(e) NULL)
   if(is.null(sess)) sess <- sess0
 
-  q    <- progress$.__enclos_env__$private$queue
   sig1 <- basename(tempfile("vftProgress_"))
   sig2 <- basename(tempfile("vftProgress2_"))
 
   #the German key, not the painted caption: see .vftMsgKey()
   tid   <- .vftQueueTicket(label = .vftMsgKey(message), session = sess)
-  watch <- .vftQueueWatch(sp, tid, message0 = msg0, detail0 = det0)
+  watch <- .vftQueueWatch(sp, tid, message0 = msg0, detail0 = det0,
+                          value0 = if(is.null(span)) 0 else span[[1]])
 
   #### bar 1: exactly what vftProgress() does ####
   q$consumer$addHandler(function(sig, obj, e){
     tryCatch({
       tr <- .vftT(sess)
+      args <- .vftSpanArgs(obj$op, obj$args, span)
       switch(obj$op,
-             set   = do.call(target$set, .vftTrArgs(obj$args, tr)),
-             inc   = do.call(target$inc, .vftTrArgs(obj$args, tr)),
+             set   = do.call(target$set, .vftTrArgs(args, tr)),
+             inc   = do.call(target$inc, .vftTrArgs(args, tr)),
              close = target$close())
     }, error = function(err) NULL)
     tryCatch(watch$handOver(closed = identical(obj$op, "close")),

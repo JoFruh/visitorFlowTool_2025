@@ -1,4 +1,21 @@
 #### Step 3 UI - define the areas of interest ####
+
+#' The threshold slider's look. It runs from 0 on the left to 20 on the right,
+#' and the cells above the threshold are the ones the map paints red
+#' (`col = c("white", "red3")` in step3_server.R), so the line from the handle
+#' to the maximum is red3 and the line up to the handle is the skin's plain
+#' grey. `!important` and two classes, because chooseSliderSkin()'s teal is an
+#' `!important` rule of one class; its value label goes the step's dark grey.
+#' @noRd
+VFT_AOI_SLIDER_CSS <- "
+.vft-aoi-slider .irs-line { background: #cd0000; border-color: #cd0000; }
+.vft-aoi-slider .irs-bar, .vft-aoi-slider .irs-bar-edge {
+  background: linear-gradient(to bottom, #dedede -50%, #fff 150%) !important;
+  background-color: #ededed !important;
+  border: 1px solid #cccccc; border-right: none; }
+.vft-aoi-slider .irs-single { background: #4a4f4e !important; }
+"
+
 step3_ui <- function(id, i18n){
 vftDbg("UI4")
       shiny::fluidPage(
@@ -32,11 +49,16 @@ vftDbg("UI4")
                        #the skin applies to every slider in the app - step 2's
                        #threshold slider takes the teal from here too
                        shinyWidgets::chooseSliderSkin(skin = "Shiny", color = VFT_TEAL),
-                       shinyWidgets::sliderTextInput(
-                         inputId =shiny::NS(id, "AOISlider"),
-                         label = i18n$t("Zielgebiete Schwelle"),
-                         choices = as.character(round(seq(from = 20, to = 0, by = -0.1), 1)),
-                         selected = 11)
+                       #...but not this one: everything above the threshold is
+                       #what the map shows in red, so the line from the handle
+                       #to the maximum is that red and the rest stays plain
+                       shiny::tags$style(shiny::HTML(VFT_AOI_SLIDER_CSS)),
+                       shiny::div(class = "vft-aoi-slider",
+                         shinyWidgets::sliderTextInput(
+                           inputId =shiny::NS(id, "AOISlider"),
+                           label = i18n$t("Zielgebiete Schwelle"),
+                           choices = as.character(round(seq(from = 0, to = 20, by = 0.1), 1)),
+                           selected = 11))
                 ),
                 shiny::column(4)
               ),

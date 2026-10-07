@@ -26,8 +26,11 @@ ok <- function(what, cond, extra = "") {
 }
 
 b <- chromote::ChromoteSession$new(width = 1600, height = 1000)
-## the download hint's tap reaches the app; nothing needs to land on disk
-invisible(tryCatch(b$Browser$setDownloadBehavior(behavior = "deny"), error = function(e) NULL))
+## the download hint's tap reaches the app, and the zip lands here
+DL <- file.path(tempdir(), "tutorial_step2_dl")
+dir.create(DL, showWarnings = FALSE, recursive = TRUE)
+invisible(tryCatch(b$Browser$setDownloadBehavior(behavior = "allow", downloadPath = normalizePath(DL)),
+                   error = function(e) NULL))
 js <- function(x) b$Runtime$evaluate(x, returnByValue = TRUE)$result$value
 waitFor <- function(expr, secs = 30, step = 0.25) {
   t0 <- Sys.time()
@@ -261,8 +264,10 @@ w <- wins()
 ok("one window, on the red list button", length(w) == 1 && near(w[[1]], rectOf("#step2-redListWeights")))
 shot("09_redlist")
 clickEl("#step2-redListWeights")
+t9 <- Sys.time()
 ok("its tap pauses, then moves on to hint 10",
    isTRUE(js("vftTutorialState().pause")) && waitFor(atHint(10), 10))
+ok("...two seconds later, not one (delay)", as.numeric(difftime(Sys.time(), t9, units = "secs")) >= 1.9)
 ## the default filter lists VU-CR species only, which the red list weighs 3-5
 ok("...and the weights were set by red list status (all 3 or more)",
    waitFor("(function(){ var w = document.querySelectorAll('#step2-speciesCheckbox input[type=number]');
@@ -274,6 +279,11 @@ box <- js("(function(){ var r = document.getElementById('step2-minValThreshold')
            return [r.left, r.top, r.width, r.height]; })()")
 w <- wins()
 ok("one window, on the slider and its label", length(w) == 1 && near(w[[1]], box, 8))
+ok("...the card on its right, off the map", {
+  bx <- unlist(rectOf(".vftTutorialBox"))
+  bx[1] >= w[[1]][[1]] + w[[1]][[3]] &&
+    identical(js("document.querySelector('.vftTutorialBox').getAttribute('data-side')"), "right")
+})
 shot("10_threshold")
 IRS <- "jQuery('#step2-minValThreshold').data('ionRangeSlider')"
 xFor <- function(v) js(sprintf("(function(){ var d = %s,
@@ -298,6 +308,9 @@ invisible(js("window.__vftSM = 0; jQuery(document).on('shiny:inputchanged.vftTes
                if (e.name === 'step2-SMbutton') window.__vftSM++; });"))
 clickEl("#step2-SMbutton")
 ok("a tap on it goes through (live)", waitFor("window.__vftSM > 0", 5))
+dlDone <- function() { f <- list.files(DL, pattern = "[.]zip$"); length(f) > 0 }
+t0 <- Sys.time(); while (!dlDone() && difftime(Sys.time(), t0, units = "secs") < 30) Sys.sleep(0.5)
+ok("...and the GeoTIFF zip is downloaded", dlDone(), paste(list.files(DL), collapse = ","))
 ok("...and the hint stays", isTRUE(js(atHint(11))))
 invisible(js("jQuery(document).off('shiny:inputchanged.vftTest')"))
 clickEl(".vftTutorialNext")
