@@ -1,3 +1,17 @@
+#The threshold slider hides the sensitivity BELOW its value, so what the map
+#keeps is the part from the handle up to the maximum: that part of the line is
+#teal, and the part from the minimum to the handle stays plain - the reverse of
+#the slider skin's default bar (chooseSliderSkin() in step3_ui.R). As step 3's
+#VFT_AOI_SLIDER_CSS does for its red.
+VFT_SM_SLIDER_CSS <- "
+.vft-sm-slider .irs-line { background: #006268; border-color: #006268; }
+.vft-sm-slider .irs-bar, .vft-sm-slider .irs-bar-edge {
+  background: linear-gradient(to bottom, #dedede -50%, #fff 150%) !important;
+  background-color: #ededed !important;
+  border: 1px solid #cccccc; border-right: none; }
+.vft-sm-slider > .shiny-input-container { margin-left: auto; margin-right: auto; max-width: 100%; }
+"
+
 #### Step 1 UI - determine area ####
 step2_ui <- function(id, i18n){
   shiny::fluidPage(
@@ -92,8 +106,10 @@ step2_ui <- function(id, i18n){
                 shiny::column(4, align = "center", class = "vft-step2-col",
                               style = " vertical-align: middle;",
                               shiny::uiOutput(outputId = NS(id, "minCutoff_UI")),
-                       shiny::sliderInput(shiny::NS(id, "minValThreshold"), label = i18n$t("Sensibilität unterhalb des folgenden Schwellenwerts ausblenden. [ % ]"), min = 0, max = 100, value = 0,
-                                          ticks = FALSE),
+                       shiny::tags$style(shiny::HTML(VFT_SM_SLIDER_CSS)),
+                       shiny::div(class = "vft-sm-slider",
+                         shiny::sliderInput(shiny::NS(id, "minValThreshold"), label = i18n$t("Sensibilität unterhalb des folgenden Schwellenwerts ausblenden. [ % ]"), min = 0, max = 100, value = 0,
+                                            ticks = FALSE)),
                        shiny::plotOutput(shiny::NS(id, "SDMmap"))
                        ),
                 shiny::column(1),

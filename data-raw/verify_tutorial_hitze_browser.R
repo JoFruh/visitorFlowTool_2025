@@ -148,7 +148,7 @@ PICKED <- "(function(){ var r = document.querySelectorAll('.vft-plan-card .vft-p
 invisible(b$Page$navigate(URL))
 ok("the app connects", waitFor("!!(window.Shiny && Shiny.shinyapp && Shiny.shinyapp.isConnected())", 120))
 invisible(js("localStorage.setItem('vft.tutorial.v1', JSON.stringify({status: 'done', at: Date.now()}));
-              localStorage.removeItem('vft.tutorial.done.v1');"))
+              localStorage.setItem('vft.tutorial.done.v1', JSON.stringify({saveLoad: Date.now()}));"))
 invisible(b$Page$reload())
 Sys.sleep(1)
 ok("...again", waitFor("!!(window.Shiny && Shiny.shinyapp && Shiny.shinyapp.isConnected())", 120))

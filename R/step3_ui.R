@@ -3,12 +3,13 @@
 #' The threshold slider's look. It runs from 0 on the left to 20 on the right,
 #' and the cells above the threshold are the ones the map paints red
 #' (`col = c("white", "red3")` in step3_server.R), so the line from the handle
-#' to the maximum is red3 and the line up to the handle is the skin's plain
-#' grey. `!important` and two classes, because chooseSliderSkin()'s teal is an
+#' to the maximum is red and the line up to the handle is the skin's plain
+#' grey. The red is red3 a little paler (#da4040, red3 at 75 % over white), as
+#' the map's translucent overlay looks; the tutorial's `vftTutAoiRed` matches. `!important` and two classes, because chooseSliderSkin()'s teal is an
 #' `!important` rule of one class; its value label goes the step's dark grey.
 #' @noRd
 VFT_AOI_SLIDER_CSS <- "
-.vft-aoi-slider .irs-line { background: #cd0000; border-color: #cd0000; }
+.vft-aoi-slider .irs-line { background: #da4040; border-color: #da4040; }
 .vft-aoi-slider .irs-bar, .vft-aoi-slider .irs-bar-edge {
   background: linear-gradient(to bottom, #dedede -50%, #fff 150%) !important;
   background-color: #ededed !important;

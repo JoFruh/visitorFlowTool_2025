@@ -11,6 +11,10 @@
  *   <em class=vftTutAoi>, <em class=vftTutBio>   the same, in the areas of
  *          interest's green / the biodiversity sensitivity's dark red
  *   <em class=vftTutAoiRed>   the same, in step 3's map red (areas of interest)
+ *   <em class=vftTutAoiFill>   the same, in step 4's map fill green
+ *   <em class=vftTutSens>   the same, orange (biodiversity sensitivity, step 2)
+ *   <em class=vftTutUsage>   the same, a busy path's blue (step 5)
+ *   <em class=vftTutWarn>   the same, the data-loss modal's red button
  *   <em class=vftTutShape>   the same, in the blue of a shape being drawn
  *   <i class=vftTutPolyDraw></i>   a shape being drawn, two lines high
  *   <b><em>   teal and one size larger (a teal button's name: confirm)
@@ -47,8 +51,17 @@
   --vftTut-accent-text: #ffffff;
   /* the areas of interest: the border step 5 draws them with (R "green4") */
   --vftTut-aoi: #008b00;
-  /* ...and on step 3, the red its map paints them with (R "red3") */
-  --vftTut-aoi-red: #cd0000;
+  /* ...on step 3, the red its map paints them with: R "red3", a little paler,
+     as the map's translucent overlay shows it (VFT_AOI_SLIDER_CSS too) */
+  --vftTut-aoi-red: #da4040;
+  /* ...and on step 4, the green its map fills them with (translucent "green") */
+  --vftTut-aoi-fill: #4da64d;
+  /* the biodiversity sensitivity's orange: the Red List's "EN" icon (EN.png) */
+  --vftTut-sens: #cc6732;
+  /* a heavily used path on step 5's map (plotPathUsage()'s "#182db5") */
+  --vftTut-usage: #182db5;
+  /* the data-loss warning: its confirm button's red (Bootstrap's btn-danger) */
+  --vftTut-warn: #d9534f;
   /* a shape being drawn: polydraw.js's light blue */
   --vftTut-draw: #5ab4f0;
   /* the biodiversity sensitivity: dark red */
@@ -118,6 +131,14 @@
   width: 100%;
   height: 100%;
   pointer-events: none;
+  transition: opacity 0.25s ease-out;
+}
+
+/* no window open (between hints, while the page loads or the map moves): no
+   dim either - a grey page with nothing to look at reads as an error. The
+   layer stays, transparent, and still swallows the taps. */
+.vftTutorialCanvas.vftTutorialNoDim {
+  opacity: 0;
 }
 
 /* ---- the text card ---- */
@@ -204,14 +225,14 @@
 }
 
 /* A card pops in as a window does: out of its caret's tip (transform-origin,
-   set by the script), past its size, then back to it - 0.25 s in all */
+   set by the script), well past its size, then back to it - 0.25 s in all */
 .vftTutorialBox.vftTutorialPop {
   animation: vftTutCardPop 0.25s ease-out;
 }
 
 @keyframes vftTutCardPop {
   0%   { transform: scale(0.15); opacity: 0; }
-  60%  { transform: scale(1.08); opacity: 1; }
+  55%  { transform: scale(1.2); opacity: 1; }
   100% { transform: scale(1); opacity: 1; }
 }
 
@@ -230,6 +251,11 @@
   color: var(--vftTut-card-muted);
   line-height: 1;
   margin-bottom: 6px;
+}
+
+/* the one-hint cards (the data-loss warning, save and load) count nothing */
+.vftTutorialCount:empty {
+  display: none;
 }
 
 .vftTutorialText {
@@ -260,6 +286,26 @@
    paints the areas above the threshold with (R "red3") */
 .vftTutorialText .vftTutAoiRed {
   color: var(--vftTut-aoi-red);
+}
+
+/* <em class="vftTutAoiFill">: the term on step 4, in its map's fill green */
+.vftTutorialText .vftTutAoiFill {
+  color: var(--vftTut-aoi-fill);
+}
+
+/* <em class="vftTutSens">: "biodiversity sensitivity" on step 2, orange */
+.vftTutorialText .vftTutSens {
+  color: var(--vftTut-sens);
+}
+
+/* <em class="vftTutUsage">: "path usage" on step 5, a busy path's blue */
+.vftTutorialText .vftTutUsage {
+  color: var(--vftTut-usage);
+}
+
+/* <em class="vftTutWarn">: "warning", in the data-loss modal's button red */
+.vftTutorialText .vftTutWarn {
+  color: var(--vftTut-warn);
 }
 
 /* <em class="vftTutShape">: a shape drawn on the map, in the light blue
@@ -559,7 +605,7 @@ body.vftTutModalLight .modal-backdrop.in {
 
 @keyframes vftTutOfferPop {
   0%   { transform: scale(0.2); opacity: 0; }
-  56%  { transform: scale(1.12); opacity: 1; }
+  55%  { transform: scale(1.22); opacity: 1; }
   100% { transform: scale(1); }
 }
 
@@ -612,6 +658,7 @@ body.vftTutModalLight .modal-backdrop.in {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .vftTutorialCanvas,
   .vftTutorialBox,
   .vftTutorialBox.vftTutorialPlaced { transition: none; }
   .vftTutorialOffer,

@@ -41,22 +41,32 @@
 #' back from the newVersions tour (the JS's `NEXT`), pointing on to
 #' Hitzeminderung. It is listed so its text is sent; no ring key matches it, so
 #' no help button offers it.
+#'
+#' `commit` and `saveLoad` are no page's either: one card each, played between
+#' two tours. `commit` is the data-loss warning (vftAskCommit() in
+#' R/providers.R) - its text also interrupts any hint while that modal is up.
+#' `saveLoad` points at the nav bar's save and load buttons, once per device,
+#' after the first tour finished past step 1's.
 VFT_TUTORIAL_TOURS <- c("step1", "step2", "step3", "step4", "step5", "newVersions", "toHitze",
-                        "hitze")
+                        "hitze", "commit", "saveLoad")
 
 #' How many hints of its own each tour has; its texts are `:tut_<key>_1:` ..
 #' `_<n>:`. `hitze` also plays three of the scenarios page's hints, with their
 #' texts, when there is no scenario to paint on (`borrowed()` in the JS).
 VFT_TUTORIAL_HINTS <- c(step1 = 6L, step2 = 13L, step3 = 5L, step4 = 6L, step5 = 10L,
-                        newVersions = 23L, toHitze = 1L, hitze = 26L)
+                        newVersions = 23L, toHitze = 1L, hitze = 26L, commit = 1L,
+                        saveLoad = 1L)
 
 #' The alternative texts of hints that change with the app - a hint's
 #' `variant()` in the JS picks one as the hint starts, its `textWhen()` while
 #' it is on. `"9b"` is hint 9's variant b, text `:tut_step5_9b:`; `"7b"` is
-#' hint 7's text while the image's name modal is open. (Hint 6 had one too,
-#' for an area without a sensitivity matrix; it is passed over there now.)
-#' The scenarios page's `"21b"` is hint 21's text while the rename modal is open.
-VFT_TUTORIAL_VARIANTS <- list(step5 = c("7b", "9b"), newVersions = "21b")
+#' hint 7's text while the image's name modal is open; `"2b"` hint 2's when
+#' the simulation it follows was launched in hint 1 rather than by the page.
+#' (Hint 6 had one too, for an area without a sensitivity matrix; it is passed
+#' over there now.) The scenarios page's `"21b"` is hint 21's text while the
+#' rename modal is open. Step 2's `"6b"` is a hint of its own between 6 and 7
+#' (`alt` in the JS), so the rows after it keep their numbers.
+VFT_TUTORIAL_VARIANTS <- list(step5 = c("2b", "7b", "9b"), newVersions = "21b", step2 = "6b")
 
 #' English stand-ins for a translation row that has not been added yet.
 #'
@@ -68,6 +78,10 @@ VFT_TUTORIAL_VARIANTS <- list(step5 = c("7b", "9b"), newVersions = "21b")
 #' Step texts may use `<br>`, `<b>` (teal), `<em>` (bold, one size larger) and
 #' `<em class=vftTutAoi>` (the same, in the areas of interest's green),
 #' `<em class=vftTutAoiRed>` (the same, in step 3's map red),
+#' `<em class=vftTutAoiFill>` (the same, in step 4's map fill green),
+#' `<em class=vftTutSens>` (the same, orange: biodiversity sensitivity on step 2),
+#' `<em class=vftTutUsage>` (the same, a busy path's blue: path usage),
+#' `<em class=vftTutWarn>` (the same, the data-loss modal's red button),
 #' `<em class=vftTutShape>` (the same, in the blue of a shape being drawn),
 #' `<i class=vftTutPolyDraw></i>` (a shape being drawn, two lines high),
 #' `<em class=vftTutBio>` (the same, in the biodiversity sensitivity's dark red),
@@ -91,54 +105,56 @@ VFT_TUTORIAL_VARIANTS <- list(step5 = c("7b", "9b"), newVersions = "21b")
 VFT_TUTORIAL_FALLBACK <- list(
   ":tut_step1_1:" = "Welcome to Visitor Flow Tool.<br>Here you can quickly and easily explore the impacts of planning on biodiversity and heat mitigation, <em>anywhere in Switzerland</em>.<br>Let's explore how!",
   ":tut_step1_2:" = "You can upload shapefiles or a .kml file to determine the full area you wish to work on.",
-  ":tut_step1_3:" = "Or quickly draw your own area on the map.<br>Let's take this area as an example.<br>Draw a polygon around Birmensdorf.",
+  ":tut_step1_3:" = "You can also draw your own <em class=vftTutShape>areas</em> directly on the map.<br>Place at least 3 points on the map, to determine an <em class=vftTutShape>area</em>.<br><i class=vftTutPolyDraw></i><br>As an example, draw an <em class=vftTutShape>area</em> around Birmensdorf.",
   ":tut_step1_4:" = "Now that we have an area, we can hit <b>Confirm</b> to finish this step.",
   ":tut_step1_5:" = "There are now various stages you can choose from, depending on your interests.<br>Choose the one you're interested in!",
-  ":tut_step1_6:" = "The tutorial will continue to your chosen next step.<br>If you interrupt the tutorial, you can restart it at any step you wish.<br>Simply click the help button on that step!",
+  ":tut_step1_6:" = "The tutorial will continue to your chosen next step.<br>If you interrupt the tutorial, you can restart it at any step you wish.<br>Simply click the <b><em>help</em></b> button on that step!",
   ":tut_step2_1:"  = "You've selected the <b><em>Biodiversity Sensitivity</em></b> step.",
   ":tut_step2_2:"  = "You will notice other steps are available, allowing you to go back and forth as you wish.",
-  ":tut_step2_3:"  = "Here you create a Biodiversity Sensitivity map.<br>It combines various species' distribution models, as you see fit.",
+  ":tut_step2_3:"  = "Here you create a <em class=vftTutSens>Biodiversity Sensitivity</em> map.<br>You can quickly and easily combine species distributions relevant to your project.",
   ":tut_step2_4:"  = "On the right you can select species by group.<br>By default all species are selected.<br>Let's select <b><em>Amphibians</em></b>.",
   ":tut_step2_5:"  = "The distributions of all Amphibians are stacked to create a single sensitivity map.",
-  ":tut_step2_6:"  = "On the left, individual species are shown.<br>They are ordered from the most widespread at the top to the least widespread at the bottom.",
+  ":tut_step2_6:"  = "On the left, individual species are shown.",
+  ":tut_step2_6b:" = "The most widespread species in the area are closer to the top of the list.",
   ":tut_step2_7:"  = "Information is given for each species, such as its national priority, its Red List status and whether it is an Emerald species.<br>Its scientific name is a link to more information.",
   ":tut_step2_8:"  = "A species' weight can be increased, raising its importance.<br>Increase the Yellowbelly toad's weight to 3.",
-  ":tut_step2_9:"  = "You can also set the weights automatically, based on priority or Red List status.<br>More vulnerable species get more weight.",
+  ":tut_step2_9:"  = "You can also set the weights automatically, let's base the weights on the Red List status.<br>Click the button.",
   ":tut_step2_10:" = "If the sensitivity map gets too crowded, you can raise the threshold to focus on the most sensitive areas.<br>Let's hide the bottom 25% of sensitive areas.",
   ":tut_step2_11:" = "We now have a Biodiversity Sensitivity map!<br>We can download it as a GeoTIFF here.",
   ":tut_step2_12:" = "Our <b><em>Biodiversity Sensitivity</em></b> map will be used in the next steps.<br>We can also confirm our map and head to the next step!",
   ":tut_step2_13:" = "We have come to the end of this step.<br>Choose your next step!",
-  ":tut_step3_1:" = "To simulate recreation, we first need to specify <em class=vftTutAoi>Areas of Interest</em>.<br>These are the areas recreationists go to, to recreate.<br>For example: parks, forests, lakesides.",
-  ":tut_step3_2:" = "In this sub-step, we quickly define <em class=vftTutAoiRed>Areas of Interest</em> by sliding a bar.",
+  ":tut_step3_1:" = "Before we <b><em>Simulate Recreation</em></b>, we need to specify where recreationists go to recreate (<em class=vftTutAoiRed>Areas of Interest</em>). E.g. parks, forests, lakesides.",
+  ":tut_step3_2:" = "In this sub-step, we quickly define <em class=vftTutAoiRed>Areas of Interest</em> (AoI) by sliding a bar.",
   ":tut_step3_3:" = "Slide the bar to the value of <b>8</b>.",
-  ":tut_step3_4:" = "Now all areas with an attractivity value above 8 are shown in red.<br>These areas will become <em class=vftTutAoi>Areas of Interest</em>.",
-  ":tut_step3_5:" = "<b>Confirm</b> to go to the next sub-step and precisely edit the Areas of Interest.",
-  ":tut_step4_1:" = "In this sub-step, we can further refine the Areas of Interest.",
+  ":tut_step3_4:" = "Now all areas with an attractivity value above 8 are shown in red.<br>They will become <em class=vftTutAoiRed>Areas of Interest</em> (AoIs).",
+  ":tut_step3_5:" = "<b><em>Confirm</em></b> to go to the next sub-step and precisely edit the Areas of Interest.",
+  ":tut_step4_1:" = "In this sub-step, we can further refine the <em class=vftTutAoiFill>Areas of Interest</em>.",
   ":tut_step4_2:" = "You can cut existing polygons by drawing a line across them:<br>Click two points onto the map, the second point will be a scissor.<span class=vftTutIconRow><i class=vftTutCut1></i><i class=vftTutCut2></i><i class=vftTutCut3></i></span>Clicking the scissor cuts along the red dotted line, cutting polygons.",
   ":tut_step4_3:" = "Add 3 points on the map, to start a <em class=vftTutShape>shape</em> (like in step 1).<br><i class=vftTutPolyDraw></i><br>Adding <em class=vftTutShape>shapes</em> over existing ones will combine them!<br>Create a new <em class=vftTutShape>shape</em> on the map.",
   ":tut_step4_4:" = "You can always <em class=vftTutGrey>Reset</em> back to the original shapes.<br>Let's reset to remove our modifications.",
-  ":tut_step4_5:" = "You can also choose to correct Areas of Interest automatically!<br>This will attempt to create realistic Areas of Interest.<br>For example, making a lake's contour its own area of interest.",
-  ":tut_step4_6:" = "Let's <b><em>confirm</em></b> these AoIs as is.",
+  ":tut_step4_5:" = "You can also choose to correct automatically!<br>This will attempt to create realistic <em class=vftTutAoiFill>Areas of Interest</em>.<br>E.g. by making a lake's contour its own area.<br><b><em>Try it!</em></b>",
+  ":tut_step4_6:" = "Let's <b><em>confirm</em></b> the corrected AoIs.",
   ":tut_step5_1:" = "In this step, we can simply launch a recreation simulation!",
-  ":tut_step5_2:" = "Path data is downloaded and the simulation is run.<br>This can take a bit of time.",
-  ":tut_step5_3:" = "We now see the path usage.<br>Wider and bluer paths have more usage.",
+  ":tut_step5_2:" = "On your arrival, the path network is loaded and the <b><em>Recreation Simulation</em></b> is run.",
+  ":tut_step5_2b:" = "Path data is downloaded and the simulation is run.<br>This can take a bit of time.",
+  ":tut_step5_3:" = "We now see the <em class=vftTutUsage>path usage</em>.<br>Wider and bluer paths have more usage.",
   ":tut_step5_4:" = "Many details can be shown.",
   ":tut_step5_5:" = "Let's show the simulated recreationists' (agents') starting points.",
   ":tut_step5_6:" = "You can show your previously generated <em class=vftTutBio>Biodiversity Sensitivity</em> Map here.",
   ":tut_step5_7:" = "You can create a PDF showing and detailing your map and choices.",
   ":tut_step5_7b:" = "Give a name to the image and confirm.",
-  ":tut_step5_8:" = "Here you can select your scenarios to simulate them.",
-  ":tut_step5_9:" = "You only have the original scenario for now.<br>Let's create a new one!",
+  ":tut_step5_8:" = "Here,<br>you can create and select your <b><em>Scenarios</em></b> to simulate them.",
+  ":tut_step5_9:" = "You only have the <em class=vftTutGrey>Original</em> scenario for now.<br>Click this button to create a new <b><em>Scenario</em></b>!",
   ":tut_step5_9b:" = "Select another scenario here.",
   ":tut_step5_10:" = "Now you can launch a new simulation!",
   ":tut_newVersions_1:"  = "Here we can create new <b><em>Scenarios</em></b>.<br>Which we can then use in the Simulations.",
   ":tut_newVersions_2:"  = "To change anything, we first need to create a new <b><em>Scenario</em></b>.<br>We cannot alter the <em class=vftTutGrey>Original</em> scenario.",
   ":tut_newVersions_3:"  = "Submit a name for the new scenario.",
   ":tut_newVersions_4:"  = "To change anything, we first need to select a new <b><em>Scenario</em></b>.<br>We cannot alter the <em class=vftTutGrey>Original</em> scenario.",
-  ":tut_newVersions_5:"  = "We can change many different things in a scenario, through the contexts available here.",
+  ":tut_newVersions_5:"  = "We can change a variety of things through the different contexts shown here.",
   ":tut_newVersions_6:"  = "Let's first focus on <em class=vftTutGrey>Paths/Roads</em>.",
   ":tut_newVersions_7:"  = "Here, we see paths, roads, their qualities and crossroads <i class=vftTutNode></i>(nodes).",
-  ":tut_newVersions_8:"  = "You can click on a path to either remove it, or change its qualities.<br>Click on any path.",
+  ":tut_newVersions_8:"  = "Click any <em>path</em> to either remove it, or change its qualities.",
   ":tut_newVersions_9:"  = "You can now see the path's qualities and change them.",
   ":tut_newVersions_10:" = "We can also <em class=vftTutDelete>delete</em> the path.<br>Click the button.",
   ":tut_newVersions_11:" = "You will notice the path is now gone.",
@@ -156,6 +172,8 @@ VFT_TUTORIAL_FALLBACK <- list(
   ":tut_newVersions_22:" = "You cannot modify the <em class=vftTutGrey>Original</em> scenario.",
   ":tut_newVersions_23:" = "Once you've got your new scenarios, you can <b><em>confirm</em></b> them to return to the Simulate Recreation step.",
   ":tut_toHitze_1:" = "We can now explore the last context: <em class=vftTutHeat>Heat mitigation</em>.",
+  ":tut_commit_1:" = "If you alter data from previous steps, linked data from later steps will be erased.<br>A <em class=vftTutWarn>warning</em> is given, confirm to continue.",
+  ":tut_saveLoad_1:" = "You can <b><em>save</em></b> and <b><em>load</em></b> your work at any time here.",
   ":tut_hitze_1:"  = "This step allows you to observe the impact of landscape changes on <em class=vftTutHot>heat</em> and its consequences.",
   ":tut_hitze_2:"  = "Heat mitigation is another context for building scenarios, which can affect Outdoor Recreation.<br><br>However, it also works independently from the Recreation Simulation.",
   ":tut_hitze_3:"  = "Here we see the main landscape materials mapped.",

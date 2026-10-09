@@ -150,7 +150,7 @@ probe <- function(expr) { invisible(js(PROBES)); js(paste0("__nvProbe.", expr)) 
 invisible(b$Page$navigate(URL))
 ok("the app connects", waitFor("!!(window.Shiny && Shiny.shinyapp && Shiny.shinyapp.isConnected())", 120))
 invisible(js("localStorage.setItem('vft.tutorial.v1', JSON.stringify({status: 'done', at: Date.now()}));
-              localStorage.removeItem('vft.tutorial.done.v1');"))
+              localStorage.setItem('vft.tutorial.done.v1', JSON.stringify({saveLoad: Date.now()}));"))
 invisible(b$Page$reload())
 Sys.sleep(1)
 ok("...again", waitFor("!!(window.Shiny && Shiny.shinyapp && Shiny.shinyapp.isConnected())", 120))
@@ -214,7 +214,7 @@ w <- wins()
 ok("one window, on the contexts",
    length(w) == 1 && near(w[[1]], rectOf("#newVersions-contextChoice .shiny-options-group"), 8))
 ok("...counted 2 / 20", identical(count(), "2 / 20"), count())
-ok("...'many different things in a scenario'", grepl("Szenario viele verschiedene Dinge", text()), text())
+ok("...'a variety of things' through the contexts shown here", grepl("hier gezeigten Kontexte.*Vielzahl", text()), text())
 ok("Next to hint 6", nextAndWait(6))
 Sys.sleep(0.6)
 lab1 <- js("(function(){ var r = document.querySelector('#newVersions-contextChoice input[value=\"1\"]').closest('label').getBoundingClientRect();
@@ -255,6 +255,7 @@ cat("\n=== 4. hints 8-11: a path, its qualities, deleting it ===\n")
 ok("Next to hint 8", nextAndWait(8))
 Sys.sleep(0.8)
 ok("no Next button: a path has to be clicked", !hasNext())
+ok("...'Weg' bold and larger", grepl("<em>Weg</em>", text()), text())
 n0 <- probe("nodes()")
 clickAt(probe("empty()")); Sys.sleep(1.5)
 ok("a tap on the empty map is swallowed (no node made)", still(8) && probe("nodes()") == n0 && !modalUp("shiny-modal"))
@@ -481,6 +482,16 @@ clickEl("#newVersions-newVersionsConfirmButton")
 ok("the tap ends the tour", waitFor("!document.getElementById('vftTutorial')", 5))
 ok("...stored as done", isTRUE(js("!!JSON.parse(localStorage.getItem('vft.tutorial.done.v1')).newVersions")))
 ok("...and the app goes back to step 5", waitFor(ringIs("vftNav_step5"), 120))
+## HEAT_MITIGATION (R/features.R) decides what follows on step 5: switched
+## off, its nav button is greyed and the tutorial simply ends there
+heatOff <- isTRUE(js("document.getElementById('vftNav_hitze').classList.contains('vft-nav-btn--off')"))
+if (heatOff) {
+  Sys.sleep(6)
+  ok("heat mitigation is off: no heat mitigation hint, the tutorial ends here",
+     is.null(tut()$key) && !isTRUE(js("!!document.getElementById('vftTutorial')")),
+     paste(unlist(tut()), collapse = ","))
+  ok("...not even step 5's own tour", is.null(tut()$key))
+} else {
 ok("there the heat mitigation hint follows", waitFor(atHint(1, "toHitze"), 120))
 Sys.sleep(0.8)
 w <- wins()
@@ -491,25 +502,16 @@ ok("...counted 1 / 1", identical(count(), "1 / 1"))
 shot("23_toHitze")
 clickEl("#step5-launchSim"); Sys.sleep(1)
 ok("a tap on launch is swallowed", still(1, "toHitze"))
-heatOff <- isTRUE(js("document.getElementById('vftNav_hitze').classList.contains('vft-nav-btn--off')"))
 clickEl("#vftNav_hitze")
 ok("the tap ends it", waitFor("!document.getElementById('vftTutorial')", 5))
-if (heatOff) {
-  ok("heat mitigation is off: its 'not implemented' modal", waitFor("jQuery('#shiny-modal').is(':visible')", 10))
-} else {
-  ok("...and opens Hitzeminderung", waitFor(ringIs("vftNav_hitze"), 120))
-}
+ok("...and opens Hitzeminderung", waitFor(ringIs("vftNav_hitze"), 120))
 Sys.sleep(5)
 #heat mitigation has a tour of its own (verify_tutorial_hitze_browser.R): it
-#follows there, and is stopped; step 5's must not be replayed either way
-if (heatOff) {
-  ok("no other tour starts (step 5's is not replayed)", is.null(tut()$key), paste(tut()$key))
-  invisible(js("jQuery('#shiny-modal').modal('hide')"))
-} else {
-  ok("heat mitigation's own tour follows (not step 5's)",
-     waitFor("(function(){ var s = vftTutorialState(); return s.key === 'hitze'; })()", 120), paste(tut()$key))
-  invisible(js("var b = document.querySelector('.vftTutorialStop'); if (b) b.click(); true"))
-  ok("...stopped", waitFor("!document.getElementById('vftTutorial')", 5))
+#follows there, and is stopped; step 5's must not be replayed
+ok("heat mitigation's own tour follows (not step 5's)",
+   waitFor("(function(){ var s = vftTutorialState(); return s.key === 'hitze'; })()", 120), paste(tut()$key))
+invisible(js("var b = document.querySelector('.vftTutorialStop'); if (b) b.click(); true"))
+ok("...stopped", waitFor("!document.getElementById('vftTutorial')", 5))
 }
 
 cat("\n=== 8. the Original alone: hints 2-4 ===\n")

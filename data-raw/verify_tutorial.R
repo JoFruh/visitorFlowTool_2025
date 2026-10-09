@@ -93,9 +93,24 @@ if (!nzchar(tables) || !dir.exists(tables)) {
   alts <- unlist(lapply(pay, function(p) c(p$alts$step5[["7b"]], p$alts$step5[["9b"]])))
   ok("step 5's variant texts are there, and differ by language",
      length(alts) == 6 && length(unique(alts)) == 6 && !any(grepl("^:", alts)))
-  ok("...and reach the browser as an object keyed '7b', '9b'",
-     grepl("\"alts\":\\{\"step5\":\\{\"7b\":\"[^\"]+\",\"9b\":\"[^\"]+\"\\}",
+  ok("...and reach the browser as an object keyed '2b', '7b', '9b'",
+     grepl("\"alts\":\\{\"step5\":\\{\"2b\":\"[^\"]+\",\"7b\":\"[^\"]+\",\"9b\":\"[^\"]+\"\\}",
            as.character(jsonlite::toJSON(pay$fr, auto_unbox = TRUE))))
+  ok("step 2's added hint (6b) in every language, as an alt of its own",
+     length(unique(vapply(pay, function(p) as.character(p$alts$step2[["6b"]]), ""))) == 3 &&
+     !any(grepl("^:", vapply(pay, function(p) as.character(p$alts$step2[["6b"]]), ""))))
+  ok("the data-loss warning: 'warning' in its button's red, in every language",
+     all(vapply(pay, function(p) grepl("<em class=vftTutWarn>", p$tours$commit[1]), NA)) &&
+     length(unique(vapply(pay, function(p) p$tours$commit[1], ""))) == 3)
+  ok("save and load: both words teal and larger, in every language",
+     all(vapply(pay, function(p) lengths(regmatches(p$tours$saveLoad[1],
+                  gregexpr("<b><em>[^<]+</em></b>", p$tours$saveLoad[1]))) == 2, NA)))
+  ok("the new term colours survive the CSV (sensitivity, AoI fill, path usage)",
+     all(vapply(pay, function(p) grepl("<em class=vftTutSens>", p$tours$step2[3]) &&
+                  grepl("<em class=vftTutAoiFill>", p$tours$step4[1]) &&
+                  grepl("<em class=vftTutAoiFill>", p$tours$step4[5]) &&
+                  grepl("<em class=vftTutUsage>", p$tours$step5[3]) &&
+                  grepl("<i class=vftTutPolyDraw></i>", p$tours$step1[3]), NA)))
   ok("step 3's areas of interest in its map red, step 4's shapes in the drawing blue",
      all(vapply(pay, function(p) grepl("<em class=vftTutAoiRed>", p$tours$step3[2]) &&
                   grepl("<em class=vftTutShape>.+<i class=vftTutPolyDraw></i>", p$tours$step4[3]) &&

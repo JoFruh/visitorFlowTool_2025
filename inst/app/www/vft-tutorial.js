@@ -427,6 +427,22 @@
     return r ? [{ key: 'species', rect: r }] : [];
   }
 
+  // The list's first two rows, and above it the "most widespread" caption
+  // and its arrow (two h5s, step2_ui.R), as one window
+  function topSpecies() {
+    var list = document.querySelector(SPECIES);
+    var box = list && list.closest('.vft-fit-species');
+    if (!shown(box)) { return []; }
+    var heads = [], up = box.previousElementSibling;
+    for (var i = 0; i < 2 && up; i++) { heads.push(up); up = up.previousElementSibling; }
+    var rows = Array.prototype.slice.call(list.querySelectorAll('.checkbox'), 0, 2).filter(shown);
+    var top = union(rows.map(function (el) { return elRect(el, 2); }));
+    var c = elRect(box, 0);
+    top = top && c ? intersect(top, c) : top;
+    var r = union(heads.filter(shown).map(function (el) { return elRect(el, 4); }).concat([top]));
+    return r ? [{ key: 'topSpecies', rect: r }] : [];
+  }
+
   // the toad's row; failing that the first ticked row, then the first row
   function toadRow() {
     var rows = document.querySelectorAll(SPECIES + ' .checkbox');
@@ -527,6 +543,36 @@
     });
   }
 
+  // Past 8 the slider is put back on 8 exactly and the drag is ended there,
+  // so the hint's value is the one the map shows. The slider is a
+  // sliderTextInput (step3_ui.R): ion.rangeSlider over the choices "0" ..
+  // "20", its `from` an index into them. Its drag ends when `dragging` is
+  // off (pointerMove() reads it); the change event is what its binding sends
+  // to Shiny on (forceIonSliderTextUpdate() in shinyWidgets does the same).
+  var AOI_STOP = 8;
+
+  function clampAoi(ctx) {
+    if (ctx.clamped || !window.jQuery) { return; }
+    var input = document.getElementById('step3-AOISlider');
+    var s = input && jQuery(input).data('ionRangeSlider');
+    var values = s && s.options && s.options.values;
+    if (!s || !s.result || !values || !values.length) { return; }
+    // moved by the user since the hint began
+    if (ctx.startFrom == null) { ctx.startFrom = s.result.from; }
+    if (s.result.from === ctx.startFrom) { return; }
+    if (!(Number(values[s.result.from]) <= AOI_STOP)) { return; }
+    var at = values.map(Number).indexOf(AOI_STOP);
+    if (at < 0) { return; }
+    ctx.clamped = true;
+    s.dragging = false;
+    s.is_active = false;
+    if (s.result.from !== at) { s.update({ from: at }); }
+    jQuery(input).trigger('change');
+    // done: the value Shiny already had may be this one, and then it sends
+    // nothing for watchAoiThreshold() to hear
+    ctx.flag = true;
+  }
+
   // the map redraws for the new threshold (debounced 400 ms in step3_server.R)
   function aoiMapRedrawing() {
     var el = document.getElementById('step3-AOIMap');
@@ -612,6 +658,27 @@
 
   function newAreaDrawn(ctx) { return !!ctx.drawn && !!ctx.idle; }
 
+  var AUTO_CUT = '#step4-autoCutButton';
+  var CUT_SETTLE = 600;   // the corrections count as done once all is quiet this long, ms
+
+  // The automatic corrections, tapped and done: the server disables the
+  // button (and reset and confirm) from the tap until the new areas are
+  // drawn, behind a progress bar (step4_server.R). Busy has to be seen
+  // first, as for a simulation - unless nothing happens at all (nothing to
+  // cut returns at once).
+  function autoCutDone(ctx) {
+    if (!ctx.flag) { return false; }
+    var now = performance.now();
+    if (ctx.tapAt == null) { ctx.tapAt = now; }
+    var b = document.querySelector(AUTO_CUT);
+    var busy = (!!b && b.disabled) || progressBars().length > 0 ||
+               document.documentElement.classList.contains('shiny-busy');
+    if (busy) { ctx.busySeen = true; ctx.quietAt = null; return false; }
+    if (!ctx.busySeen && now - ctx.tapAt < SIM_QUIET) { return false; }
+    if (ctx.quietAt == null) { ctx.quietAt = now; }
+    return now - ctx.quietAt >= CUT_SETTLE;
+  }
+
   /* ------------------------- step 5's hints ------------------------- */
 
   var LAUNCH = '#step5-launchSim';
@@ -659,6 +726,14 @@
   // the "no simulation yet" picture is off the map
   function step5MapShown() {
     return !shown(document.getElementById('step5-mapPlaceholder')) && !!step5Map();
+  }
+
+  // the scenario shown has a simulation, and none is running
+  function simShown() { return step5MapShown() && !simRunning(); }
+
+  // arriving: the page not up yet, or still busy drawing what it has
+  function step5Arriving() {
+    return step5NotYet() || document.documentElement.classList.contains('shiny-busy');
   }
 
   function watchSim(ctx) { ctx.t0 = performance.now(); }
@@ -1658,6 +1733,8 @@
   //   them as it can, rather than into the middle.
   // stay: the card keeps the place it first took (the windows move as the
   //   user zooms).
+  // below: the card goes right under the windows, nowhere else (as any card
+  //   does when that has no room).
   // side: 'left' or 'right' - the card beside the windows (or beside the
   //   element `sideOf` names), pointing at them, rather than above or below.
   // langTip: a second card, left of the language selector, in all three
@@ -1675,9 +1752,19 @@
   // textWhen(ctx): asked every frame; a name it returns shows the variant
   //   text of that name (as variant() does) for as long as it returns it.
   // text: [key, index] - the hint shows another tour's text (borrowed()).
+  // alt: a name - a hint added between two numbered ones, whose text is
+  //   texts.alts[<key>][<name>] (step 2's '6b'), so the rows after it keep
+  //   their numbers.
   // Texts are texts.tours[<key>][<n>], n counting the tour's own hints (a
-  // hint with `text` has no number); a variant's are
-  // texts.alts[<key>][<hint number><name>], e.g. alts.step5['6b'].
+  // hint with `text` or `alt` has no number); a variant's are
+  // texts.alts[<key>][<hint number><name>], e.g. alts.step5['6b']. A hint
+  // with a hold re-asks its variant() until it is first shown.
+  //
+  // Any hint is interrupted by the data-loss warning (vftAskCommit() in
+  // R/providers.R) while that modal is up: the warning's own card and a
+  // window on the modal take its place, and the hint comes back once the
+  // modal is gone. Between two tours, the warning is a tour of one hint
+  // (`commit`), and the chain carries on after it.
 
   var TOURS = {
     step1: [
@@ -1724,8 +1811,10 @@
         enter: holdChoice,
         advance: flagged
       },
-      { // 6 - the help button, before the app moves on to the choice
+      { // 6 - the help button, before the app moves on to the choice; the
+        // card right under it
         targets: sel('#helpButton', 8),
+        below: true,
         look: true,
         onNext: sendChoice
       }
@@ -1758,6 +1847,17 @@
       },
       { // 6 - the species list
         targets: speciesList,
+        look: true
+      },
+      { // 6b - the top of the list, the most widespread species, with the
+        // caption and the arrow above it
+        targets: topSpecies,
+        enter: function () {
+          var list = document.querySelector(SPECIES);
+          var box = list && list.closest('.vft-fit-species');
+          if (box) { box.scrollTop = 0; }
+        },
+        alt: '6b',
         look: true
       },
       { // 7 - the toad's row, scrolled into sight
@@ -1818,14 +1918,15 @@
         targets: sel('#vftNav_step3', 4),
         look: true
       },
-      { // 3 - the threshold slider, down to 8
+      { // 3 - the threshold slider, down to 8 - and no further: past it, it
+        // is put back on 8 and the drag ends
         targets: function () {
           var box = aoiSliderBox();
           var r = shown(box) && elRect(box, 4);
           return r ? [{ key: 'aoiThreshold', rect: r, hit: [box] }] : [];
         },
         enter: watchAoiThreshold,
-        advance: flagged
+        advance: function (ctx) { clampAoi(ctx); return flagged(ctx); }
       },
       { // 4 - the map, once it has redrawn for the new threshold
         targets: sel('#step3-AOIMap'),
@@ -1869,12 +1970,11 @@
         enter: watchClick('#step4-resetButton'),
         advance: flagged
       },
-      { // 5 - the automatic corrections: may be used, Next moves on either
-        // way. While they run, the confirm is disabled (step4_server.R), so
-        // hint 6 simply waits for them.
-        targets: sel('#step4-autoCutButton'),
-        look: true,
-        live: true
+      { // 5 - run the automatic corrections; on once they are done. While
+        // they run, the button and the progress bar are the windows.
+        targets: each(sel(AUTO_CUT), progressTarget),
+        enter: watchClick(AUTO_CUT),
+        advance: autoCutDone
       },
       { // 6 - confirm. The tour ends with the tap, and step 5's tour follows.
         // Confirming over later steps' work first asks whether to discard it:
@@ -1889,20 +1989,34 @@
     step5: [
       { // 1 - launch the simulation. A failure's modal can be dismissed.
         // Passed over while one runs: the page launches the Original's itself
-        // when it has none.
+        // when it has none. b: the scenario shown has its simulation already -
+        // the button is only pointed at, Next moves on, and hint 2 is passed
+        // over.
         targets: sel(LAUNCH),
-        hold: step5NotYet,
+        hold: settled(step5Arriving, 700),
         skipWhen: simRunning,
         enter: watchClick(LAUNCH),
-        advance: flagged,
-        pass: '#shiny-modal'
+        advance: function (ctx) {
+          if (ctx.flag) { state.data.userLaunch = true; }
+          return ctx.flag;
+        },
+        pass: '#shiny-modal',
+        variant: function () { return simShown() ? 'b' : null; },
+        variants: { b: { look: true, advance: null } }
       },
-      { // 2 - the progress bars, until the result is on the map
+      { // 2 - the progress bars, until the result is on the map: the
+        // simulation the page started on arrival. b: the one launched in
+        // hint 1, with a text of its own (2b).
         targets: progressTarget,
+        skip: function () {
+          return !state.data.userLaunch && !simRunning() && !progressBars().length && simShown();
+        },
         enter: watchSim,
         hold: noBarYet,
         advance: simDone,
-        pass: '#shiny-modal'
+        pass: '#shiny-modal',
+        variant: function () { return state.data.userLaunch ? 'b' : null; },
+        variants: { b: {} }
       },
       { // 3 - the path usage, framed by the area's outline
         targets: outlineTarget,
@@ -2127,6 +2241,32 @@
       }
     ],
 
+    // The data-loss warning between two tours: the tap that ended one (a
+    // confirm) raised it. On once the modal is gone, confirmed or cancelled.
+    // (Within a tour, COMMIT plays the same card over the hint.)
+    commit: [
+      {
+        targets: commitModal,
+        side: 'right',
+        hug: true,
+        advance: function (ctx) {
+          if (commitUp()) { ctx.upSeen = true; return false; }
+          return !!ctx.upSeen || performance.now() - state.stepStart > 2000;
+        }
+      }
+    ],
+
+    // Save and load, once per device: after the first tour finished past
+    // step 1's (finish()), once no modal is up.
+    saveLoad: [
+      {
+        targets: buttonRow('#vftNav .vft-nav-session', shown),
+        hold: settled(modalOpen, 800),
+        below: true,
+        look: true
+      }
+    ],
+
     // Heat mitigation. Three of the scenarios page's hints are played after
     // hint 3 when there is no scenario to paint on (see below the tours).
     hitze: [
@@ -2318,16 +2458,30 @@
   // a hint's number among its tour's own hints, which is its text's
   Object.keys(TOURS).forEach(function (key) {
     var n = 0;
-    TOURS[key].forEach(function (hint) { if (!hint.text) { hint.n = n++; } });
+    TOURS[key].forEach(function (hint) { if (!hint.text && !hint.alt) { hint.n = n++; } });
   });
+
+  // The tours of one card, played between two others: no counter, not
+  // recorded as played, and no help button offers them (no ring key is theirs)
+  var BARE = { commit: true, saveLoad: true };
+
+  // heat mitigation switched off (HEAT_MITIGATION, R/features.R): its button
+  // in the nav bar is greyed by this class (vftNavBarServer())
+  function heatOff() {
+    var b = document.getElementById('vftNav_hitze');
+    return !b || b.classList.contains('vft-nav-btn--off');
+  }
 
   // Where a finished tour hands on to, when not simply to the tour of the step
   // the ring lands on: key of the finished tour -> function(ring key) returning
   // the tour to start, or null for none.
   var NEXT = {
+    // back on step 5, the heat mitigation context is offered - unless it is
+    // switched off (HEAT_MITIGATION in R/features.R: its button greyed), when
+    // the tutorial simply ends there
     newVersions: function (key) {
       if (key !== 'step5') { return key; }
-      return toursDone().hitze ? null : 'toHitze';
+      return heatOff() || toursDone().hitze ? null : 'toHitze';
     },
     // heat mitigation ends on its confirm, which leads to step 5: its tour
     // only if it has not been played on this device yet
@@ -2340,10 +2494,18 @@
     return Array.isArray(t) ? t : [t];
   }
 
+  // the hint on screen: the data-loss warning's while it interrupts, else the
+  // tour's own
+  function cur() { return state.over || state.step; }
+
   // the text of the hint being shown, its variant's if it has one
   function hintText() {
-    var step = state.step;
+    var step = cur();
     if (step.text) { return tourTexts(step.text[0])[step.text[1]] || ''; }
+    if (step.alt) {
+      var own = texts && texts.alts && texts.alts[state.key];
+      return (own && own[step.alt]) || '';
+    }
     var name = state.textAlt || state.variant;
     var alts = name && texts && texts.alts && texts.alts[state.key];
     var alt = alts && alts[(step.n + 1) + name];
@@ -2411,7 +2573,7 @@
 
   function renderBox() {
     if (!state) { return; }
-    var step = state.step;
+    var step = cur();
     var t = texts || {};
     var text = hintText();
 
@@ -2440,6 +2602,8 @@
   // "3 / 17": the hints passed over are not counted, nor those ahead that
   // would be passed over as things stand
   function countText() {
+    // a card of one hint, or the warning interrupting a hint, counts nothing
+    if (state.over || BARE[state.key]) { return ''; }
     var list = hints(), at = 0, n = 0;
     for (var i = 0; i < list.length; i++) {
       var out = i < state.idx ? !!state.skipped[i] : i > state.idx && willSkip(list[i]);
@@ -2465,7 +2629,7 @@
   // Next: on at once, without the pause - there is nothing to see happen
   function onNext() {
     var ctx = state && state.ctx;
-    if (!ctx || ctx.busy || state.pause) { return; }
+    if (!ctx || ctx.busy || state.pause || state.over) { return; }
     var step = state.step;
     if (!step.onNext) { ctx.next = true; return; }
     ctx.busy = true;
@@ -2522,7 +2686,9 @@
   }
 
   // The dim with the windows cut out, and an outline round each. Only redrawn
-  // when something changed.
+  // when something changed. With no window open there is no dim at all: the
+  // canvas fades out on its last picture (the windows of the hint just done)
+  // and the layer stays, transparent, still swallowing the taps.
   function drawDim() {
     var c = state.canvas;
     var W = document.documentElement.clientWidth || window.innerWidth;
@@ -2530,6 +2696,15 @@
     var dpr = window.devicePixelRatio || 1;
     var rects = state.wins.map(function (w) { return w.cur; });
     var lang = state.langWins;
+    if (!rects.length) {
+      if (state.dimSig !== 'off') {
+        state.dimSig = 'off';
+        c.classList.add('vftTutorialNoDim');
+        c.setAttribute('data-windows', '[]');
+      }
+      return;
+    }
+    c.classList.remove('vftTutorialNoDim');
     var sig = [W, H, dpr, rects.length].concat(rects.concat(lang).map(function (r) {
       return [r.l, r.t, r.r, r.b].map(function (v) { return Math.round(v * 4); }).join(',');
     })).join('|');
@@ -2567,7 +2742,7 @@
   // it is live), and only onto the window's own target (el: the element tapped)
   // - or where its hitAt() says. A wheel over such a window zooms the map.
   function inWindow(x, y, el, type) {
-    var step = state.step;
+    var step = cur();
     if (state.pause || (step.look && !step.live)) { return false; }
     return state.wins.some(function (w) {
       if (!contains(w.cur, x, y) && !contains(w.goal, x, y)) { return false; }
@@ -2638,7 +2813,9 @@
     var cands = [];
     // above or below that element rather than the windows, clear of them too
     var near = step.cardNear && elRect(document.querySelector(step.cardNear), PAD);
-    if (near) {
+    if (step.below && rects.length) {
+      cands.push({ side: 'below', a: union(rects) });
+    } else if (near) {
       cands.push({ side: 'above', a: near }, { side: 'below', a: near });
     } else if (rects.length) {
       var u = union(rects);
@@ -2806,7 +2983,7 @@
     // the card, and the language selector with its dropdown, whatever the hint
     if (closest('.vftTutorialBox')) { return true; }
     if (!modalOpen() && closest('#vftNav .vft-nav-lang')) { return true; }
-    var step = state.step;
+    var step = cur();
     if (step.pass && !state.pause && closest(step.pass)) { return true; }
     // a click from the keyboard has no position: judge it by its element
     if (e.type === 'click' && e.detail === 0 && el && el.getBoundingClientRect) {
@@ -2834,7 +3011,7 @@
   function onKey(e) {
     if (!state || e.key !== 'Escape') { return; }
     // drawing on the map: Escape takes the last vertex back (polydraw.js)
-    if (state.step.escPass) { return; }
+    if (cur().escPass) { return; }
     // stop the tour, and do not let the same key close a modal
     e.stopImmediatePropagation();
     e.preventDefault();
@@ -2883,6 +3060,7 @@
       off: function () { offs.forEach(function (f) { f(); }); offs = []; }
     };
 
+    state.base = list[idx];
     var hint = resolve(list[idx]);
     state.step = hint.step;
     state.variant = hint.variant;
@@ -2931,6 +3109,20 @@
     // the rest of the tour was passed over
     if (!state) { return; }
 
+    // the data-loss warning has the screen while its modal is up
+    if (interrupted(now)) { return; }
+
+    // a hint held until the page is ready reads its variant off the page it
+    // will be shown on, not the one it started on
+    if (!state.seen && state.base && state.base.variant && state.base.hold) {
+      var again = resolve(state.base);
+      if (again.variant !== state.variant) {
+        state.step = again.step;
+        state.variant = again.variant;
+        renderBox();
+      }
+    }
+
     var step = state.step;
     var gone = false;
     try { gone = !!(step.skipWhen && step.skipWhen(state.ctx)); } catch (e) { gone = false; }
@@ -2955,8 +3147,10 @@
     var raw = [];
     try { raw = step.targets ? step.targets(state.ctx) : []; } catch (e) { raw = []; }
     var moving = !!state.moving;
-    var goals = !held && !moving ? raw : [];
-    var quiet = held || moving ||
+    // a moment of nothing after the warning, as between two hints
+    var resting = now < state.resumeAt;
+    var goals = !held && !moving && !resting ? raw : [];
+    var quiet = held || moving || resting ||
                 (!!step.targets && !goals.length && now - state.stepStart < WAIT_SHOW);
 
     var alt = null;
@@ -2974,14 +3168,53 @@
     placeCard(goals, step, tip ? [tip] : []);
   }
 
+  // The data-loss warning (vftAskCommit() in R/providers.R): its modal, as
+  // one window whose every tap goes through (cancel or confirm).
+  function commitModal() {
+    var ok = document.getElementById('vftInvalidateOk');
+    var content = ok && modalOpen() && ok.closest('.modal-content');
+    var r = shown(content) && elRect(content, 4);
+    return r ? [{ key: 'commit', rect: r, hit: [content] }] : [];
+  }
+
+  function commitUp() { return commitModal().length > 0; }
+
+  // the warning as it interrupts a hint, with the text of the `commit` tour
+  var COMMIT = { text: ['commit', 0], targets: commitModal, side: 'right', hug: true };
+
+  // While the warning's modal is up, its card replaces the hint's, which is
+  // neither advanced nor shown until the modal is gone (and a pause after).
+  // True while it has the screen.
+  function interrupted(now) {
+    var up = state.key !== 'commit' && commitUp();
+    if (up !== !!state.over) {
+      state.over = up ? COMMIT : null;
+      state.wins = [];
+      if (!up) { state.resumeAt = now + PAUSE / 2; }
+      renderBox();
+    }
+    if (!state.over) { return false; }
+    var goals = [];
+    try { goals = commitModal(); } catch (e) { goals = []; }
+    setQuiet(!goals.length);
+    updateWindows(goals, now);
+    drawDim();
+    state.box.classList.remove('vftTutorialWaiting');
+    if (goals.length) {
+      hideTip();
+      placeCard(goals, COMMIT, []);
+    }
+    return true;
+  }
+
   function start(key) {
     if (state || !TOURS[key]) { return; }
     chain = null;
     var ui = buildOverlay();
     state = {
       key: key, root: ui.root, canvas: ui.canvas, box: ui.box, tip: ui.tip,
-      wins: [], langWins: [], data: {}, idx: 0, step: null, variant: null, ctx: null,
-      seen: false, textAlt: null,
+      wins: [], langWins: [], data: {}, idx: 0, step: null, base: null, variant: null,
+      ctx: null, seen: false, textAlt: null, over: null, resumeAt: 0, resume: null,
       skipped: {}, bodyClass: null, quiet: true, pause: null,
       moving: false, downOk: false, dimSig: null
     };
@@ -2989,6 +3222,14 @@
     listen(true);
     go(0, performance.now());
     if (state) { state.raf = window.requestAnimationFrame(frame); }
+  }
+
+  // A tour of one card played between two tours (the warning, save and
+  // load): once it ends, the chain it interrupted carries on - `resume` is
+  // that chain's {from, here, since}.
+  function startAside(key, resume) {
+    start(key);
+    if (state && state.key === key) { state.resume = resume; }
   }
 
   function stop(status) {
@@ -3008,8 +3249,22 @@
     // the page it ends on: a tour that is no page's (toHitze) ends on another
     // page's, and must not start that page's tour
     var here = ringKey();
-    storeDone(from);
-    stop('done');
+    var resume = state.resume;
+    if (BARE[from]) {
+      stop(null);
+    } else {
+      storeDone(from);
+      stop('done');
+    }
+    // a card between two tours: the chain it interrupted carries on
+    if (resume) { waitForNext(resume.from, resume.here, resume.since); return; }
+    // The first tour finished after step 1's is followed by the save and load
+    // card, once on this device, before the chain goes on
+    if (!BARE[from] && from !== 'step1' && from !== 'toHitze' && !toursDone().saveLoad) {
+      storeDone('saveLoad');
+      startAside('saveLoad', { from: from, here: here, since: Date.now() });
+      return;
+    }
     waitForNext(from, here);
   }
 
@@ -3019,11 +3274,17 @@
   // step can open on one) and the texts are in. The move can take a while:
   // entering a step may first derive its data behind a progress bar.
 
-  function waitForNext(from, here) {
-    var token = chain = { from: from, since: Date.now() };
+  function waitForNext(from, here, since) {
+    var token = chain = { from: from, since: since || Date.now() };
     (function poll() {
       if (chain !== token || state) { return; }
       if (Date.now() - token.since > CHAIN_MAX) { chain = null; return; }
+      // the data-loss warning, raised by the tap that ended the tour (a
+      // confirm): its card, then the chain carries on
+      if (texts && commitUp()) {
+        startAside('commit', { from: from, here: here, since: token.since });
+        return;
+      }
       var key = ringKey();
       if (key && key !== from && key !== here) {
         var tour = NEXT[from] ? NEXT[from](key) : key;
@@ -3069,7 +3330,7 @@
     var out = {};
     // the hints with a text of their own
     Object.keys(TOURS).forEach(function (k) {
-      out[k] = TOURS[k].filter(function (hint) { return !hint.text; }).length;
+      out[k] = TOURS[k].filter(function (hint) { return !hint.text && !hint.alt; }).length;
     });
     return out;
   };

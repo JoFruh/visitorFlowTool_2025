@@ -4,8 +4,9 @@
 ## 4's tour has to start by itself when the ring lands on step 4 (chaining).
 ## Then its six hints: step 4's nav button, a cut with the scissors (the area
 ## count has to go up), a new area drawn, reset, the automatic corrections
-## (read only), and confirm - whose tap ends
-## the tour, and step 5's tour has to follow.
+## (tapped, and the tour waits for them to finish), and confirm - whose tap
+## ends the tour, and step 5's tour has to follow. On step 5, the help
+## button's modal has to grey the "no simulation yet" picture too.
 ## data-raw/verify_tutorial_step3_browser.R covers step 3's tour in detail.
 ##
 ## Needs the app running with the nav bar on, e.g.
@@ -166,7 +167,8 @@ true"
 #### open the app, no bubble ####
 invisible(b$Page$navigate(URL))
 ok("the app connects", waitFor("!!(window.Shiny && Shiny.shinyapp && Shiny.shinyapp.isConnected())", 120))
-invisible(js("localStorage.setItem('vft.tutorial.v1', JSON.stringify({status: 'done', at: Date.now()}))"))
+## the save/load card (after the first tour past step 1's) is verify_tutorial_step3_browser.R's
+invisible(js("localStorage.setItem('vft.tutorial.v1', JSON.stringify({status: 'done', at: Date.now()})); localStorage.setItem('vft.tutorial.done.v1', JSON.stringify({saveLoad: Date.now()}))"))
 invisible(b$Page$reload())
 Sys.sleep(1)
 ok("...again", waitFor("!!(window.Shiny && Shiny.shinyapp && Shiny.shinyapp.isConnected())", 120))
@@ -224,6 +226,13 @@ ok("one window, on step 4's nav button", length(w) == 1 && near(w[[1]], rectOf("
    paste(unlist(w), collapse = ","))
 ok("...with a Next button", hasNext())
 ok("the text is step 4's first", isTRUE(js("/sub-step|Teilschritt|sous-étape/.test(document.querySelector('.vftTutorialText').textContent)")))
+fill <- js("(function(){ var e = document.querySelector('.vftTutorialText em.vftTutAoiFill'),
+  t = document.querySelector('.vftTutorialText'); if (!e) return null;
+  return [getComputedStyle(e).color, parseFloat(getComputedStyle(e).fontSize), parseFloat(getComputedStyle(t).fontSize),
+          getComputedStyle(e).fontWeight]; })()")
+ok("'Zielgebiete' in the map's fill green, bold, one size larger",
+   !is.null(fill) && identical(fill[[1]], "rgb(77, 166, 77)") && fill[[2]] > fill[[3]] && as.numeric(fill[[4]]) >= 700,
+   paste(unlist(fill), collapse = " "))
 shot("1_edit_aois")
 clickEl(".vftTutorialNext")
 
@@ -343,15 +352,30 @@ Sys.sleep(0.6)
 w <- wins()
 ok("one window, on the 'Automatic Corrections' button",
    length(w) == 1 && near(w[[1]], rectOf("#step4-autoCutButton")))
-ok("...with a Next button: it may be used, but need not be", hasNext())
+ok("...and no Next button: it is to be tried", !hasNext())
 ok("the button is renamed",
    grepl("Korrekturen|Corrections", js("document.getElementById('step4-autoCutButton').innerText")),
    js("document.getElementById('step4-autoCutButton').innerText"))
+ok("'Probieren Sie es aus!' teal and larger, 'Zielgebiete' in the fill green",
+   isTRUE(js("(function(){ var b = document.querySelector('.vftTutorialText b em'),
+     g = document.querySelector('.vftTutorialText em.vftTutAoiFill');
+     return !!b && /Probieren/.test(b.textContent) && getComputedStyle(b).color === 'rgb(0, 98, 104)' && !!g; })()")))
 shot("5_autocorrect")
-clickEl(".vftTutorialNext")
+before <- js("__t4.count()")
+clickEl("#step4-autoCutButton")
+ok("the tap starts them: the button is disabled, the tour waits on hint 5",
+   waitFor("document.getElementById('step4-autoCutButton').disabled", 10) && isTRUE(js(atHint(5))))
+Sys.sleep(1)
+w <- wins()
+ok("...the progress bar gets a window of its own beside the button", length(w) == 2,
+   paste(unlist(w), collapse = ","))
+shot("5b_autocorrect_running")
 
 cat("\n=== 7. hint 6: confirm ===\n")
-ok("Next moves on to hint 6", waitFor(atHint(6), 10))
+ok("their end moves on to hint 6", waitFor(atHint(6), 120), paste(unlist(tut()), collapse = ","))
+ok("...with the button back and the corrected areas drawn",
+   isTRUE(js("!document.getElementById('step4-autoCutButton').disabled")) && is.numeric(js("__t4.count()")),
+   paste(before, "->", js("__t4.count()")))
 Sys.sleep(0.6)
 w <- wins()
 ok("one window, on the confirm button", length(w) == 1 && near(w[[1]], rectOf("#step4-confirmButton4")))
@@ -371,7 +395,36 @@ ok("...and the app moves on to step 5", waitFor(ringIs("vftNav_step5"), 120))
 ok("step 5's tour starts by itself, on the running simulation (hint 2)",
    waitFor(atHint(2, "step5"), 120) && identical(tut()$count, "1 / 8"),
    paste(unlist(tut()), collapse = ","))
+ok("...with the arrival text, 'Naherholungssimulation' teal and larger",
+   isTRUE(js("(function(){ var t = document.querySelector('.vftTutorialText'), b = t && t.querySelector('b em');
+     return /Ankunft/.test(t.textContent) && !!b && /Naherholungssimulation/.test(b.textContent); })()")),
+   js("document.querySelector('.vftTutorialText').textContent"))
 shot("7_step5")
+## The "no simulation yet" picture covers the map while the simulation runs.
+## It used to sit above a modal's grey backdrop (z-index 1200 > 1040): opened
+## now, the help button's tutorial modal has to grey it like the rest.
+px <- function(x, y) {
+  f <- tempfile(fileext = ".png")
+  writeBin(jsonlite::base64_dec(b$Page$captureScreenshot(format = "png")$data), f)
+  p <- png::readPNG(f); round(p[y, x, 1:3] * 255)
+}
+clickEl(".vftTutorialStop")
+invisible(waitFor("!document.getElementById('vftTutorial')", 5))
+ph <- js("(function(){ var p = document.getElementById('step5-mapPlaceholder');
+  if (!p || p.offsetParent === null) return null; var r = p.getBoundingClientRect();
+  return [Math.round(r.left + 8), Math.round(r.top + 8)]; })()")
+if (is.null(ph)) {
+  cat("   (the picture is gone already - the simulation was done; check skipped)\n")
+} else {
+  bare <- px(ph[[1]], ph[[2]])
+  clickEl("#helpButton")
+  invisible(waitFor("jQuery('#shiny-modal').is(':visible') && !!document.querySelector('#shiny-modal .vftTutorialStartBtn')", 10))
+  Sys.sleep(1)
+  greyed <- px(ph[[1]], ph[[2]])
+  ok("the help modal's backdrop greys the 'no simulation yet' picture too",
+     all(bare >= 240) && all(greyed < 200), paste(c(bare, "->", greyed), collapse = " "))
+  shot("7b_help_over_placeholder")
+}
 
 cat(sprintf("\nscreenshots in %s\n", SHOTS))
 b$close()

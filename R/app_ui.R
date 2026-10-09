@@ -682,15 +682,25 @@ vftStepNav <- function(i18n = NULL){
         opacity:1; cursor:not-allowed;
       }
       /* The one exception to the rule above: a feature switched off in
-         R/features.R. Same look, but still clickable, so the click can say
-         the feature is not there yet. :hover/:focus/:active restated so
+         R/features.R. Still clickable, so the click can say the feature is not
+         there yet - and deliberately NOT the unreachable look above, because
+         the two say different things. Black on transparent means not-yet,
+         finish-the-steps-this-one-needs, and a user who has finished them
+         keeps trying. A feature that does not exist yet needs its own
+         treatment, used nowhere else in the bar: outline and label in a
+         lighter, greyer teal - mixed to sit at about the contrast the black
+         has against the banner's #006268, so it recedes without going
+         illegible - and the label in italics, which is the part that reads as
+         not-a-button-like-the-others before anything is read at all.
+         font-style overrides the base rule's `normal` and is inherited by the
+         label span inside the button. :hover/:focus/:active restated so
          bootstrap's pressed-button grey does not show through. */
       #vftNav .vft-nav-btn.vft-nav-btn--off,
       #vftNav .vft-nav-btn.vft-nav-btn--off:hover,
       #vftNav .vft-nav-btn.vft-nav-btn--off:focus,
       #vftNav .vft-nav-btn.vft-nav-btn--off:active {
-        background-color:transparent; color:#000000; border-color:#000000;
-        opacity:1; cursor:not-allowed; box-shadow:none;
+        background-color:transparent; color:#8fabad; border-color:#8fabad;
+        font-style:italic; opacity:1; cursor:not-allowed; box-shadow:none;
       }
       /* current step: no underline - a thick white outline standing slightly
          proud of the button, via outline-offset rather than a border (a border

@@ -151,8 +151,11 @@ vftDbg("UI6")
               #shinyjs::hide() on the map itself, because a display:none leaflet
               #container has offsetWidth 0, and leaflet then defers its render to
               #a resize() callback that only Shiny's own visibility machinery
-              #fires. z-index 1200 clears leaflet's own highest layer
-              #(.leaflet-top/.leaflet-bottom at 1000).
+              #fires. z-index 1010 clears leaflet's own highest layer
+              #(.leaflet-top/.leaflet-bottom at 1000) and stays under a modal's
+              #backdrop (Bootstrap's 1040): at 1200 the picture sat on top of
+              #the grey behind every modal, the help button's tutorial modal
+              #among them.
               #
               #Frame, map and overlay agree on a size by construction: the frame
               #fills the map slot and the map and the overlay are both 100% of
@@ -165,7 +168,7 @@ vftDbg("UI6")
                     id = ns("mapPlaceholder"),
                     style = paste("position: absolute; top: 0; left: 0;",
                                   "width: 100%; height: 100%;",
-                                  "z-index: 1200; background-color: #ffffff;"),
+                                  "z-index: 1010; background-color: #ffffff;"),
                     shiny::uiOutput(ns("mapArea_UI"))
                   )
                 )

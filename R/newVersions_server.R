@@ -262,14 +262,35 @@ newVersions_server <- function(id, networkList, i18n, currentLang, isFirstRun,
       #every time this render runs. That is the point - a language change
       #rebuilds the group from scratch, and a disable applied from anywhere else
       #(shinyjs, an observer) would be silently undone by the next one.
+      #...and it is a LOCK rather than a one-off disable, because the group IS
+      #enabled from elsewhere: obsFinishRender runs
+      #`shinyjs::enable("contextChoice")` every time the map finishes drawing,
+      #and shinyjs enables an input group by clearing `disabled` from every
+      #input in it - this one included. The label kept the inline opacity it is
+      #given below, so the choice went on LOOKING greyed while being perfectly
+      #clickable: it is how this option came back to life the moment the
+      #feature was switched off again. The observer puts the attribute back
+      #whenever anything takes it off, and writing it only when it is actually
+      #missing is what keeps that write from re-triggering itself.
+      #
+      #One observer per session: the handle is global and the previous one is
+      #disconnected here, because every run of this render replaces the group
+      #the old one was watching.
       shiny::tagList(
         buttons,
         shiny::tags$script(shiny::HTML(sprintf(
           "(function(){
              var g = document.getElementById('%s'); if(!g) return;
-             var i = g.querySelector('input[type=radio][value=\"4\"]'); if(!i) return;
-             i.disabled = true;
-             var l = i.closest('label'); if(l) l.style.opacity = 0.5;
+             function lock(){
+               var i = g.querySelector('input[type=radio][value=\"4\"]'); if(!i) return;
+               if(!i.disabled) i.disabled = true;
+               var l = i.closest('label'); if(l) l.style.opacity = 0.5;
+             }
+             lock();
+             if(window.__vftCtxLock) window.__vftCtxLock.disconnect();
+             window.__vftCtxLock = new MutationObserver(lock);
+             window.__vftCtxLock.observe(g, {subtree: true, attributes: true,
+                                             attributeFilter: ['disabled']});
            })();",
           NS(id,"contextChoice"))))
       )
@@ -2477,6 +2498,12 @@ shiny::observeEvent(input$heatIconClick, {
   card <- msg$card
   bin  <- msg$bin
   if(!is.character(card) || length(card) != 1 || !isTRUE(bin %in% HEAT_BINS)) return(NULL)
+  #The feature switched off (HEAT_MITIGATION in R/features.R). The icons are
+  #baked into every card by heatIconsTag(), on every context, so they are on
+  #screen whatever the switch says - and the context test below would answer a
+  #click on one with nothing at all, which is the one thing a greyed control in
+  #this app does not do (see R/features.R).
+  if(!vftHeatEnabled()) return(vftNotImplementedModal(session))
   if(!isTRUE(shiny::isolate(input$contextChoice) == 4) || isTRUE(heatBusy)) return(NULL)
   if(is.null(heatCardPos(card))) return(NULL)
 
@@ -2859,6 +2886,30 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
             vftDbg("CONTEXT: revert echo swallowed")
             return(invisible(NULL))
           }
+        }
+
+        #### the feature switched off: context 4 is refused here too ####
+        #
+        #The browser half is the contextChoice_ui render (the radio is disabled
+        #and locked that way) plus obsDisabledClick, which raises the modal for
+        #the click the disabled radio never receives. This is the server half of
+        #the same refusal, and it is not redundant: the value can still arrive
+        #here from a client that got the choice back for a moment - a stale
+        #page, a restored input, a shinyjs::enable() landing between the render
+        #and the lock - and context 4 with HEAT_MITIGATION off is the one state
+        #this page must not enter, because everything downstream of it (the land
+        #cover baseline, the paint panel, the heat model) is the feature that is
+        #not there. Reverted exactly like the "nothing to edit" branch below:
+        #flag first, so this observer swallows the echo of its own update.
+        if(length(newCtx) == 1 && identical(as.character(newCtx), "4") &&
+           !vftHeatEnabled()){
+          back <- shiny::isolate(r$context)
+          if(is.null(back) || !length(back) ||
+             identical(as.character(back), "4")) back <- 1
+          ctxRevertPending <<- TRUE
+          shiny::updateRadioButtons(inputId = "contextChoice", selected = back)
+          vftNotImplementedModal(session)
+          return(invisible(NULL))
         }
 
         if(length(newCtx) == 1 && newCtx %in% c(1, 2, 3) && !aoiReady()){

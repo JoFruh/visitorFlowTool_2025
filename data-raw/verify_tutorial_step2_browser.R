@@ -113,7 +113,8 @@ weight  <- function() js(sprintf("(function(){ var e = %s; var i = e && e.queryS
 #### open the app, no bubble ####
 invisible(b$Page$navigate(URL))
 ok("the app connects", waitFor("!!(window.Shiny && Shiny.shinyapp && Shiny.shinyapp.isConnected())", 120))
-invisible(js("localStorage.setItem('vft.tutorial.v1', JSON.stringify({status: 'done', at: Date.now()}))"))
+## the save/load card (after the first tour past step 1's) is verify_tutorial_step3_browser.R's
+invisible(js("localStorage.setItem('vft.tutorial.v1', JSON.stringify({status: 'done', at: Date.now()})); localStorage.setItem('vft.tutorial.done.v1', JSON.stringify({saveLoad: Date.now()}))"))
 invisible(b$Page$reload())
 Sys.sleep(1)
 ok("...again", waitFor("!!(window.Shiny && Shiny.shinyapp && Shiny.shinyapp.isConnected())", 120))
@@ -179,6 +180,13 @@ ok("Next moves on to hint 3", waitFor(atHint(3), 10))
 Sys.sleep(0.6)
 w <- wins()
 ok("one window, on the sensitivity map", length(w) == 1 && near(w[[1]], rectOf("#step2-SDMmap")))
+sens <- js("(function(){ var e = document.querySelector('.vftTutorialText em.vftTutSens'),
+  t = document.querySelector('.vftTutorialText'); if (!e) return null;
+  return [getComputedStyle(e).color, parseFloat(getComputedStyle(e).fontSize), parseFloat(getComputedStyle(t).fontSize),
+          getComputedStyle(e).fontWeight]; })()")
+ok("'Sensibilität der Biodiversität' in the EN icon's orange, bold, one size larger",
+   !is.null(sens) && identical(sens[[1]], "rgb(204, 103, 50)") && sens[[2]] > sens[[3]] && as.numeric(sens[[4]]) >= 700,
+   paste(unlist(sens), collapse = " "))
 shot("03_map")
 clickEl(".vftTutorialNext")
 
@@ -223,11 +231,33 @@ ok("Next moves on to hint 6", waitFor(atHint(6), 10))
 Sys.sleep(0.6)
 w <- wins()
 ok("one window, over the list", length(w) == 1 && inside(rectOf(".vft-fit-species"), w[[1]]))
+ok("...its text the one line now", isTRUE(js("!/widespread|verbreitet/.test(document.querySelector('.vftTutorialText').textContent)")))
 shot("06_list")
 clickEl(".vftTutorialNext")
 
+cat("\n=== 7b. hint 6b: the most widespread, at the top ===\n")
+ok("Next moves on to the added hint (6b)", waitFor(atHint(7), 10))
+Sys.sleep(0.6)
+w <- wins()
+top <- js("(function(){ var box = document.querySelector('.vft-fit-species'), l = box.getBoundingClientRect(),
+  rows = document.querySelectorAll('#step2-speciesCheckbox .checkbox'), head = box.previousElementSibling.previousElementSibling,
+  h = head.getBoundingClientRect(), r2 = rows[1].getBoundingClientRect();
+  return { head: [h.left, h.top, h.width, h.height], rowsBottom: Math.min(r2.bottom, l.bottom), list: [l.left, l.top, l.width, l.height],
+           caption: head.textContent, scroll: box.scrollTop }; })()")
+ww <- if (length(w) == 1) unlist(w[[1]]) else NULL
+ok("one window, from the 'most widespread' caption down to the second species",
+   !is.null(ww) && abs(ww[2] - (top$head[[2]] - 4)) <= 3 && abs((ww[2] + ww[4]) - (top$rowsBottom + 2)) <= 4,
+   paste(c(round(ww), "|", round(unlist(top$head)), round(top$rowsBottom)), collapse = ","))
+ok("...the caption is 'Verbreitetsten', the list scrolled to its top",
+   grepl("Verbreitetsten", top$caption) && top$scroll == 0, top$caption)
+ok("...the text says so, with a Next button",
+   isTRUE(js("/oben in der Liste/.test(document.querySelector('.vftTutorialText').textContent)")) && hasNext())
+ok("...counted: 7 / 14", identical(tut()$count, "7 / 14"), tut()$count)
+shot("06b_top")
+clickEl(".vftTutorialNext")
+
 cat("\n=== 8. hint 7: the toad's row ===\n")
-ok("Next moves on to hint 7", waitFor(atHint(7), 10))
+ok("Next moves on to hint 7", waitFor(atHint(8), 10))
 Sys.sleep(0.6)
 ok("the list has Bombina variegata", !is.null(rowRect()))
 w <- wins()
@@ -241,7 +271,7 @@ shot("07_toad")
 clickEl(".vftTutorialNext")
 
 cat("\n=== 9. hint 8: its weight to 3 ===\n")
-ok("Next moves on to hint 8", waitFor(atHint(8), 10))
+ok("Next moves on to hint 8", waitFor(atHint(9), 10))
 Sys.sleep(0.6)
 WSEL <- sprintf("(function(){ return %s.querySelector('input[type=number]'); })()", ROW)
 wr <- js(sprintf("(function(){ var r = %s.closest('.form-group').getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; })()", WSEL))
@@ -254,19 +284,22 @@ click(p[[1]], p[[2]])
 w0 <- weight()
 key("ArrowUp", 38)
 Sys.sleep(1.5)
-ok(sprintf("up once (%s -> %s) does not move on", w0, weight()), isTRUE(js(atHint(8))) && weight() == w0 + 1)
+ok(sprintf("up once (%s -> %s) does not move on", w0, weight()), isTRUE(js(atHint(9))) && weight() == w0 + 1)
 while (!is.null(weight()) && weight() < 3) key("ArrowUp", 38)
-ok(sprintf("up to %s moves on to hint 9", weight()), waitFor(atHint(9), 10))
+ok(sprintf("up to %s moves on to hint 9", weight()), waitFor(atHint(10), 10))
 
 cat("\n=== 10. hint 9: red list weights ===\n")
 Sys.sleep(0.4)
 w <- wins()
 ok("one window, on the red list button", length(w) == 1 && near(w[[1]], rectOf("#step2-redListWeights")))
+ok("...the text asks for the red list, and a click",
+   isTRUE(js("/Rote-Liste-Status/.test(document.querySelector('.vftTutorialText').textContent) &&
+              /Klicken Sie/.test(document.querySelector('.vftTutorialText').textContent)")))
 shot("09_redlist")
 clickEl("#step2-redListWeights")
 t9 <- Sys.time()
 ok("its tap pauses, then moves on to hint 10",
-   isTRUE(js("vftTutorialState().pause")) && waitFor(atHint(10), 10))
+   isTRUE(js("vftTutorialState().pause")) && waitFor(atHint(11), 10))
 ok("...two seconds later, not one (delay)", as.numeric(difftime(Sys.time(), t9, units = "secs")) >= 1.9)
 ## the default filter lists VU-CR species only, which the red list weighs 3-5
 ok("...and the weights were set by red list status (all 3 or more)",
@@ -279,6 +312,15 @@ box <- js("(function(){ var r = document.getElementById('step2-minValThreshold')
            return [r.left, r.top, r.width, r.height]; })()")
 w <- wins()
 ok("one window, on the slider and its label", length(w) == 1 && near(w[[1]], box, 8))
+## the teal runs from the handle to the maximum, the kept part (not the app's
+## default bar from the minimum to the handle)
+irs <- js("(function(){ var s = document.querySelector('#step2-minValThreshold').closest('.vft-sm-slider');
+  if (!s) return null;
+  return [getComputedStyle(s.querySelector('.irs-line')).backgroundColor,
+          getComputedStyle(s.querySelector('.irs-bar')).backgroundColor]; })()")
+ok("the slider's line teal, its bar (minimum to handle) plain grey",
+   !is.null(irs) && identical(irs[[1]], "rgb(0, 98, 104)") && identical(irs[[2]], "rgb(237, 237, 237)"),
+   paste(unlist(irs), collapse = " | "))
 ok("...the card on its right, off the map", {
   bx <- unlist(rectOf(".vftTutorialBox"))
   bx[1] >= w[[1]][[1]] + w[[1]][[3]] &&
@@ -294,9 +336,9 @@ handle <- function() js(sprintf("(function(){ var r = %s.$cache.s_single[0].getB
 slider <- function() js(sprintf("%s.result.from", IRS))
 h <- handle(); drag(h[[1]], h[[2]], xFor(15), h[[2]])
 Sys.sleep(2)
-ok(sprintf("a slide to %s does not move on", slider()), isTRUE(js(atHint(10))))
+ok(sprintf("a slide to %s does not move on", slider()), isTRUE(js(atHint(11))))
 h <- handle(); drag(h[[1]], h[[2]], xFor(25.4), h[[2]])
-ok(sprintf("a slide to %s moves on to hint 11", slider()), waitFor(atHint(11), 20))
+ok(sprintf("a slide to %s moves on to hint 11", slider()), waitFor(atHint(12), 20))
 
 cat("\n=== 12. hint 11: the download ===\n")
 Sys.sleep(0.6)
@@ -311,19 +353,19 @@ ok("a tap on it goes through (live)", waitFor("window.__vftSM > 0", 5))
 dlDone <- function() { f <- list.files(DL, pattern = "[.]zip$"); length(f) > 0 }
 t0 <- Sys.time(); while (!dlDone() && difftime(Sys.time(), t0, units = "secs") < 30) Sys.sleep(0.5)
 ok("...and the GeoTIFF zip is downloaded", dlDone(), paste(list.files(DL), collapse = ","))
-ok("...and the hint stays", isTRUE(js(atHint(11))))
+ok("...and the hint stays", isTRUE(js(atHint(12))))
 invisible(js("jQuery(document).off('shiny:inputchanged.vftTest')"))
 clickEl(".vftTutorialNext")
 
 cat("\n=== 13. hint 12: confirm ===\n")
-ok("Next moves on to hint 12", waitFor(atHint(12), 10))
+ok("Next moves on to hint 12", waitFor(atHint(13), 10))
 Sys.sleep(0.6)
 w <- wins()
 ok("one window, on the confirm button", length(w) == 1 && near(w[[1]], rectOf("#step2-confirmButton2")))
 ok("...and no Next button", !hasNext())
 shot("12_confirm")
 clickEl("#step2-confirmButton2")
-ok("the next-step modal moves on to hint 13", waitFor(atHint(13), 60))
+ok("the next-step modal moves on to hint 13", waitFor(atHint(14), 60))
 
 cat("\n=== 14. hint 13: choose ===\n")
 Sys.sleep(0.8)

@@ -106,7 +106,8 @@ LAUNCH <- "#step5-launchSim"
 #### open the app, no bubble ####
 invisible(b$Page$navigate(URL))
 ok("the app connects", waitFor("!!(window.Shiny && Shiny.shinyapp && Shiny.shinyapp.isConnected())", 120))
-invisible(js("localStorage.setItem('vft.tutorial.v1', JSON.stringify({status: 'done', at: Date.now()}))"))
+## the save/load card (after the first tour past step 1's) is verify_tutorial_step3_browser.R's
+invisible(js("localStorage.setItem('vft.tutorial.v1', JSON.stringify({status: 'done', at: Date.now()})); localStorage.setItem('vft.tutorial.done.v1', JSON.stringify({saveLoad: Date.now()}))"))
 invisible(b$Page$reload())
 Sys.sleep(1)
 ok("...again", waitFor("!!(window.Shiny && Shiny.shinyapp && Shiny.shinyapp.isConnected())", 120))
@@ -183,6 +184,10 @@ w <- wins()
 ok("one window, on the bars bottom right", length(w) == 1 && near(w[[1]], bars, 10),
    paste(unlist(w), collapse = ","))
 ok("...and no Next button", !hasNext())
+ok("...the arrival text, 'Naherholungssimulation' teal and larger",
+   isTRUE(js("(function(){ var t = document.querySelector('.vftTutorialText'), b = t.querySelector('b em');
+     return /Ankunft/.test(t.textContent) && !!b && /Naherholungssimulation/.test(b.textContent) &&
+            getComputedStyle(b).color === 'rgb(0, 98, 104)'; })()")))
 shot("2_progress")
 t0 <- Sys.time()
 ok("hint 3 once the simulation is drawn", waitFor(atHint(3), 900, 1),
@@ -206,6 +211,11 @@ ok("one window, inside the map", length(w) == 1 && inside(w[[1]], rectOf("#step5
 ok("...on the outline, not the whole map",
    length(w) == 1 && prod(unlist(w[[1]])[3:4]) < 0.98 * prod(unlist(rectOf("#step5-mapAreaLeaflet"))[3:4]))
 ok("...with a Next button", hasNext())
+use <- js("(function(){ var e = document.querySelector('.vftTutorialText em.vftTutUsage'),
+  t = document.querySelector('.vftTutorialText'); if (!e) return null;
+  return [e.textContent, getComputedStyle(e).color, parseFloat(getComputedStyle(e).fontSize) > parseFloat(getComputedStyle(t).fontSize)]; })()")
+ok("'Wegnutzung' in a busy path's blue, one size larger",
+   !is.null(use) && identical(use[[2]], "rgb(24, 45, 181)") && isTRUE(use[[3]]), paste(unlist(use), collapse = " "))
 shot("3_usage")
 
 cat("\n=== 5. hint 4: recreationist types and map layers ===\n")
@@ -278,6 +288,9 @@ ok("...the card on its left", {
   bx[1] + bx[3] <= w[[1]][[1]] &&
     identical(js("document.querySelector('.vftTutorialBox').getAttribute('data-side')"), "left")
 })
+ok("...'Szenarien' teal and larger",
+   isTRUE(js("(function(){ var b = document.querySelector('.vftTutorialText b em');
+     return !!b && b.textContent === 'Szenarien' && getComputedStyle(b).color === 'rgb(0, 98, 104)'; })()")))
 shot("8_scenarios")
 
 cat("\n=== 9. hint 9a: only the original - manage scenarios ===\n")
@@ -287,6 +300,11 @@ ok("the base hint (one scenario)", is.null(tut()$variant))
 w <- wins()
 ok("one window, on 'Manage scenarios'", length(w) == 1 && near(w[[1]], rectOf("#step5-newVersionsButton")))
 ok("...and no Next button", !hasNext())
+ok("...'Original' dark grey, 'Szenario' teal, both larger",
+   isTRUE(js("(function(){ var g = document.querySelector('.vftTutorialText em.vftTutGrey'),
+     b = document.querySelector('.vftTutorialText b em');
+     return !!g && /Original/.test(g.textContent) && getComputedStyle(g).color === 'rgb(74, 79, 78)' &&
+            !!b && b.textContent === 'Szenario' && getComputedStyle(b).color === 'rgb(0, 98, 104)'; })()")))
 shot("9a_manage")
 clickEl("#step5-newVersionsButton")
 ok("the tap ends the tour", waitFor("!document.getElementById('vftTutorial')", 5))
@@ -307,7 +325,13 @@ ok("...with two cards", waitFor("document.querySelectorAll('#placeholder_step5 .
 Sys.sleep(2)
 invisible(js("vftTutorialStart('step5')"))
 ok("the tour starts again", waitFor(atHint(1), 20))
+ok("...on the launch hint to tap: the selected scenario has no simulation",
+   is.null(tut()$variant) && !hasNext(), paste(unlist(tut()), collapse = ","))
 Sys.sleep(0.6); clickEl(LAUNCH)
+ok("hint 2 follows the launch, with its own text (2b)",
+   waitFor(atHint(2), 30) && identical(tut()$variant, "b") &&
+     isTRUE(js("/Wegdaten/.test(document.querySelector('.vftTutorialText').textContent)")),
+   paste(unlist(tut()), collapse = ","))
 ok("hint 3 once the (selected) scenario is simulated", waitFor(atHint(3), 900, 1))
 for (i in 4:4) ok(sprintf("Next to hint %d", i), nextAndWait(i))
 Sys.sleep(0.4); ok("Next to hint 5", nextAndWait(5))
@@ -342,6 +366,27 @@ shot("10_launch")
 clickEl(LAUNCH)
 ok("the tap ends the tour", waitFor("!document.getElementById('vftTutorial')", 5))
 ok("...and the simulation runs", waitFor(sprintf("document.querySelector('%s').disabled", LAUNCH), 20))
+
+cat("\n=== 11. the scenario shown has its simulation: hint 1 to read, hint 2 passed over ===\n")
+ok("...the simulation done", waitFor(sprintf("!document.querySelector('%s').disabled &&
+  !document.querySelectorAll('#shiny-notification-panel .shiny-notification').length", LAUNCH), 900, 1))
+Sys.sleep(3)
+invisible(js("vftTutorialStart('step5')"))
+ok("the tour starts on hint 1, variant b", waitFor(atHint(1), 30) && identical(tut()$variant, "b"),
+   paste(unlist(tut()), collapse = ","))
+Sys.sleep(0.6)
+w <- wins()
+ok("...one window, on the launch button", length(w) == 1 && near(w[[1]], rectOf(LAUNCH)),
+   paste(unlist(w), collapse = ","))
+ok("...with a Next button (a hint to read), hint 2 left out of the count (1 / 8)",
+   hasNext() && identical(tut()$count, "1 / 8"), tut()$count)
+clickEl(LAUNCH); Sys.sleep(1)
+ok("...a tap on the button is swallowed", !isTRUE(js(sprintf("document.querySelector('%s').disabled", LAUNCH))) &&
+   isTRUE(js(atHint(1))))
+shot("11_launch_read")
+ok("Next passes over the progress hint, to hint 3", nextAndWait(3) && identical(tut()$count, "2 / 8"),
+   paste(unlist(tut()), collapse = ","))
+invisible(js("document.querySelector('.vftTutorialStop').click(); true"))
 
 cat(sprintf("\nscreenshots in %s\n", SHOTS))
 b$close()
