@@ -21,7 +21,7 @@ step3_ui <- function(id, i18n){
 vftDbg("UI4")
       shiny::fluidPage(
         #activate translation for this ui
-        shiny.i18n::usei18n(i18n),
+        vftUseI18n(i18n), #the table itself is emitted once, in app_ui()
         #the page banner (language select, title, logo, help/info) now lives
         #once in the nav bar - see vftStepNav() in R/app_ui.R. These three
         #inputs stay, just hidden: this step's server still listens for its
@@ -42,7 +42,8 @@ vftDbg("UI4")
                        i18n$t("Für die Erholungssimulation müssen wir alle möglichen Zielgebiete definieren, aus denen die simulierten Besucher wählen können.")),
                 vftSub(i18n$t("Bewegen Sie den Schieberegler, um den Umfang der Zielgebiete zu bestimmen. (Dies basiert auf einem 'Attraktivitätsmodell')"), " ",
                        i18n$t("Im nächsten Schritt haben Sie die Möglichkeit, Zielgebiete manuell zu korrigieren (hinzufügen/löschen/ausschneiden).")),
-                vftTip(i18n$t("Tipp: Wählen Sie einen Schwellenwert, der die größten Bereiche erzeugt und diese gleichzeitig voneinander getrennt hält."))),
+                #the default is step3_server.R's vftSuggestAoIThreshold()
+                vftTip(i18n$t("Tipp: Der voreingestellte Schwellenwert ist unser Vorschlag (1/3 der Fläche sind Zielgebiete)."))),
 
               shiny::fluidRow(
                 shiny::column(4),

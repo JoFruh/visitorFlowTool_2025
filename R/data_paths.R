@@ -119,11 +119,11 @@ vftData <- function(...){
 #'     against 8,933 vertices and 0.33 MB after simplification - 58% less for
 #'     leaflet to serialise and the browser to draw.
 #'
-#' Simplifying costs ~10s, so it must happen once for the process rather than
-#' once per session; global.R warms it at startup so no user ever waits for it.
-#' Cached in .GlobalEnv alongside the .vft_* rasters, and safe there on the same
-#' terms: it derives purely from an immutable national file and holds no user
-#' state.
+#' Simplifying costs ~10s, so it must happen once rather than once per session -
+#' and, since 2026-10-12, once per host rather than once per process: it is kept
+#' on disk (see "the simplified layer on disk" below). Cached in .GlobalEnv
+#' alongside the .vft_* rasters, and safe there on the same terms: it derives
+#' purely from an immutable national file and holds no user state.
 #'
 #' 25 m is the tolerance because it is the knee of the curve - it drops 60% of
 #' the vertices for a 0.05% change in area, where 50 m saves little more and
@@ -320,13 +320,117 @@ vftLakeLoopBuffer <- function(area,
 
 vftProtectedAreasCached <- function(tolerance = VFT_PA_TOLERANCE_M){
   if(!exists(".vft_PA_simplified", envir = .GlobalEnv)){
-    pa <- sf::st_read(vftData("maps/protectedAreas/PA_all.gpkg"), quiet = TRUE)
-    .GlobalEnv$.vft_PA_crs <- sf::st_crs(pa)
-    #simplify in the projected CRS so the tolerance is in metres, not degrees
-    .GlobalEnv$.vft_PA_simplified <-
-      sf::st_simplify(sf::st_transform(pa, 2056), dTolerance = tolerance)
+    src <- vftData("maps/protectedAreas/PA_all.gpkg")
+    hit <- .vftPAReadCache(src, tolerance)
+    if(is.null(hit)){
+      hit <- .vftPABuild(src, tolerance)
+      .vftPAWriteCache(hit, .vftPAUserFile(src, tolerance))
+    }
+    .GlobalEnv$.vft_PA_crs        <- hit$crs
+    .GlobalEnv$.vft_PA_simplified <- hit$simplified
   }
   .GlobalEnv$.vft_PA_simplified
+}
+
+#### the simplified layer on disk ####
+#
+# global.R used to build the simplified layer at startup, so that no user would
+# wait for it. But a stopped app is restarted by its next visitor, and startup is
+# exactly what that visitor waits through: the build was 7-10 s of a blank page
+# on every cold start, for a result that never changes. Now it is built once and
+# kept on disk, and a process reads it back in ~0.4 s the first time step 5 needs
+# it. Two places are looked in:
+#
+#   - beside the source, PA_all_simplified_<tol>m.rds - shipped with the data,
+#     written by data-raw/build_pa_cache.R. Used only while newer than the gpkg.
+#   - the user cache, tools::R_user_dir("visitorFlowTool", "cache") - written by
+#     the app itself, keyed by the source's mtime and size, so a replaced gpkg
+#     simply misses. Filled from a daemon right after the warm-up when neither
+#     file exists (vftProtectedAreasEnsureCache()), so even the first start on a
+#     fresh host builds it off the main thread.
+#
+# The cached object is list(simplified = <sf in 2056>, crs = <source crs>).
+
+#' Read and simplify the protected areas, as vftProtectedAreasCached() always has.
+.vftPABuild <- function(src, tolerance){
+  pa <- sf::st_read(src, quiet = TRUE)
+  #simplify in the projected CRS so the tolerance is in metres, not degrees
+  list(simplified = sf::st_simplify(sf::st_transform(pa, 2056), dTolerance = tolerance),
+       crs        = sf::st_crs(pa))
+}
+
+#' The file shipped with the data (see data-raw/build_pa_cache.R).
+.vftPAShippedFile <- function(src, tolerance){
+  file.path(dirname(src), sprintf("PA_all_simplified_%gm.rds", tolerance))
+}
+
+#' The file the app writes for itself. NULL when there is no usable cache dir.
+.vftPAUserFile <- function(src, tolerance){
+  info <- file.info(src)
+  if(is.na(info$size)) return(NULL)
+  dir <- tryCatch(tools::R_user_dir("visitorFlowTool", "cache"),
+                  error = function(e) "")
+  if(!nzchar(dir)) return(NULL)
+  file.path(dir, sprintf("PA_simplified_%gm_%s_%.0f.rds", tolerance,
+                         format(info$mtime, "%Y%m%d%H%M%S"), info$size))
+}
+
+#' The first cache file that is valid for `src`, or NULL.
+.vftPACacheFile <- function(src, tolerance){
+  shipped <- .vftPAShippedFile(src, tolerance)
+  if(file.exists(shipped) && isTRUE(file.mtime(shipped) >= file.mtime(src)))
+    return(shipped)
+  user <- .vftPAUserFile(src, tolerance)
+  if(!is.null(user) && file.exists(user)) return(user)
+  NULL
+}
+
+#' The cached layer, or NULL on a miss or an unreadable file - never an error:
+#' a bad cache costs a rebuild, not step 5.
+.vftPAReadCache <- function(src, tolerance){
+  f <- .vftPACacheFile(src, tolerance)
+  if(is.null(f)) return(NULL)
+  hit <- tryCatch(readRDS(f), error = function(e) NULL)
+  if(!is.list(hit) || !inherits(hit$simplified, "sf")) return(NULL)
+  hit
+}
+
+#' Write `hit` to `file` atomically: a reader in another process must never
+#' see half a file. Wrapped - a read-only home only means the next process
+#' rebuilds.
+.vftPAWriteCache <- function(hit, file){
+  if(is.null(file)) return(invisible(FALSE))
+  ok <- tryCatch({
+    dir.create(dirname(file), showWarnings = FALSE, recursive = TRUE)
+    tmp <- paste0(file, ".tmp", Sys.getpid())
+    saveRDS(hit, tmp, compress = FALSE)
+    file.rename(tmp, file)
+  }, error = function(e) FALSE)
+  invisible(isTRUE(ok))
+}
+
+#' Build the cache file in a daemon, unless one is already there.
+#'
+#' Called once per process, when the daemon warm-up finishes (.vftWarmPoll()).
+#' Nearly always a file check and nothing more. On a fresh host it moves the
+#' 7-10 s build off the main thread, where step 5 would otherwise pay it the
+#' first time it is entered.
+vftProtectedAreasEnsureCache <- function(tolerance = VFT_PA_TOLERANCE_M){
+  src <- tryCatch(vftData("maps/protectedAreas/PA_all.gpkg"), error = function(e) NULL)
+  if(is.null(src) || !file.exists(src)) return(invisible(FALSE))
+  if(!is.null(.vftPACacheFile(src, tolerance))) return(invisible(FALSE))
+  out <- .vftPAUserFile(src, tolerance)
+  if(is.null(out)) return(invisible(FALSE))
+  #no daemons (dev): it would run inline, which is the very freeze this avoids;
+  #leave it to the first step 5 visit as before
+  if(!isTRUE(.vftP()$daemonsWanted)) return(invisible(FALSE))
+  promises::catch(
+    vftFuture({
+      visitorFlowTool:::.vftPAWriteCache(visitorFlowTool:::.vftPABuild(src, tolerance), out)
+    }),
+    function(e) message("visitorFlowTool: protected-areas cache build failed: ",
+                        conditionMessage(e)))
+  invisible(TRUE)
 }
 
 #' The protected areas within one study area, ready for leaflet.

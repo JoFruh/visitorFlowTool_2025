@@ -3,7 +3,8 @@
 ## protocol. Step 1's tour is walked quickly to get there: the simulation is
 ## chosen, and step 3's tour has to start by itself when the ring lands on step
 ## 3 (chaining). Then its five hints: the simulation's three nav buttons, step
-## 3's own, the threshold slider (a slide that stays above 8 must not move on;
+## 3's own, the threshold slider (it starts on the suggested threshold, either
+## side of 8; a slide that has not reached 8 must not move on;
 ## one past 8 is put back on exactly 8, its drag ended, and moves on), the map,
 ## and confirm - whose tap ends the tour. Between hints there is no dim. Then
 ## the save/load card (once, after the first tour past step 1's), step 4's tour
@@ -185,10 +186,20 @@ xFor <- function(v) js(sprintf("(function(){ var d = %s,
   return line.left + hw / 2 + (line.width - hw) * Math.round(%f * 10) / 200; })()", IRS, v))
 handle <- function() js(sprintf("(function(){ var r = %s.$cache.s_single[0].getBoundingClientRect();
   return [r.left + r.width / 2, r.top + r.height / 2]; })()", IRS))
+## the slider starts on step 3's suggested threshold (vftSuggestAoIThreshold()),
+## not a fixed 11, so "towards 8" and "past 8" depend on which side it is on
+start <- as.numeric(slider())
+ok(sprintf("the slider starts on the suggested threshold (%s), not the UI's 11", start),
+   !is.na(start) && start >= 0.5 && start != 11)
+above <- start >= 8
+notYet <- if (above) max(8.5, min(10, start - 0.5)) else min(7.5, max(6, start + 0.5))
+past   <- if (above) 4 else 12
 h <- handle()
-drag(h[[1]], h[[2]], xFor(10), h[[2]])
-Sys.sleep(2)
-ok(sprintf("a slide to %s (still above 8) does not move on", slider()), isTRUE(js(atHint(3))))
+if (start != 8) {
+  drag(h[[1]], h[[2]], xFor(notYet), h[[2]])
+  Sys.sleep(2)
+  ok(sprintf("a slide to %s (not yet 8) does not move on", slider()), isTRUE(js(atHint(3))))
+}
 ## a slide well past 8, in one drag: the slider is put back on 8 as it passes
 ## and the rest of the drag does nothing
 ## the dim, watched from here on: the pause after this hint has no window
@@ -198,7 +209,7 @@ invisible(js("(function(){ var c = document.querySelector('.vftTutorialCanvas');
     window.__vftDimLog.push([c.classList.contains('vftTutorialNoDim'), c.getAttribute('data-windows')]);
   }).observe(c, { attributes: true }); return true; })()"))
 h <- handle()
-x0 <- h[[1]]; x1 <- xFor(4)
+x0 <- h[[1]]; x1 <- xFor(past); beyond <- if (above) 2 else 14
 move(x0, h[[2]]); mouse("mousePressed", x0, h[[2]])
 for (s in seq_len(24)) {
   b$Input$dispatchMouseEvent(type = "mouseMoved", x = x0 + (x1 - x0) * s / 24, y = h[[2]],
@@ -206,12 +217,12 @@ for (s in seq_len(24)) {
   Sys.sleep(0.04)
 }
 Sys.sleep(0.2)
-ok(sprintf("a slide towards 4 stops on exactly 8 (%s)", slider()), identical(slider(), "8"))
+ok(sprintf("a slide towards %s stops on exactly 8 (%s)", past, slider()), identical(slider(), "8"))
 ## the button is still held: the drag was ended under it
-b$Input$dispatchMouseEvent(type = "mouseMoved", x = xFor(2), y = h[[2]], button = "left", buttons = 1)
+b$Input$dispatchMouseEvent(type = "mouseMoved", x = xFor(beyond), y = h[[2]], button = "left", buttons = 1)
 Sys.sleep(0.2)
 ok("...and the drag is over: moving on, still pressed, leaves it on 8", identical(slider(), "8"))
-mouse("mouseReleased", xFor(2), h[[2]])
+mouse("mouseReleased", xFor(beyond), h[[2]])
 ok("...and moves on to hint 4", waitFor(atHint(4), 20))
 ## the pause after a hint done, and the map's redraw: no window, so no dim
 ok("between hints: no window, so the dim faded out (the layer stayed)",

@@ -18,6 +18,59 @@
 # handlers would not stack on top of the live ones; there is one instantiation
 # now, and self-destruction would mean the step could be confirmed exactly once
 # per session and then never left again.
+#' The share of the area within the step 1 outline that the suggested threshold
+#' paints as areas of interest, and the lowest threshold it will ever suggest.
+#' Where too little of the outline is attractive to reach the share, the floor
+#' stops the suggestion from sweeping near-worthless cells into areas of
+#' interest.
+VFT_AOI_SUGGEST_SHARE <- 1/3
+VFT_AOI_SUGGEST_FLOOR <- 0.5
+
+#' The slider position that makes VFT_AOI_SUGGEST_SHARE of the area within the
+#' step 1 outline areas of interest - step 3's default.
+#'
+#' No vectorising: the share of the outline a threshold paints is the share of
+#' its cells at or above it, so one sort of the cells answers every slider
+#' position at once. Counted in cells, not m2: the raster is lon/lat, but the
+#' cell area varies by well under a percent across one outline.
+#'
+#' @param DULN_all the attractiveness raster, as step 3 draws it (cropped to the
+#'   outline plus a 1000 m buffer; only the cells within the outline count)
+#' @param shape the step 1 outline (sf, any crs)
+#' @param choices the slider's positions, as numbers
+#' @return the chosen position (numeric), or NULL when the perimeter holds no
+#'   cells with a value
+vftSuggestAoIThreshold <- function(DULN_all, shape,
+                                   choices = round(seq(0, 20, by = 0.1), 1),
+                                   share = VFT_AOI_SUGGEST_SHARE,
+                                   floor = VFT_AOI_SUGGEST_FLOOR){
+  v <- terra::vect(sf::st_transform(sf::st_geometry(shape), 4326))
+  #set rather than compared: both are lon/lat, and terra's srs can come back
+  #empty where PROJ_LIB is shadowed (see generateAoI2())
+  terra::crs(v) <- terra::crs(DULN_all)
+  #The share is of the area WITHIN the step 1 outline: the cells whose centre
+  #lies inside it (their count matches the outline's own area to 0.1 %), not
+  #the buffered crop DULN_all comes as. rasterize(), not extract(): the same
+  #cells in ~0.05 s, where extract() took 0.5-2.5 s on the larger perimeters;
+  #and not mask(), whose default also takes the cells the outline only touches.
+  inside <- !is.na(terra::values(terra::rasterize(v, DULN_all, touches = FALSE),
+                                 mat = FALSE))
+  total  <- sum(inside)
+  vals   <- terra::values(DULN_all, mat = FALSE)[inside]
+  #cells with no value (outside Switzerland, at a border perimeter) are still
+  #area within the outline: they count in `total`, and are never above
+  vals <- sort(vals[!is.na(vals)])
+  if(!length(vals)) return(NULL)
+
+  #share of the outline at or above each position: findInterval(left.open)
+  #counts the valued cells strictly below it
+  above <- (length(vals) - findInterval(choices, vals, left.open = TRUE)) / total
+  ok    <- choices >= floor
+  if(!any(ok)) return(NULL)
+  choices <- choices[ok]
+  choices[which.min(abs(above[ok] - share))]
+}
+
 step3_server <- function(id, shape, i18n, currentLang,
                          needHelp = shiny::reactive(FALSE),
                          DULN_all = shiny::reactive(NULL)){
@@ -434,6 +487,38 @@ step3_server <- function(id, shape, i18n, currentLang,
       #the slider may not have moved, so nudge the plot explicitly
       plotUpdate(plotUpdate() + 1L)
       invisible(NULL)
+    })
+
+    #The default threshold: the slider position that makes a third of the
+    #perimeter areas of interest (vftSuggestAoIThreshold(), <0.15 s on a 15 km
+    #disc). An observer rather than part of enter(), because DULN_all is an async
+    #provider and may land after the step is entered. Set once per perimeter AND
+    #raster - a return to step 3 over the same area keeps the user's own
+    #position, and a stale raster still in place under a new perimeter is not
+    #mistaken for the new one (its extent differs).
+    cache$suggestedFor <- NULL
+    obsSuggest <- shiny::observe({
+      attr <- DULN_all()
+      shp  <- r$shapeWgs
+      shiny::req(attr, shp)
+      key <- list(shp, as.vector(terra::ext(attr)))
+      if(identical(cache$suggestedFor, key)) return(invisible(NULL))
+      cache$suggestedFor <- key
+
+      t0  <- Sys.time()
+      thr <- tryCatch(vftSuggestAoIThreshold(attr, shp), error = function(e){
+        vftDbgCat("WARNING step 3 threshold suggestion failed: ",
+                  conditionMessage(e), "\n")
+        NULL
+      })
+      vftDbgCat(sprintf("step 3 suggested threshold %s in %.2f s\n",
+                        format(thr), as.numeric(difftime(Sys.time(), t0, units = "secs"))))
+      if(is.null(thr)) return(invisible(NULL))
+      #a NUMBER, although the choices are strings: ion.rangeSlider parses
+      #"0".."20" into numbers, and the binding looks `selected` up with
+      #values.indexOf() - a string finds nothing, and the slider lands on 0
+      shinyWidgets::updateSliderTextInput(session, "AOISlider",
+                                          selected = as.numeric(thr))
     })
 
     enter()

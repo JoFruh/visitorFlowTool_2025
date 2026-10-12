@@ -101,6 +101,16 @@
 #   home <- "/home/frueh/ShinyApps/visitorFlowTool"
 # }
 
+#COLD START ####
+# A stopped app is restarted by its next visitor, and Shiny only opens its port
+# once this file has returned - so everything here is time that visitor stares at
+# a blank page. Keep it to what the first page needs. Warm-ups go to the
+# background (the daemon pool) or to disk (the protected areas), and step 1 no
+# longer needs tmap. vftStartupMark() writes how far into the process's life each
+# milestone came to the log, and the first session prints the table to the
+# browser console (see R/perf_helpers.R).
+visitorFlowTool:::vftStartupMark("global.R start (R + package loaded)")
+
 #PROFILING ####
 # Start the main-thread stall detector before anything else in this file, so the
 # startup work below (plan setup, daemon warming) is itself measured. This is a
@@ -196,24 +206,18 @@ if (vftInstalled) {
   # health check cannot disagree with what was configured here. VFT_WORKERS=1 is
   # honoured: mirai::daemons(1) starts one real daemon. Only unusable values fall
   # back to 2. See .vftWorkerCount() / .vftStartDaemons().
+  #
+  # Not started here, only requested. Waiting for the warm-up kept the port shut
+  # through all of it, and even spawning the daemons costs a couple of seconds.
+  # They are started once the first visitor's map has gone out
+  # (vftDaemonsKickAfterFlush() in app_server()), or after 30 s if nobody
+  # connects, and warm up while the user reads the page and draws an area. No
+  # job can be sent before step 1 is confirmed; one that is sent earlier waits
+  # behind a red "warming up" bar (.vftWhenWarm()). The startup line with the
+  # worker pids is printed when the warm-up finishes (.vftWarmPoll()), since
+  # only then are the pids known.
   workers <- visitorFlowTool:::.vftWorkerCount()
-  wpids   <- visitorFlowTool:::.vftStartDaemons(workers)
-
-  # Report the pids AND the state that decided them. When this warned before, the
-  # pid alone could not say why: installed-but-no-daemons and not-installed look
-  # identical from here, and cost a round trip each to tell apart.
-  message("visitorFlowTool: main pid ", Sys.getpid(),
-          "; async worker pids ", paste(wpids, collapse = ", "),
-          "; VFT_WORKERS=", Sys.getenv("VFT_WORKERS", "<unset>"),
-          " -> workers=", workers,
-          "; mirai connections=",
-          tryCatch(mirai::status()$connections, error = function(e) "ERROR"),
-          "; job timeout=",
-          {tm <- visitorFlowTool:::.vftTimeoutMs()
-           if(is.null(tm)) "off" else paste0(tm/1000, "s")})
-  if(!length(wpids) || anyNA(wpids) || any(wpids == Sys.getpid()))
-    message("*** WARNING: async work is NOT leaving the main process. Every job ",
-            "will freeze every connected user for its full duration. ***")
+  visitorFlowTool:::.vftStartDaemonsSoon(workers)
 } else {
   # dev / load_all: run async work in the main session (has the compiled code loaded).
   #
@@ -236,37 +240,12 @@ if (vftInstalled) {
 
 
 
-# Pre-build the simplified protected-areas layer before any session exists.
-#
-# Simplifying it costs ~10s. Left lazy, the first user to reach step 5 would pay
-# that as a main-thread freeze felt by everyone connected - precisely the thing
-# this whole effort is removing. Doing it here moves the cost into startup, where
-# there is nobody to block. Every session afterwards just clips the cache (~0.1s).
-#
-# Wrapped in try(): a missing or unreadable data directory should stop the layer
-# from being pre-warmed, not stop the app from starting. vftProtectedAreas() will
-# then build it on first use and surface any real error there.
-try(visitorFlowTool:::vftProtectedAreasCached(), silent = TRUE)
-
-
-# Put tmap in interactive mode once, for the process.
-#
-# tmap_mode() sets a global option. It takes no arguments that vary per session
-# and returns the same state every time, but it was being called INSIDE three
-# renderLeaflet blocks - so every re-render, in every session, re-set a global
-# that was already set, on the shared main thread. In the 2026-08-21 profile that
-# was 3.0s at step1_server.R#427 plus 1.2s in step4's map block: ~4s of pure
-# repetition, and the fourth largest cost in the app.
-#
-# Setting it here is also the more correct place. The option is process-wide, not
-# session-wide, so with several sessions connected the per-render calls were all
-# writing the same value into shared state anyway - just repeatedly, and always
-# while somebody was waiting.
-#
-# Safe to hoist because 'view' is the only mode this app ever asks for; nothing
-# switches to 'plot'. If that ever changes, set the mode around the specific
-# plot-mode call rather than putting this back in a render block.
-tmap::tmap_mode('view')
+# The protected-areas layer used to be simplified here (~10 s), and tmap put in
+# view mode (~12 s on the dev box, all of it loading tmap). Both are gone from
+# startup: the simplified layer is built once per host and read from disk when
+# step 5 first needs it (vftProtectedAreasCached() in R/data_paths.R; a daemon
+# builds the file after the warm-up if it is missing), and step 1 - the only
+# tmap user - now draws its base map with leaflet (vftCountryBaseMap()).
 
 
 # No graphics device outside the app's own outputs.
@@ -303,3 +282,7 @@ dir.create(vft_tileCacheDir, showWarnings = FALSE, recursive = TRUE)
 
 
 
+
+
+# The port opens right after this file returns.
+visitorFlowTool:::vftStartupMark("global.R end (port opens)")

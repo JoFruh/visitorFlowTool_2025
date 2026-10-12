@@ -7,6 +7,19 @@ app_server <- function(input, output, session){
   #per-step optimisation work. Registers its own onSessionEnded. See perf_helpers.R.
   vftPerfSessionStart(session)
 
+  #cold-start milestones (each recorded once per process) and, for the first
+  #session only, the table in the browser console. See R/perf_helpers.R.
+  vftStartupMark("first session started")
+  session$onFlushed(function() vftStartupMark("first session's first flush sent"),
+                    once = TRUE)
+  vftStartupReport(session)
+  #counted always (not only with VFT_PERF): a job sent while the daemons warm up
+  #runs inline only when its session is alone - see .vftWhenWarm()
+  vftLiveSessionStart(session)
+  #the daemon pool starts once this first map is out, so its spawn and warm-up
+  #do not compete with it (.vftStartDaemonsSoon() in R/async_helpers.R)
+  vftDaemonsKickAfterFlush(session)
+
   #prepare multilingual functions
   i18n <- shiny.i18n::Translator$new(translation_csvs_path = vftData("tables"), separator_csv = ";" )
   i18n$set_translation_language('de')

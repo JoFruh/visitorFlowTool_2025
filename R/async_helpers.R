@@ -990,14 +990,31 @@ vftPayloadReport <- function(file = NULL, dir = Sys.getenv("VFT_PERF_DIR", "")){
 #' 7.3 s there against 3.6 s on a daemon that had done anything before. One tiny
 #' call of each here pays it once per daemon, at startup, before anyone is
 #' waiting. Wrapped: warming is an optimisation and must never stop the pool.
-.vftStartDaemons <- function(n = .vftWorkerCount()){
+#'
+#' `wait = FALSE` is the cold-start path global.R takes. Waiting for the warm-up
+#' there held the port shut - Shiny only listens once global.R has returned - so
+#' a visitor arriving at a stopped app stared at a blank page for the whole of
+#' it (36 s of the 89 s cold start measured on the dev box, 2026-10-12). Without
+#' the wait the pool warms while the first page is being served and the user
+#' draws an area; no job can be dispatched before step 1 is confirmed. Returns
+#' NULL then, and .vftWarmPoll() reports the pids when they are known. A job
+#' that does arrive early waits in .vftWhenWarm() behind a red bar.
+#'
+#' `wait = TRUE` stays for .vftEnsureDaemons(): a revival happens because a job
+#' is waiting for it, so there is nothing better to do than wait.
+.vftStartDaemons <- function(n = .vftWorkerCount(), wait = TRUE){
   #record that a pool was started ON PURPOSE. .vftEnsureDaemons() must be able to
   #tell "the pool died" from "there was never meant to be a pool": in dev the app
   #deliberately runs with daemons(0), and reviving there would hand jobs to bare
   #Rscript daemons that cannot library() an uninstalled package.
   st <- .vftP(); st$daemonsWanted <- TRUE
   mirai::daemons(n)
+  #how long the spawn held the main thread: the gap to "daemon spawn starts"
+  if(!isTRUE(wait)) vftStartupMark("daemons spawned (main thread free again)")
+  #test hook only, see .vftWarmDelay()
+  delay <- .vftWarmDelay()
   w <- mirai::everywhere({
+    if(..vftDelay.. > 0) Sys.sleep(..vftDelay..)
     .libPaths(..vftLibs..)
     library(visitorFlowTool)
     try({
@@ -1008,9 +1025,247 @@ vftPayloadReport <- function(file = NULL, dir = Sys.getenv("VFT_PERF_DIR", "")){
       invisible(sf::st_transform(sf::st_sfc(sf::st_point(c(8, 47)), crs = 4326), 2056))
     }, silent = TRUE)
     Sys.getpid()
-  }, ..vftLibs.. = .libPaths())
-  mirai::call_mirai(w)
-  unlist(lapply(w, function(x) if(is.numeric(x$data)) x$data else NA_integer_))
+  }, ..vftLibs.. = .libPaths(), ..vftDelay.. = delay)
+  pidsOf <- function(w)
+    unlist(lapply(w, function(x) if(is.numeric(x$data)) x$data else NA_integer_))
+
+  if(isTRUE(wait)){
+    mirai::call_mirai(w)
+    st$warmState <- "ready"
+    return(pidsOf(w))
+  }
+
+  st$warm        <- w
+  st$warmN       <- n
+  st$warmState   <- "warming"
+  st$warmStarted <- Sys.time()
+  st$warmGen     <- (if(is.null(st$warmGen)) 0L else st$warmGen) + 1L
+  .vftWarmPoll(st$warmGen, pidsOf)
+  invisible(NULL)
+}
+
+#' Seconds each daemon sleeps before warming. 0 unless VFT_WARM_DELAY_S is set.
+#'
+#' A TEST HOOK, nothing else: it stretches the warm-up so the red "warming up"
+#' bar in .vftWhenWarm() can be reached by a test - on a fast host the real
+#' warm-up is over long before anyone can confirm step 1.
+.vftWarmDelay <- function(){
+  s <- suppressWarnings(as.numeric(trimws(Sys.getenv("VFT_WARM_DELAY_S", "0"))))
+  if(!isTRUE(is.finite(s)) || s < 0) 0 else s
+}
+
+#' How long a warm-up may take before jobs stop waiting for it, in seconds.
+#'
+#' A safety valve like VFT_BUSY_MAX_S, not a timeout: nothing is cancelled. A
+#' warm-up that never finishes - a daemon that died while loading - must not hold
+#' every job behind a red bar forever. Past this, the pool is declared ready and
+#' the next dispatch goes through .vftEnsureDaemons() as usual, which revives a
+#' dead pool. The test hook's artificial delay is added on top, so stretching
+#' the warm-up does not trip the valve instead.
+VFT_WARM_MAX_S <- 120
+
+#' Share of the daemons that have finished warming, 0..1. 1 when there is no
+#' warm-up in progress.
+.vftWarmShare <- function(){
+  st <- .vftP()
+  w  <- st$warm
+  if(identical(st$warmState, "pending")) return(0)
+  if(!identical(st$warmState, "warming") || !length(w)) return(1)
+  done <- vapply(w, function(x) !mirai::unresolved(x), logical(1))
+  mean(done)
+}
+
+#' Watch the warm-up from later()'s loop and declare the pool ready when it is.
+#'
+#' Also prints the startup line global.R used to print: the worker pids only
+#' exist once the warm-up has run, and they are what tells a working pool from
+#' "async work is not leaving the main process".
+#' @param gen the warm-up this poller belongs to; a newer .vftStartDaemons()
+#'   retires it
+.vftWarmPoll <- function(gen, pidsOf){
+  tick <- function(){
+    st <- .vftP()
+    if(!identical(st$warmGen, gen) || !identical(st$warmState, "warming"))
+      return(invisible(NULL))
+    w       <- st$warm
+    done    <- all(vapply(w, function(x) !mirai::unresolved(x), logical(1)))
+    elapsed <- as.numeric(difftime(Sys.time(), st$warmStarted, units = "secs"))
+    if(!done && elapsed < VFT_WARM_MAX_S + .vftWarmDelay()){
+      later::later(tick, 0.25)
+      return(invisible(NULL))
+    }
+    st$warmState <- "ready"
+    st$warm      <- NULL
+    if(!done)
+      message("visitorFlowTool: daemon warm-up still unfinished after ",
+              VFT_WARM_MAX_S + .vftWarmDelay(), " s; letting jobs through anyway.")
+    pids <- if(done) pidsOf(w) else NA_integer_
+    vftStartupMark("daemons warmed")
+    message("visitorFlowTool: main pid ", Sys.getpid(),
+            "; async worker pids ", paste(pids, collapse = ", "),
+            "; VFT_WORKERS=", Sys.getenv("VFT_WORKERS", "<unset>"),
+            " -> workers=", st$warmN,
+            "; mirai connections=",
+            tryCatch(mirai::status()$connections, error = function(e) "ERROR"),
+            "; job timeout=",
+            {tm <- .vftTimeoutMs(); if(is.null(tm)) "off" else paste0(tm/1000, "s")},
+            "; warm-up ", round(elapsed, 1), " s")
+    #only on a FINISHED warm-up: past the safety valve the pids are simply not
+    #known yet, which says nothing about where jobs will run
+    if(done && (!length(pids) || anyNA(pids) || any(pids == Sys.getpid())))
+      message("*** WARNING: async work is NOT leaving the main process. Every job ",
+              "will freeze every connected user for its full duration. ***")
+    #the one-off jobs that need a warm pool, now that there is one
+    tryCatch(vftProtectedAreasEnsureCache(), error = function(e)
+      message("visitorFlowTool: protected-areas cache not prepared: ",
+              conditionMessage(e)))
+    invisible(NULL)
+  }
+  later::later(tick, 0.25)
+}
+
+#' Can a job be dispatched now? TRUE in dev (no pool was ever wanted) and once
+#' the warm-up started by .vftStartDaemons(wait = FALSE) is over.
+vftDaemonsReady <- function(){
+  st <- .vftP()
+  !isTRUE(st$daemonsWanted) || !.vftWarmPending()
+}
+
+#' Is the pool still on its way - not yet spawned ("pending") or warming?
+.vftWarmPending <- function(){
+  isTRUE(.vftP()$warmState %in% c("pending", "warming"))
+}
+
+#' Start the pool once the first visitor has their map - not before.
+#'
+#' Even without waiting for the warm-up, spawning the daemons is not free:
+#' mirai::daemons() took 1.8 s on the dev box, plus 0.9 s to load mirai, all on
+#' the main thread. And the warm-up, though it runs in the daemons, competes for
+#' the same few cores and the same disk as the main process loading sf and
+#' leaflet for the first map. Measured 2026-10-12 with the pool started right
+#' after the first page: the browser's own page request waited behind the spawn,
+#' and the map took 15 s to arrive. No job can be sent before step 1's map is up
+#' and an area is drawn on it, so global.R only records that a pool is wanted and
+#' the spawn happens in .vftDaemonsKick(), called:
+#'   - after the first session's first flush (vftDaemonsKickAfterFlush(), from
+#'     app_server()), i.e. once the map has gone out;
+#'   - by the fallback timer here, if nobody connects;
+#'   - at once by .vftWhenWarm() if a job somehow comes first.
+#' @param n workers
+#' @param fallback seconds after which the pool is started regardless
+.vftStartDaemonsSoon <- function(n = .vftWorkerCount(), fallback = 30){
+  st <- .vftP()
+  st$daemonsWanted <- TRUE
+  st$warmState     <- "pending"
+  st$pendingN      <- n
+  later::later(.vftDaemonsKick, fallback)
+  invisible(NULL)
+}
+
+#' How many sessions are connected to this process right now.
+#'
+#' Its own counter, not vftPerf's: that one only counts while VFT_PERF is on,
+#' and .vftWhenWarm() needs the number whatever the profiling switch says.
+#' Started from app_server(); NULL sessions (tests) are not counted.
+vftLiveSessions <- function(){
+  n <- .vftP()$liveSessions
+  if(is.null(n)) 0L else n
+}
+
+#' Count `session` in, and out again when it ends.
+vftLiveSessionStart <- function(session){
+  st <- .vftP()
+  st$liveSessions <- vftLiveSessions() + 1L
+  session$onSessionEnded(function() st$liveSessions <- max(0L, vftLiveSessions() - 1L))
+  invisible(NULL)
+}
+
+#' Kick the pool after this session's first flush - the first map is out.
+#'
+#' later(), not inside onFlushed: the flush callback runs before the messages
+#' are written to the socket, and the spawn would hold them back again. A no-op
+#' for every session but the first, and in dev.
+vftDaemonsKickAfterFlush <- function(session){
+  if(!identical(.vftP()$warmState, "pending")) return(invisible(NULL))
+  session$onFlushed(function() later::later(.vftDaemonsKick, 0.5), once = TRUE)
+  invisible(NULL)
+}
+
+#' Spawn the pool if it is still only pending. Safe to call any number of times.
+.vftDaemonsKick <- function(){
+  st <- .vftP()
+  if(!identical(st$warmState, "pending")) return(invisible(FALSE))
+  vftStartupMark("daemon spawn starts")
+  tryCatch(.vftStartDaemons(st$pendingN, wait = FALSE), error = function(e){
+    #out of the way, so the next dispatch reaches .vftEnsureDaemons()'s revival
+    #or the inline path rather than waiting for a pool that will never come
+    st$warmState <- "ready"
+    message("visitorFlowTool: could not start the daemon pool: ", conditionMessage(e))
+  })
+  invisible(TRUE)
+}
+
+#' Run `run()` once the daemon pool is warm - inline if this session is alone,
+#' otherwise behind a red bar until the pool is ready.
+#'
+#' Without this gate a job dispatched during the warm-up would find
+#' `connections < 1` - daemons that are still connecting - and vftFuture() would
+#' run it INLINE on the main thread, freezing everyone. Or .vftEnsureDaemons()
+#' would take it for a dead pool and restart a healthy one.
+#'
+#' When the pool is already warm, which is nearly always, `run()` is called in the
+#' same tick and nothing about the dispatch changes.
+#'
+#' The bar is its own shiny::Progress beside the job's bar, painted red through
+#' the same `vft-queued` class the queue display uses (CSS in app_ui()), with the
+#' share of daemons warmed as its value. No session (tests) means no bar; the job
+#' still waits.
+#' @param run the dispatch, called with no arguments
+#' @param session the job's session, or NULL
+#' @param reject where an error raised by `run()` goes
+.vftWhenWarm <- function(run, session = NULL, reject = stop){
+  if(vftDaemonsReady()) return(run())
+  #a job before the first page (tests, mostly): no reason to wait for the timer
+  .vftDaemonsKick()
+
+  #Alone on a freshly started server: run the job here, now. The daemons are
+  #still busy loading packages, so waiting for them would cost the user the
+  #whole warm-up, and the only person a main-thread job could freeze is the one
+  #who asked for it. That trade only holds for a single session - with two or
+  #more, an inline job would freeze the others too, so they wait behind the
+  #red bar below instead.
+  if(vftLiveSessions() <= 1L) return(run(warmInline = TRUE))
+
+  #never an empty bar: with one daemon the share sits at 0 until the very end,
+  #and an empty bar shows no red at all - so start at a tenth
+  barValue <- function() 0.1 + 0.9 * .vftWarmShare()
+
+  sp <- NULL
+  if(!is.null(session)){
+    sp <- tryCatch({
+      tr  <- .vftT(session)
+      bar <- shiny::Progress$new(session, min = 0, max = 1)
+      bar$set(value = barValue(),
+              message = tr("Warte, bis der Server fertig hochgefahren ist!"))
+      pid <- bar$.__enclos_env__$private$id
+      session$sendCustomMessage("vft-progress-class",
+                                list(id = pid, cls = "vft-queued", add = TRUE))
+      bar
+    }, error = function(e) NULL)
+  }
+
+  tick <- function(){
+    if(!vftDaemonsReady()){
+      if(!is.null(sp)) tryCatch(sp$set(value = barValue()), error = function(e) NULL)
+      later::later(tick, 0.25)
+      return(invisible(NULL))
+    }
+    if(!is.null(sp)) tryCatch(sp$close(), error = function(e) NULL)
+    tryCatch(run(), error = function(e) reject(e))
+    invisible(NULL)
+  }
+  later::later(tick, 0.25)
+  invisible(NULL)
 }
 
 #' Restart the pool if every daemon has died.
@@ -1028,6 +1283,10 @@ vftPayloadReport <- function(file = NULL, dir = Sys.getenv("VFT_PERF_DIR", "")){
 .vftEnsureDaemons <- function(){
   #never started on purpose -> dev, inline is the intended path, leave it alone
   if(!isTRUE(.vftP()$daemonsWanted)) return(invisible(0L))
+  #still warming: daemons that are still connecting count 0 connections too, and
+  #restarting them would throw the warm-up away. .vftWhenWarm() keeps jobs out of
+  #here until it is over; this guards any other caller.
+  if(.vftWarmPending()) return(invisible(NA_integer_))
   n <- .vftWorkerCount()
   conns <- tryCatch(mirai::status()$connections, error = function(e) NA_integer_)
   if(!length(conns) || is.na(conns) || conns > 0L) return(invisible(conns))
@@ -1593,7 +1852,16 @@ vftFuture <- function(expr, ..., envir = parent.frame(), progress = NULL){
   .vftQueueEnqueue(qid)
 
   p <- promises::promise(function(resolve, reject){
-    tryCatch({
+    #The whole dispatch, run at once when the daemon pool is warm and otherwise
+    #once it is - behind a red bar, see .vftWhenWarm().
+    dispatch <- function(warmInline = FALSE) tryCatch({
+      #The pool is still warming and this session is alone on the server: run
+      #here rather than wait. See .vftWhenWarm() for why that is the better
+      #trade on a freshly started app.
+      if(isTRUE(warmInline)){
+        resolve(vftTime("async:INLINE-warmup", eval(ex, envir)))
+        return(invisible(NULL))
+      }
       #dev / load_all: global.R installs a sequential plan and never starts
       #daemons. Run inline so developing against the package keeps working, and
       #so a globals problem cannot hide behind a backend difference.
@@ -1689,6 +1957,8 @@ vftFuture <- function(expr, ..., envir = parent.frame(), progress = NULL){
       promises::then(promises::as.promise(m),
                      onFulfilled = resolve, onRejected = reject)
     }, error = function(e) reject(e))
+
+    .vftWhenWarm(dispatch, jobSession, reject)
   })
 
   #finally(), not then(): the count has to come back down on a FAILED job too,

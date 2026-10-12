@@ -70,6 +70,24 @@ vftSetBanner <- function(id, src){
 #'
 #' The cost of unwrapping is that the client can no longer swap that text, so a
 #' caller using this must refresh its own labels when the language changes.
+#' A step UI's half of `shiny.i18n::usei18n()`: client-side mode, no markup.
+#'
+#' usei18n() does two things. It switches the Translator so that `t()` returns
+#' swappable `<span class="i18n">` tags, and it emits the WHOLE translation table
+#' as an inline script, plus shiny-i18n.js and a hidden `i18n-state` input. Each
+#' of the six step UIs called it, so the page carried the table six times - 1.25
+#' of the page's 1.44 MB, measured 2026-10-12 - along with six copies of the
+#' script and six inputs sharing one id. Every visitor downloaded that before
+#' seeing anything, and on a cold start it came on top of the server's own
+#' start-up. app_ui() now calls usei18n() once, and the step UIs call this.
+#'
+#' Still does the switch, so a step UI built on its own (a test) gets tags from
+#' `t()` exactly as before; it just does not get the browser-side table.
+vftUseI18n <- function(i18n){
+  i18n$use_js()
+  NULL
+}
+
 vftTrText <- function(i18n, key){
   if(is.null(i18n)) return(key)
   out <- suppressWarnings(try(i18n$t(key), silent = TRUE))

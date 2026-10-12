@@ -16,7 +16,7 @@ VFT_SM_SLIDER_CSS <- "
 step2_ui <- function(id, i18n){
   shiny::fluidPage(
     #activate translation for this ui
-    shiny.i18n::usei18n(i18n),
+    vftUseI18n(i18n), #the table itself is emitted once, in app_ui()
 
     shinyjs::useShinyjs(),
     #the page banner (language select, title, logo, help/info) now lives once

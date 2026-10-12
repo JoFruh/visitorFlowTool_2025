@@ -332,6 +332,21 @@ paintWindowCells <- function(e, res = PAINT_RES){
   ((terra::xmax(e) - terra::xmin(e)) / res) * ((terra::ymax(e) - terra::ymin(e)) / res)
 }
 
+#' paintWindowCells(paintWindowExt(shp, res), res), without terra.
+#'
+#' The same grid-snapped window, counted with plain arithmetic on the bbox.
+#' paintAreaTooLarge() runs on every outline change in step 1 - a closed ring
+#' included - and terra::ext() there made the FIRST closed ring of a process
+#' load the terra namespace on the main thread: 19 s on the dev box
+#' (2026-10-12), with the ring not appearing until it was done. Since global.R
+#' stopped loading tmap (which pulled terra in), that was the first terra call
+#' of a visit. data-raw/verify_startup.R checks the two counts agree.
+paintWindowCellsOf <- function(shp, res = PAINT_RES){
+  bb <- sf::st_bbox(shp)
+  (ceiling(bb[["xmax"]] / res) - floor(bb[["xmin"]] / res)) *
+    (ceiling(bb[["ymax"]] / res) - floor(bb[["ymin"]] / res))
+}
+
 #' Is this area past the ceiling a land cover baseline can be built for?
 #'
 #' Answers ahead of time the question paintLandcoverSeed() otherwise answers by
@@ -363,7 +378,7 @@ paintAreaTooLarge <- function(aoi, buffer_m = 250, max_cells = 40e6,
   n <- try({
     shp <- sf::st_union(sf::st_transform(geom, 2056))
     if(buffer_m > 0) shp <- sf::st_buffer(shp, buffer_m)
-    paintWindowCells(paintWindowExt(shp, res), res)
+    paintWindowCellsOf(shp, res)
   }, silent = TRUE)
   if(inherits(n, "try-error") || !is.finite(n)) return(FALSE)
   n > max_cells

@@ -11,7 +11,7 @@ vftDbg("UI1")
             #R/layout_helpers.R.
             shiny::fluidPage(class = "vft-fit-page",
               #activate translation for this ui
-              shiny.i18n::usei18n(i18n),
+              vftUseI18n(i18n), #the table itself is emitted once, in app_ui()
               #the page banner (language select, title, logo, help/info) now
               #lives once in the nav bar - see vftStepNav() in R/app_ui.R. These
               #three inputs stay, just hidden: this step's server still listens
@@ -133,8 +133,12 @@ vftDbg("UI1")
             #be on a tall monitor; the stylesheet overrides it.
             shiny::fluidRow(class = "vft-grow",
               shiny::column(12, align = "center",
-                     shiny::div(class = "vft-mapframe",
-                       leaflet::leafletOutput(shiny::NS(id, "areaSelectMap"), height = 600)
+                     #position:relative so the loading card below can sit over the
+                     #map without taking space in the grow row
+                     shiny::div(class = "vft-mapframe", style = "position:relative;",
+                       leaflet::leafletOutput(shiny::NS(id, "areaSelectMap"), height = 600),
+                       vftMapLoading(shiny::NS(id, "areaSelectMap"),
+                                     i18n$t("Karte wird geladen …"))
                      )
               )
             ),

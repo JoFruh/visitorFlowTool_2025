@@ -50,6 +50,15 @@ app_ui <- function(){
             || document.getElementById(m.id);
       if(el) el.classList[m.add ? 'add' : 'remove'](m.cls);
     });
+    // cold-start timings, sent to the first session of each process only - so
+    // they can be read on a server whose logs are out of reach. See
+    // vftStartupReport() in R/perf_helpers.R.
+    Shiny.addCustomMessageHandler('vft-startup', function(m){
+      var mk = [].concat(m.mark), at = [].concat(m.at);
+      for(var i = 0; i < mk.length; i++)
+        console.info('visitorFlowTool startup: ' + Number(at[i]).toFixed(2) +
+                     ' s after the R process started - ' + mk[i]);
+    });
   ")),
 
   #The hidden downloadButton("downloadSave") that stood here is gone. It existed
@@ -66,6 +75,13 @@ app_ui <- function(){
   #languages as data attributes - it is static markup, so it cannot re-render
   #when the language changes and swaps them on the client instead.
   vftStepNav(i18n),
+
+  #the translation table for the browser, ONCE for the whole page - the step
+  #UIs below only switch the Translator to tags (vftUseI18n()). Each of them
+  #used to emit the table itself: six copies, 1.25 MB of a 1.44 MB page.
+  #AFTER vftStepNav(), which reads every language through vftTrAll() and was
+  #written for a Translator not yet in tag mode (R/banner_helpers.R).
+  shiny.i18n::usei18n(i18n),
 
   #one height scale for all six step pages, so that a short screen shrinks the
   #maps and the scroll boxes instead of pushing the confirm button - always the
@@ -111,6 +127,45 @@ app_ui <- function(){
                      )
   )
 )
+}
+
+
+#### The page, rendered once ####
+
+#' Serve `ui` as HTML rendered on the first request and reused for every one
+#' after it.
+#'
+#' Shiny renders a static UI object to HTML afresh for EVERY page request:
+#' 1.4-1.8 s for this app's page on the dev box (2026-10-12), all of it on the
+#' main thread that serves every connected user - so each visitor opening the
+#' app froze everyone else for that long. Nothing in the page varies between
+#' requests: the language is switched in the browser, the nav bar is static
+#' markup, and no part of the UI reads the request. So it is rendered once.
+#'
+#' Shiny accepts a UI function that returns a finished httpResponse and serves
+#' it untouched (uiHttpHandler()). The render itself is Shiny's own
+#' renderPage(), which is internal - hence getFromNamespace(), and the fallback:
+#' if a Shiny upgrade ever removes it, the plain UI object is returned and Shiny
+#' renders per request exactly as before.
+#'
+#' The first render also registers the resource paths of every dependency
+#' (leaflet, shinyjs, ...) with the server, process-wide, so the cached page's
+#' script and stylesheet links keep resolving.
+#' @param ui the tag object app_ui() built
+#' @return a function(req) for ui.R to end on
+#' @noRd
+vftCachedUi <- function(ui){
+  render <- tryCatch(utils::getFromNamespace("renderPage", "shiny"),
+                     error = function(e) NULL)
+  cache <- new.env(parent = emptyenv())
+  function(req){
+    if(is.null(render)) return(ui)
+    if(is.null(cache$resp)){
+      html <- render(ui, 0, isTRUE(shiny::getShinyOption("testmode", default = FALSE)))
+      cache$resp <- shiny::httpResponse(200L, content = html)
+    }
+    cache$resp
+  }
 }
 
 

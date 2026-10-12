@@ -536,10 +536,32 @@
   function step3NotYet() { return !shown(aoiSliderBox()); }
 
   // The slider runs from 0 on the left up to 20 on the right, and starts on
-  // 11: "reaching 8" is a value of 8 or below, sent once the slider rests.
+  // the suggested threshold (vftSuggestAoIThreshold(), step3_server.R), which
+  // can lie either side of 8. "Reaching 8" is therefore reaching it from
+  // wherever the slider stood when the hint began: 8 or below from above, 8
+  // or above from below - and, starting on 8 itself, any move at all.
+  var AOI_STOP = 8;
+
+  function aoiValue() {
+    var input = document.getElementById('step3-AOISlider');
+    var s = input && window.jQuery && jQuery(input).data('ionRangeSlider');
+    var values = s && s.options && s.options.values;
+    return s && s.result && values ? Number(values[s.result.from]) : NaN;
+  }
+
+  function aoiReached(start, v) {
+    if (start > AOI_STOP) { return v <= AOI_STOP; }
+    if (start < AOI_STOP) { return v >= AOI_STOP; }
+    return v !== AOI_STOP;
+  }
+
+  // the value Shiny sends once the slider comes to rest
   function watchAoiThreshold(ctx) {
+    ctx.startValue = aoiValue();
     ctx.jq('shiny:inputchanged', function (e) {
-      if (e.name === 'step3-AOISlider' && Number(e.value) <= 8) { ctx.flag = true; }
+      if (e.name === 'step3-AOISlider' && aoiReached(ctx.startValue, Number(e.value))) {
+        ctx.flag = true;
+      }
     });
   }
 
@@ -549,7 +571,6 @@
   // "20", its `from` an index into them. Its drag ends when `dragging` is
   // off (pointerMove() reads it); the change event is what its binding sends
   // to Shiny on (forceIonSliderTextUpdate() in shinyWidgets does the same).
-  var AOI_STOP = 8;
 
   function clampAoi(ctx) {
     if (ctx.clamped || !window.jQuery) { return; }
@@ -560,7 +581,9 @@
     // moved by the user since the hint began
     if (ctx.startFrom == null) { ctx.startFrom = s.result.from; }
     if (s.result.from === ctx.startFrom) { return; }
-    if (!(Number(values[s.result.from]) <= AOI_STOP)) { return; }
+    var start = ctx.startValue;
+    if (start == null || isNaN(start)) { start = Number(values[ctx.startFrom]); }
+    if (!aoiReached(start, Number(values[s.result.from]))) { return; }
     var at = values.map(Number).indexOf(AOI_STOP);
     if (at < 0) { return; }
     ctx.clamped = true;

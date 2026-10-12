@@ -818,3 +818,61 @@ vftPerfSummary <- function(file = .vftP()$file){
                     stringsAsFactors = FALSE)
   out[order(-out$user_seconds), ]
 }
+
+# ------------------------------------------------------------ cold start ---
+
+#' Note how far into the process's life a startup milestone was reached.
+#'
+#' `proc.time()[["elapsed"]]` counts from the moment the R process started, so the
+#' first mark already includes R's own start-up and the package load - the part a
+#' visitor waits through that no log line inside global.R could otherwise see.
+#' Unlike the stall log this is ALWAYS on, whatever VFT_PERF says: it is a handful
+#' of rows per process, and it is the only way to read a production cold start.
+#'
+#' Each mark is message()d (the Shiny Server log) and kept, so the first session
+#' can also print the table in the browser's console - see
+#' vftStartupReport(). A label is recorded once; later calls are ignored, so the
+#' per-session call sites ("first session", "step 1 map shown") need no guard.
+vftStartupMark <- function(label){
+  st <- .vftP()
+  if(is.null(st$startup))
+    st$startup <- data.frame(mark = character(0), at_s = numeric(0),
+                             stringsAsFactors = FALSE)
+  if(label %in% st$startup$mark) return(invisible(FALSE))
+  at <- proc.time()[["elapsed"]]
+  st$startup[nrow(st$startup) + 1L, ] <- list(label, round(at, 2))
+  message(sprintf("visitorFlowTool startup: %6.2f s  %s", at, label))
+  invisible(TRUE)
+}
+
+#' Send the startup table to the browser console, where it can be read on a
+#' server whose logs are out of reach. Once per process: the first session is
+#' the one that waited for the cold start. Marks reached after this (daemons
+#' warmed, tmap loaded) are sent as they come, by the later() below, for as long
+#' as that session lasts.
+vftStartupReport <- function(session){
+  st <- .vftP()
+  if(isTRUE(st$startupReported)) return(invisible(NULL))
+  st$startupReported <- TRUE
+  sent <- 0L
+  push <- function(){
+    tab <- st$startup
+    if(!is.null(tab) && nrow(tab) > sent){
+      rows <- tab[(sent + 1L):nrow(tab), , drop = FALSE]
+      sent <<- nrow(tab)
+      tryCatch(session$sendCustomMessage("vft-startup",
+                                         list(mark = rows$mark, at = rows$at_s)),
+               error = function(e) NULL)
+    }
+  }
+  push()
+  #keep pushing late marks for two minutes - long enough for the warm-ups
+  n <- 0L
+  tick <- function(){
+    if(isTRUE(session$isClosed())) return(invisible(NULL))
+    push(); n <<- n + 1L
+    if(n < 120L) later::later(tick, 1)
+  }
+  later::later(tick, 1)
+  invisible(NULL)
+}

@@ -20,6 +20,53 @@ vftOffscreenDevice <- function(expr){
   expr
 }
 
+#' Step 1's base map: the Swiss border over tmap's three view-mode basemaps.
+#'
+#' This was `tmap_leaflet(tm_shape(countryshape) + tm_borders(...))`, and it was
+#' the only reason step 1 needed tmap. Loading tmap pulls in stars, lwgeom,
+#' raster, sp, XML, data.table and more - 12 s on the dev box - and global.R did
+#' it before the port opened, so every cold start showed a blank page for it.
+#' These are the calls that tmap 4.3 emitted for that map, written out with
+#' leaflet directly. data-raw/verify_startup.R compares them with tmap's output,
+#' so if a tmap upgrade changes the look, the check fails rather than the map
+#' quietly drifting.
+#'
+#' Not added, on purpose: the leafletOptions(doubleClickZoom = FALSE, ...) the
+#' old call passed in. tmap ignored them - its widget carried only crs and
+#' attributionControl - so adding them now would change how the map behaves.
+#' @param countryshape the border, sf in EPSG:4326
+#' @noRd
+vftCountryBaseMap <- function(countryshape){
+  bases <- c("Esri.WorldGrayCanvas", "OpenStreetMap", "Esri.WorldTopoMap")
+  map <- leaflet::leaflet(options = leaflet::leafletOptions(attributionControl = TRUE)) |>
+    leaflet::addMapPane("tmap405", zIndex = 405) |>
+    leaflet::addLayersControl(baseGroups = bases, overlayGroups = "countryshape",
+                              position = "topleft",
+                              options = leaflet::layersControlOptions(collapsed = TRUE,
+                                                                      autoZIndex = TRUE))
+  for(b in bases)
+    map <- leaflet::addProviderTiles(map, b, group = b,
+                                     options = leaflet::tileOptions(maxNativeZoom = 17,
+                                                                    pane = "tilePane"))
+  #st_zm: the border file is XYZ, and tmap sends only lng/lat
+  map <- leaflet::addPolygons(map, data = sf::st_zm(sf::st_geometry(countryshape)),
+                              layerId = "X0000001", group = "countryshape",
+                              stroke = TRUE, color = "#006400", weight = 3,
+                              opacity = 1, fill = TRUE, fillColor = "#00000000",
+                              fillOpacity = 1, dashArray = "", smoothFactor = 1,
+                              noClip = FALSE,
+                              options = leaflet::pathOptions(interactive = FALSE,
+                                                             pane = "tmap405"))
+  #tmap opened the map on the border's extent through x$fitBounds, not a
+  #fitBounds() call - so the saved-shape branch's own fitBounds() still wins.
+  #tmap pads the extent by 2% of its width/height on every side.
+  bb <- sf::st_bbox(countryshape)
+  dx <- 0.02 * (bb[["xmax"]] - bb[["xmin"]]); dy <- 0.02 * (bb[["ymax"]] - bb[["ymin"]])
+  map$x$fitBounds <- list(bb[["ymin"]] - dy, bb[["xmin"]] - dx,
+                          bb[["ymax"]] + dy, bb[["xmax"]] + dx, list())
+  map
+}
+
 #' Step 1 - choose the area of interest.
 #'
 #' FIRST-TOUCH SINGLETON (Stage 5). Built once, at session start, and reused for
@@ -139,6 +186,14 @@ step1_server <- function(id, i18n,
       sf::st_crs(.GlobalEnv$.vft_countryshape) <- 4326
     }
     countryshape <- .GlobalEnv$.vft_countryshape
+    #the same border in metres, for the checks on a closed ring (below). In
+    #4326 sf sends them through s2's spherical geometry: 0.5-0.9 s per ring
+    #against this 52k-vertex border, against 0.09 s planar - and the user was
+    #looking at a closed ring that did not appear for all of it.
+    if (!exists(".vft_countryshape2056", envir = .GlobalEnv)) {
+      .GlobalEnv$.vft_countryshape2056 <- sf::st_transform(sf::st_zm(countryshape), 2056)
+    }
+    countryshape2056 <- .GlobalEnv$.vft_countryshape2056
 
     r1$pathNetwork <- NULL
 
@@ -254,15 +309,17 @@ step1_server <- function(id, i18n,
     r1$obsPolyDrawn <- shiny::observeEvent(input$polyDrawn, {
       poly <- vftPolyDrawSf(input$polyDrawn)
       if(is.null(poly)) return(invisible(NULL))
+      #both checks in EPSG:2056, planar (see countryshape2056 above)
+      poly2056 <- sf::st_transform(poly, 2056)
 
       #check if polygon is not valid
-      if(!isTRUE(all(sf::st_is_valid(poly)))){
+      if(!isTRUE(all(sf::st_is_valid(poly2056)))){
         shiny::showModal(
           shiny::modalDialog(
             shiny::h3(shiny::HTML(as.character(i18n()$t("Das gezeichnete Polygon war <b>nicht brauchbar</b>, bitte zeichnen Sie ein <b>einfacheres Polygon</b>. <br>(z.B.: keine gekreuzten Linien)"))))
           )
         )
-      }else if(!sf::st_intersects(poly, countryshape, sparse = FALSE)[[1, 1]]){
+      }else if(!sf::st_intersects(poly2056, countryshape2056, sparse = FALSE)[[1, 1]]){
         #check if polygon entirely outside CH
         shiny::showModal(
           shiny::modalDialog(
@@ -425,9 +482,8 @@ step1_server <- function(id, i18n,
     # RENDER MAP ####
     output$areaSelectMap <- leaflet::renderLeaflet({
 
-      #tmap_mode('view') is set once for the process in global.R. It was 3.0s of
-      #main-thread time here, re-setting an unchanged global option on every
-      #render of every session.
+      #No tmap here any more: the base map is plain leaflet (vftCountryBaseMap()
+      #above), so the app never loads tmap at all.
 
       #### the outline this step has settled on ####
       #
@@ -454,15 +510,7 @@ step1_server <- function(id, i18n,
         outline <- sf::st_as_sf(sf::st_transform(outline, "epsg:4326"))
         bb <- sf::st_bbox(outline)
         #map with saved shape
-        vftOffscreenDevice(tmap::tmap_leaflet(
-          tmap::tm_shape(countryshape) +
-            tmap::tm_borders(col = "darkgreen", lwd = 3, zindex = 405) ,
-          # +
-            # tmap::tmap_options(basemap.server = 'OpenStreetMap', basemap.alpha = c(0.5) ),
-          options = leaflet::leafletOptions(doubleClickZoom = FALSE,
-                                            zoomSnap = 0.05, zoomDelta = 0.05,
-                                            wheelPxPerZoomLevel = 60),
-          in.shiny = TRUE)) |>
+        vftCountryBaseMap(countryshape) |>
           leaflet::addMapPane("layer1", zIndex = 410)|> leaflet::addMapPane("layer2", zIndex = 420)|> leaflet::addMapPane("layer3", zIndex = 450) |>
           leaflet::clearGroup("eraseable")|>
           leaflet::addGeoJSON(geojson = geojsonsf::sf_geojson( outline ),
@@ -483,13 +531,7 @@ step1_server <- function(id, i18n,
       }else{
 
         #if no shape exists, do original (empty) map
-        vftOffscreenDevice(tmap::tmap_leaflet(
-          tmap::tm_shape(countryshape) +
-            tmap::tm_borders(col = "darkgreen", lwd = 3, zindex = 405) ,
-          options = leaflet::leafletOptions(doubleClickZoom = FALSE,
-                                            zoomSnap = 0.05, zoomDelta = 0.05,
-                                            wheelPxPerZoomLevel = 60),
-          in.shiny = TRUE)) |>
+        vftCountryBaseMap(countryshape) |>
           leaflet::addMapPane("layer1", zIndex = 410)|> leaflet::addMapPane("layer2", zIndex = 420)|> leaflet::addMapPane("layer3", zIndex = 450)|>
           leaflet::addProviderTiles(
             leaflet::providers$OpenStreetMap,

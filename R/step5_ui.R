@@ -68,7 +68,7 @@ vftDbg("UI6")
       #the workspace body fills it - see R/layout_helpers.R.
       shiny::fluidPage(class = "vft-fit-page",
         #activate translation for this ui
-        shiny.i18n::usei18n(i18n),
+        vftUseI18n(i18n), #the table itself is emitted once, in app_ui()
         shinyjs::useShinyjs(),
         shiny::tags$head(shiny::tags$style(shiny::HTML(STEP5_CSS))),
         #the page banner (language select, title, logo, help/info) now lives

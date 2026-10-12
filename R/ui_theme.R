@@ -148,6 +148,27 @@ vftTip <- function(...) shiny::p(class = "vft-tip", vftIcon("bulb", 16), shiny::
 #' @noRd
 vftBtnLabel <- function(icon, label) shiny::tagList(vftIcon(icon), shiny::span(label))
 
+#' A "loading" card over a map until its first render arrives.
+#'
+#' Static markup, so it shows as soon as the page HTML does - on a cold start
+#' that comes well before the session has built the map, and an empty grey frame
+#' reads as broken. It removes itself, in the browser, on the first shiny:value
+#' (or shiny:error) for `outputId`. Its parent needs position:relative.
+#' @param outputId the map's full (namespaced) output id
+#' @param label the caption, a translated tag or string
+vftMapLoading <- function(outputId, label){
+  shiny::tagList(
+    shiny::div(id = paste0(outputId, "-loading"), class = "vft-map-loading",
+               shiny::span(class = "vft-map-loading-spin"), shiny::span(label)),
+    shiny::tags$script(shiny::HTML(sprintf(
+      "$(document).on('shiny:value shiny:error', function(e){
+         if(e.name !== '%1$s') return;
+         $('#%1$s-loading').remove();
+         $(document).off(e);
+       });", outputId)))
+  )
+}
+
 #' The shared stylesheet, in <head> - see the note at the top of this file.
 #' @noRd
 vftThemeCSS <- function() shiny::tags$head(shiny::tags$style(shiny::HTML(VFT_THEME_CSS)))
@@ -226,6 +247,13 @@ VFT_THEME_CSS <- "
 .vft-sec-head{ margin:0 0 6px; font-size:11px; font-weight:700; letter-spacing:.08em;
   text-transform:uppercase; color:#5b6462; }
 .vft-mapframe{ border:1px solid #d6d9d8; border-radius:10px; overflow:hidden; }
+.vft-map-loading{ position:absolute; inset:0; z-index:1000; display:flex;
+  align-items:center; justify-content:center; gap:10px; background:#f3f5f5;
+  color:#006268; font-weight:700; font-size:16px; }
+.vft-map-loading-spin{ width:22px; height:22px; border-radius:50%;
+  border:3px solid #b3d0d2; border-top-color:#006268;
+  animation:vft-spin 0.9s linear infinite; }
+@keyframes vft-spin{ to{ transform:rotate(360deg); } }
 .vft-step4-frame{ border-radius:10px; overflow:hidden; }
 .tab-content input[type=checkbox], .tab-content input[type=radio]{ accent-color:#006268; }
 
