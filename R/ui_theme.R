@@ -89,6 +89,8 @@ vftGlyph <- function(kind){
     conf  = '<circle cx="9" cy="9" r="7" fill="rgba(198,40,40,0.2)" stroke="#c62828" stroke-width="2"/>',
     orig  = '<circle cx="9" cy="9" r="7" fill="none" stroke="#6a1b9a" stroke-width="2" stroke-dasharray="3 2.5"/>',
     usage = '<path d="M1.5 13 C 6 13, 8 5, 16.5 5" fill="none" stroke="#182db5" stroke-width="4" stroke-linecap="round"/>',
+    #a hot sun: the heatwave simulation
+    heat  = '<circle cx="9" cy="9" r="4" fill="#FF9500" stroke="#b35900" stroke-width="1"/><path d="M9 1.2v2.4M9 14.4v2.4M1.2 9h2.4M14.4 9h2.4M3.5 3.5l1.7 1.7M12.8 12.8l1.7 1.7M3.5 14.5l1.7-1.7M12.8 5.2l1.7-1.7" stroke="#d97700" stroke-width="1.6" stroke-linecap="round"/>',
     #four of the paint materials (grass, water, artificial, tree), as painted
     mat   = '<rect x="1" y="1" width="7.5" height="7.5" rx="1.5" fill="lightgreen"/><rect x="9.5" y="1" width="7.5" height="7.5" rx="1.5" fill="dodgerblue"/><rect x="1" y="9.5" width="7.5" height="7.5" rx="1.5" fill="grey"/><rect x="9.5" y="9.5" width="7.5" height="7.5" rx="1.5" fill="#006400"/>')
   shiny::HTML(paste0('<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">', g, '</svg>'))
@@ -103,11 +105,15 @@ vftGlyph <- function(kind){
 #' `disabled` puts the attribute on the checkbox, where enable() takes it off -
 #' shinyjs::disabled() around the row would mark the LABEL instead.
 #' `checked` is the initial value, as checkboxInput()'s `value`.
+#' `inputClass` adds to the checkbox's class - "vftRailOff" for greyed but live.
+#' `class` adds to the row's.
 #' @noRd
-vftSwitchRow <- function(inputId, label, glyph = NULL, disabled = FALSE, checked = FALSE){
+vftSwitchRow <- function(inputId, label, glyph = NULL, disabled = FALSE, checked = FALSE,
+                         inputClass = NULL, class = NULL){
   shiny::tags$label(
-    class = "vftRailRow",
-    shiny::tags$input(id = inputId, type = "checkbox", class = "vftRailCheck",
+    class = paste(c("vftRailRow", class), collapse = " "),
+    shiny::tags$input(id = inputId, type = "checkbox",
+                      class = paste(c("vftRailCheck", inputClass), collapse = " "),
                       disabled = if(isTRUE(disabled)) NA,
                       checked  = if(isTRUE(checked)) NA),
     if(!is.null(glyph)) shiny::span(class = "vftGlyph", vftGlyph(glyph)),
@@ -241,6 +247,28 @@ VFT_THEME_CSS <- "
 /* a switch on its own, outside a rail card: step 4's cut mode */
 .vftRailRow.vft-switch-pill{ width:auto; min-height:38px; border:1px solid #d3d7d5; background:#ffffff; font-weight:600; }
 .vftRailRow.vft-switch-pill:hover{ border-color:#9fb0ae; background:#ffffff; }
+
+/* A radio group as a segmented control, each choice an icon over its label:
+   the time of day on newVersions (heatBin) and step 5 (heatwaveBin). The class
+   goes on the radioButtons() form-group. Bootstrap's own radio rules carry
+   (0,2,1), hence .form-group.vftSeg in front of every selector here. */
+.form-group.vftSeg{ margin:0; width:100%; }
+.form-group.vftSeg .shiny-options-group{ display:flex; gap:2px; padding:3px 2px; border-radius:9px;
+  background:#e9eded; }
+.form-group.vftSeg .radio-inline{ position:relative; flex:1 1 0; min-width:0; margin:0; padding:0;
+  font-weight:600; }
+.form-group.vftSeg .radio-inline + .radio-inline{ margin-left:0; }
+.form-group.vftSeg .radio-inline input[type=radio]{ position:absolute; opacity:0; width:1px; height:1px;
+  margin:0; }
+.form-group.vftSeg .radio-inline span{ margin-left:0; line-height:normal; }
+.form-group.vftSeg .radio-inline > span{ display:flex; flex-direction:column; align-items:center;
+  justify-content:center; gap:1px; height:42px; padding:0 1px; border-radius:7px;
+  font-size:11px; letter-spacing:-0.01em; white-space:nowrap; color:#4f5856; cursor:pointer; }
+.form-group.vftSeg svg{ width:18px; height:18px; }
+.form-group.vftSeg input:checked + span{ background:#ffffff; color:#006268;
+  box-shadow:0 1px 3px rgba(0,0,0,.18); }
+.form-group.vftSeg input:focus-visible + span{ outline:2px solid #006268; outline-offset:1px; }
+.form-group.vftSeg input:disabled + span{ opacity:.5; cursor:default; }
 
 /* ---- cards, section heads, map frames, form controls ---------------- */
 .vft-card{ background:#ffffff; border:1px solid #d6d9d8; border-radius:10px; padding:10px 12px; }

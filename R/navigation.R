@@ -749,6 +749,61 @@ vftGoBack <- function(r, confirm, from, bannerId, session = shiny::getDefaultRea
 #' @param r the app-level `reactiveValues`.
 #' @param input the app-level `input`.
 #' @param session the app-level session.
+#' Go to the Hitzeminderung page: newVersions, opened on its heat context.
+#'
+#' The nav bar's Hitzeminderung button, and step 5's "create a heat map" link,
+#' which also names the card and the time of day to open on (`target`,
+#' list(card = version name, bin), read by newVersions' enter()). The caller sets
+#' r$selectedVersion for that card itself. Switched off (HEAT_MITIGATION in
+#' R/features.R) the move only says so.
+#'
+#' @param r,session the APP's reactiveValues and session.
+#' @param check passed to vftGoToStep(): the busy/reentrant/reachable refusal.
+#' @param target NULL, or list(card, bin).
+vftGoHitze <- function(r, session = shiny::getDefaultReactiveDomain(), check = TRUE,
+                       target = NULL){
+  if(!vftHeatEnabled()){
+    vftNotImplementedModal(session)
+    return(invisible(NULL))
+  }
+  #already behind this door - the same "nothing to do" the six step buttons
+  #make, asked the same way. Without it, clicking the ringed Hitzeminderung
+  #button re-enters newVersions and redraws the map for no reason. (A target
+  #cannot come from that page, so it always goes.)
+  if(is.null(target) && identical(vftNavCurrentId(r), "vftNav_hitze")) return(invisible(NULL))
+  #Set, then cleared AFTER the flush this navigation runs in - not on the
+  #next line. The clear has to outlive whichever of the two ways the module
+  #reads it:
+  #
+  #  * already built (a singleton, so the common case): vftGoToStep() calls
+  #    enter() synchronously, and the preset has been read by the time this
+  #    observer's next line runs;
+  #  * NOT yet built - the FIRST visit, which is now the ordinary way in,
+  #    because this door no longer waits for steps 3 to 5. There
+  #    vftGoToStep() only bumps the step counter, and the observer that
+  #    constructs the module (and with it enter()) runs later in the flush.
+  #    Clearing on the next line handed that construction a NULL.
+  #
+  #Cleared at all because a later PLAIN return to newVersions - the "Neue
+  #Versionen" button, a save/restore - would otherwise find it still "4" and
+  #preselect Hitzeminderung when nothing asked for that. The same for the target.
+  r$vftContextPreset <- "4"
+  r$vftHeatTarget    <- target
+  #`needs = VFT_HITZE_NEEDS` is what makes this door open on the perimeter
+  #alone. Without it the move is refused for finalPolygons / minThresh -
+  #newVersions' registry `needs`, which context 4 does not read. The page
+  #then runs in heat-only mode; see enter() in R/newVersions_server.R.
+  vftGoToStep(r, "newVersions", session, check = check,
+              needs = VFT_HITZE_NEEDS)
+  #Nothing takes a reactive dependency on these keys outside enter(), which is
+  #isolated, so the writes cost a flush and no re-render.
+  session$onFlushed(function(){
+    r$vftContextPreset <- NULL
+    r$vftHeatTarget    <- NULL
+  }, once = TRUE)
+  invisible(NULL)
+}
+
 vftNavBarServer <- function(r, input, session = shiny::getDefaultReactiveDomain()){
   if(!vftNavEnabled()) return(invisible(NULL))
 
@@ -824,38 +879,7 @@ vftNavBarServer <- function(r, input, session = shiny::getDefaultReactiveDomain(
     shiny::observeEvent(input$vftNav_hitze, vftNotImplementedModal(session),
                         ignoreInit = TRUE)
   }else if("newVersions" %in% steps){
-    goHitze <- function(){
-      #already behind this door - the same "nothing to do" the six step buttons
-      #make, asked the same way. Without it, clicking the ringed Hitzeminderung
-      #button re-enters newVersions and redraws the map for no reason.
-      if(identical(vftNavCurrentId(r), "vftNav_hitze")) return(invisible(NULL))
-      #Set, then cleared AFTER the flush this navigation runs in - not on the
-      #next line. The clear has to outlive whichever of the two ways the module
-      #reads it:
-      #
-      #  * already built (a singleton, so the common case): vftGoToStep() calls
-      #    enter() synchronously, and the preset has been read by the time this
-      #    observer's next line runs;
-      #  * NOT yet built - the FIRST visit, which is now the ordinary way in,
-      #    because this door no longer waits for steps 3 to 5. There
-      #    vftGoToStep() only bumps the step counter, and the observer that
-      #    constructs the module (and with it enter()) runs later in the flush.
-      #    Clearing on the next line handed that construction a NULL.
-      #
-      #Cleared at all because a later PLAIN return to newVersions - the "Neue
-      #Versionen" button, a save/restore - would otherwise find it still "4" and
-      #preselect Hitzeminderung when nothing asked for that.
-      r$vftContextPreset <- "4"
-      #`needs = VFT_HITZE_NEEDS` is what makes this door open on the perimeter
-      #alone. Without it the move is refused for finalPolygons / minThresh -
-      #newVersions' registry `needs`, which context 4 does not read. The page
-      #then runs in heat-only mode; see enter() in R/newVersions_server.R.
-      vftGoToStep(r, "newVersions", session, check = TRUE,
-                  needs = VFT_HITZE_NEEDS)
-      #Nothing takes a reactive dependency on this key outside enter(), which is
-      #isolated, so the write costs a flush and no re-render.
-      session$onFlushed(function() r$vftContextPreset <- NULL, once = TRUE)
-    }
+    goHitze <- function() vftGoHitze(r, session, check = TRUE)
 
     shiny::observeEvent(input$vftNav_hitze, goHitze(), ignoreInit = TRUE)
   }

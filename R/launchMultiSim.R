@@ -19,9 +19,17 @@
 #' @param onPrepDone called once, after the agents have their goals and before the
 #'   ABM starts. Step 5 closes the preparation bar here, so that the two bars
 #'   appear in sequence rather than stacked.
+#' @param minThresh the step-3 threshold, for a heatwave run's weights.
+#' @param edgeTable,vertexTable the graph as tables, when the caller already built
+#'   them (vftSimulateScenario() does for a heatwave run). Built here when NULL.
+#' @param heatwave NULL for a normal run, or list(exposure =
+#'   vftHeatwaveExposure(...), params = VFT_HEATWAVE...). See
+#'   R/heatwave_helpers.R.
 launchMultiSim <- function(pop, network, days, finalPolygons, iter = 1,
                            progress = NULL, progressSim = progress,
-                           base = 0, span = 1, onPrepDone = NULL){
+                           base = 0, span = 1, onPrepDone = NULL,
+                           minThresh = NULL, edgeTable = NULL, vertexTable = NULL,
+                           heatwave = NULL){
 
   p <- function(f, detail = NULL){
     if(!is.null(progress))
@@ -38,12 +46,39 @@ launchMultiSim <- function(pop, network, days, finalPolygons, iter = 1,
   #the worker too, and as_tibble() on edges carrying an sf geometry column is
   #what killed the ABM on tibble < 3.3. See R/graph_helpers.R.
   p(0, "Wegnetz wird für die Simulation aufbereitet...")
-  edgeTable   <- vftGraphTibble(network, "edges")
-  vertexTable <- vftGraphTibble(network, "nodes")
+  if(is.null(edgeTable))   edgeTable   <- vftGraphTibble(network, "edges")
+  if(is.null(vertexTable)) vertexTable <- vftGraphTibble(network, "nodes")
+
+  #### a heatwave run: heat-weighted attractivity, on COPIES ####
+  #What the agents decide on is heated; what goes back to the app is not. The
+  #heated edge weights go to the adjacency lists ONLY - launchSim() keeps the
+  #plain edgeTable, because pathUsage is built from it - and the agents' node
+  #DULN and the areas' DULN are separate copies. See R/heatwave_helpers.R.
+  adjEdges   <- edgeTable
+  aoiPolys   <- finalPolygons
+  nodeDULN   <- NULL
+  attrWeight <- 1
+  if(!is.null(heatwave)){
+    ex <- heatwave$exposure
+    hp <- heatwave$params
+    duln <- vftHeatwaveDULN(unclass(edgeTable)[VFT_DULN_TYPE_COLS], ex$edge, hp$kappa)
+    w    <- vftAttrWeights(edgeTable$SHAPE_Leng, duln, minThresh,
+                           factors = c(hp$legFactor, VFT_ATTR_FACTORS[-1]))
+    #as a plain list: tibble's `[<-` would re-validate every column, geometry
+    #included, for a table that only ever goes to C++
+    cls <- class(adjEdges)
+    adjEdges <- unclass(adjEdges)
+    adjEdges[names(w)] <- w
+    class(adjEdges) <- cls
+
+    nodeDULN <- vftHeatwaveDULN(unclass(vertexTable)[VFT_DULN_TYPE_COLS], ex$node, hp$kappa)
+    aoiPolys$DULN <- finalPolygons$DULN - hp$kappa * unname(ex$area)
+    attrWeight    <- hp$attrWeight
+  }
 
   vftDbg("list of Pointers")
   #prepare adjacency lists for pathfinding in C++ (get pointers to C++ objects: avoids converting large tables back to R)
-  listOfPointers <- generateAdjListAndDistTbl_cpp(edgeTable = edgeTable,
+  listOfPointers <- generateAdjListAndDistTbl_cpp(edgeTable = adjEdges,
                                                   vertexTable = vertexTable)
   #...and the same lists held ONCE on the C++ side, which is what the two path
   #finders read. Handed to them as R lists, they were copied back into C++ on
@@ -60,7 +95,8 @@ launchMultiSim <- function(pop, network, days, finalPolygons, iter = 1,
     dayPop <- subsetPopulation(pop, currentDay, singleAgent = FALSE)
 
     vftDbg("Determine Agent Characteristics")
-    dayPop <- determineAgentCharacteristics(dayPop, currentDay, network, finalPolygons = finalPolygons, listOfPointers = listOfPointers)
+    dayPop <- determineAgentCharacteristics(dayPop, currentDay, network, finalPolygons = aoiPolys,
+                                            listOfPointers = listOfPointers, attrWeight = attrWeight)
   }
   #launch a specific simulation
 
@@ -78,7 +114,10 @@ launchMultiSim <- function(pop, network, days, finalPolygons, iter = 1,
                        listOfPointers = listOfPointers, iter = iter,
                        trackable = FALSE, areasOfInterest = areasOfInterest,
                        debug = FALSE, progress = progressSim,
-                       edgeTable = edgeTable, vertexTable = vertexTable)
+                       edgeTable = edgeTable, vertexTable = vertexTable,
+                       nodeDULN = nodeDULN)
+  if(!is.null(heatwave))
+    simData$heatwave <- vftHeatwaveSummary(heatwave$exposure, heatwave$params)
 
   #There was a loop here "deleting" listOfPointers element by element. It freed
   #nothing that returning does not free anyway, and removing entries one at a

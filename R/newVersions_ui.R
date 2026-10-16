@@ -61,27 +61,22 @@ NV_CSS <- "
 /* the context radios as one segmented control. The server renders them
    (contextChoice_ui) and may disable the Hitzeminderung choice; the disabled
    label then keeps the opacity that render's script gives it. */
-#newVersions-contextChoice .shiny-options-group,
-#newVersions-heatBin .shiny-options-group{ display:flex; background:#e9eded; }
+/* (The time of day, heatBin, is the same kind of control and shares
+   .vftSeg in R/ui_theme.R with step 5's heatwave choice.) */
+#newVersions-contextChoice .shiny-options-group{ display:flex; background:#e9eded; }
 #newVersions-contextChoice .shiny-options-group{ gap:3px; padding:3px; border-radius:8px; }
-#newVersions-contextChoice .radio-inline,
-#newVersions-heatBin .radio-inline{ position:relative; margin:0; padding:0; }
-#newVersions-contextChoice .radio-inline + .radio-inline,
-#newVersions-heatBin .radio-inline + .radio-inline{ margin-left:0; }
-#newVersions-contextChoice input,
-#newVersions-heatBin input{ position:absolute; opacity:0; width:1px; height:1px; margin:0; }
+#newVersions-contextChoice .radio-inline{ position:relative; margin:0; padding:0; }
+#newVersions-contextChoice .radio-inline + .radio-inline{ margin-left:0; }
+#newVersions-contextChoice input{ position:absolute; opacity:0; width:1px; height:1px; margin:0; }
 /* step5_ui.R puts `.radio-inline span{margin-left:10px}` in <head>, where it
    reaches every radio label in the app - here it pushed each label (and the
    translation span inside it) 10px right and clipped the long ones */
-#newVersions-contextChoice .radio-inline span,
-#newVersions-heatBin .radio-inline span{ margin-left:0; line-height:normal; }
+#newVersions-contextChoice .radio-inline span{ margin-left:0; line-height:normal; }
 #newVersions-contextChoice .radio-inline > span{ display:flex; align-items:center; gap:8px;
   height:22px; padding:0 16px; border-radius:6px; font-weight:600; color:#4f5856; cursor:pointer; }
-#newVersions-contextChoice input:checked + span,
-#newVersions-heatBin input:checked + span{ background:#ffffff; color:#006268;
+#newVersions-contextChoice input:checked + span{ background:#ffffff; color:#006268;
   box-shadow:0 1px 3px rgba(0,0,0,.18); }
-#newVersions-contextChoice input:focus-visible + span,
-#newVersions-heatBin input:focus-visible + span{ outline:2px solid #006268; outline-offset:1px; }
+#newVersions-contextChoice input:focus-visible + span{ outline:2px solid #006268; outline-offset:1px; }
 
 /* ---- the body ------------------------------------------------------ */
 /* Rail | map | scenario column, with the paint panel (Hitzeminderung only)
@@ -243,15 +238,7 @@ input.paintLevelCheckbox{ position:absolute; top:0; left:0; width:100%; height:1
 @keyframes paintToolSpin{ to{ transform:rotate(360deg); } }
 
 /* TIME OF DAY: a radio group styled as a segmented control, each choice a
-   sun icon over its label */
-#newVersions-heatBin{ margin:0; width:100%; }
-#newVersions-heatBin .shiny-options-group{ gap:2px; padding:3px 2px; border-radius:9px; }
-#newVersions-heatBin .radio-inline{ flex:1 1 0; min-width:0; font-weight:600; }
-#newVersions-heatBin .radio-inline > span{ display:flex; flex-direction:column; align-items:center;
-  justify-content:center; gap:1px; height:42px; padding:0 1px; border-radius:7px;
-  font-size:11px; letter-spacing:-0.01em; white-space:nowrap; color:#4f5856; cursor:pointer; }
-#newVersions-heatBin svg{ width:18px; height:18px; }
-#newVersions-heatBin input:disabled + span{ opacity:.5; cursor:default; }
+   sun icon over its label - .vftSeg, in R/ui_theme.R */
 
 /* HEAT MODE: while a heat map is on screen the brush is refused, so rather
    than a panel of greyed buttons the panel holds the heat controls alone,
@@ -630,12 +617,14 @@ vftDbg("UI6")
               #label can hold the <span> i18n$t() returns, so the client
               #translates it like any other label and the server no longer has
               #to re-send the choices on a language change.
-              shiny::radioButtons(
-                inputId = ns("heatBin"), label = NULL, inline = TRUE,
-                choiceNames = lapply(HEAT_BINS, function(b)
-                  shiny::tagList(shiny::HTML(heatBinIconSVG(b)), shiny::span(i18n$t(HEAT_BIN_KEYS[[b]])))),
-                choiceValues = HEAT_BINS,
-                selected = HEAT_BIN_DEFAULT)
+              shiny::tagAppendAttributes(
+                shiny::radioButtons(
+                  inputId = ns("heatBin"), label = NULL, inline = TRUE,
+                  choiceNames = lapply(HEAT_BINS, function(b)
+                    shiny::tagList(shiny::HTML(heatBinIconSVG(b)), shiny::span(i18n$t(HEAT_BIN_KEYS[[b]])))),
+                  choiceValues = HEAT_BINS,
+                  selected = HEAT_BIN_DEFAULT),
+                class = "vftSeg")
             )
           ),
           #filled by planimport.js while a plan is being placed; the paint

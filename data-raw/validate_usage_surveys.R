@@ -172,8 +172,10 @@ PATHS <- list(
   wiggerLines   = "C:/Users/frueh/Documents/Local Data/Shared visitorFlow Project Data/Social Data/Wigger_data/Linien_GEOREF.gdb",
   filBleuDir    = file.path(ONEDRIVE, "Local Data/FilBleuUsage_withCar"),
   glattParkHeat = file.path(ONEDRIVE, "Local Large Datasets/GlattPark/GlattPark_heatMap.tif"),
-  #reference only: the published survey rasters, old areas and old results
-  oldDir        = "H:/Jo/Project Visitor Flow Tool/R/pathUsageComparisons",
+  #reference only: the published survey rasters, old areas and old results.
+  #VFT_VAL_OLD_DIR stands in when the H: share is not mounted (any folder holding
+  #performance_pearson.RData)
+  oldDir        = Sys.getenv("VFT_VAL_OLD_DIR", "H:/Jo/Project Visitor Flow Tool/R/pathUsageComparisons"),
   oldAoiDir     = file.path(ONEDRIVE, "Local Data/pathUsageReplicates")
 )
 FILBLEU_LAYERS <- c("E_bike", "dogWalking", "bike", "walking", "jogging_nordicWalking")
@@ -796,6 +798,10 @@ typeVariant <- function(net, polys, type, share = 0){
     len <- pmax(igraph::edge_attr(net, "SHAPE_Leng"), 10)
     for(nm in grep("^SHAPE_Leng_", igraph::edge_attr_names(net), value = TRUE))
       net <- igraph::set_edge_attr(net, nm, value = len)
+    #The swap is deliberate: stamp the weights as current, or vftSimulateScenario()
+    #recomputes them from DULN on any network prepared before the 2026-10-16 weight
+    #fix (see vftWeightsCurrent() in R/prepare_network.R) and undoes it.
+    igraph::graph_attr(net, "vftWeights") <- ns$VFT_WEIGHTS_VERSION
   }
   if(identical(sp$movement, "flat"))
     for(nm in DULN_NODE_COLS) net <- igraph::set_vertex_attr(net, nm, value = 0)

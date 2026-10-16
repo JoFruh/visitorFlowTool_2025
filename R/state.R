@@ -264,6 +264,14 @@ vftApplyState <- function(r, vals, session, resume = TRUE){
     r$step6FirstRun <- TRUE
   }
 
+  #The session's heat maps belong to the design that was on screen, not to this
+  #one. Nothing else would drop them: newVersionsFirstRun comes back from the
+  #file, usually FALSE, so that page never runs its own drop - and with the same
+  #perimeter and the same card ids an old map would validate against a different
+  #design, on newVersions and in step 5's heatwave simulation alike.
+  hs <- tryCatch(session$userData$vftHeatStore, error = function(e) NULL)
+  if(is.environment(hs)) heatStoreDrop(hs)
+
   #Load the saved sensitivity matrix. terra::rast() has methods for both shapes
   #this can arrive in - a PackedSpatRaster from a current save file, or the xy
   #data.frame older files carry - so both restore here without branching. Only

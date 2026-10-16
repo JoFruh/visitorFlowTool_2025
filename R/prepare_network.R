@@ -44,6 +44,101 @@ vftNetworkPrepared <- function(network){
   }, error = function(e) FALSE))
 }
 
+#### the attractivity-weighted edge distances ####
+
+#' Agent type -> the edge/node DULN column it reads. DULN_WALK_ serves as DULN_ALL.
+#' The order is the C++ side's agent order (agentTypeIndex() in
+#' src/CPP_FUNCTIONS.cpp), and generatePopulation() samples exactly these names.
+VFT_DULN_TYPE_COLS <- c(walkNat   = "DULN_WALK_", walkSoc   = "DULN_WALK1",
+                        dogNat    = "DULN_DOG_N", dogProx   = "DULN_DOG_P",
+                        ebikeNat  = "DULN_EBIKE", bikeSport = "DULN_BIKER",
+                        jogger    = "DULN_JOGGE")
+
+#' The version of the formula below that a prepared graph's weights were computed
+#' with, kept on the graph as the graph attribute `vftWeights`. Graphs prepared
+#' before 2026-10-16 carry none, and their weights run the wrong way.
+VFT_WEIGHTS_VERSION <- 2L
+
+#' The 21 attractivity-weighted distances of every edge.
+#'
+#' `SHAPE_Leng_<type><suffix>`, for the seven agent types and three strengths:
+#' "" (the way to and from an area), "_attr" (the distances behind the area
+#' choice and the `nicestShortest` way home) and "_ATTR" (unused by the ABM),
+#' "slightly, moderately, heavily weighted by attractivity".
+#'
+#'   w = clamp(L * (1 - (DULN / c) / f), 10, L)    c = 34.2423 + minThresh
+#'
+#' with f = 8, 4, 2. A MORE ATTRACTIVE EDGE COUNTS AS SHORTER, so between a short
+#' plain path and a slightly longer attractive one the agent takes the attractive
+#' one. At DULN = c, the step-3 threshold, the distance is reduced by 1/8, 1/4 and
+#' 1/2 respectively. Twice the attractivity (DULN 40 against 20 at c = 39) lets a
+#' path be about 7 %, 15 % and 34 % longer and still win. A distance is never
+#' increased (DULN <= 0 costs the full length) and never below 10 m.
+#'
+#' UNTIL 2026-10-16 THIS RAN THE OTHER WAY: `L * (1 - c / (f * DULN))` grows with
+#' DULN, so an attractive edge cost MORE than a plain one - at minThresh 5 a
+#' 100 m path at DULN 20 cost 75.5 and a 110 m path at DULN 40 cost 96.5 - and an
+#' edge at DULN <= c/f cost the 10 m floor whatever its length. The comment above
+#' it said the opposite ("bigger the attractivity, shorter the distance"), and the
+#' area choice and the movement inside areas always read DULN the right way round.
+#' See VFT_WEIGHTS_VERSION for how graphs prepared before that are caught.
+#'
+#' @param lenv edge lengths in metres (`SHAPE_Leng`).
+#' @param duln a list holding the edge DULN columns, by column name
+#'   (VFT_DULN_TYPE_COLS).
+#' @param minThresh the step-3 attractiveness threshold (NULL reads as 0).
+#' @param factors the three strengths, for "", "_attr", "_ATTR". A heatwave run
+#'   strengthens the first (see VFT_HEATWAVE in R/heatwave_helpers.R).
+#' @return a named list of 21 numeric vectors.
+vftAttrWeights <- function(lenv, duln, minThresh, factors = c(8, 4, 2)){
+  if(is.null(minThresh) || !length(minThresh)) minThresh <- 0
+  cc     <- 34.2423 + minThresh
+  suffix <- c("", "_attr", "_ATTR")
+  types  <- names(VFT_DULN_TYPE_COLS)
+
+  weights <- vector("list", length(types) * length(suffix))
+  names(weights) <- as.vector(outer(types, suffix,
+                                    function(a, b) paste0("SHAPE_Leng_", a, b)))
+  #pmin/pmax in one pass on plain vectors: an NA in a DULN column propagates
+  #instead of raising, as it always has
+  for(k in seq_along(types)){
+    d <- duln[[VFT_DULN_TYPE_COLS[[k]]]]
+    for(j in seq_along(suffix)){
+      weights[[paste0("SHAPE_Leng_", types[[k]], suffix[[j]])]] <-
+        pmax(pmin(lenv * (1 - d / (factors[[j]] * cc)), lenv), 10)
+    }
+  }
+  weights
+}
+
+#' Are a prepared graph's weights the current formula's, and complete?
+#'
+#' FALSE for a graph prepared before VFT_WEIGHTS_VERSION, for one whose
+#' attractivity was edited since (vftShiftAttractivity() drops the stamp), and for
+#' one with edges added after preparation, which arrive without weights - an NA
+#' weight never wins a Dijkstra comparison, so such an edge was never routed on.
+vftWeightsCurrent <- function(network){
+  isTRUE(tryCatch({
+    identical(igraph::graph_attr(network, "vftWeights"), VFT_WEIGHTS_VERSION) &&
+      !anyNA(unlist(igraph::edge_attr(network)[grep("^SHAPE_Leng_.",
+                                                    igraph::edge_attr_names(network))],
+                    use.names = FALSE))
+  }, error = function(e) FALSE))
+}
+
+#' Recompute a prepared graph's 21 weights from its current DULN, and stamp it.
+#' One assignment for all of them: every set_edge_attr() copies the whole graph.
+vftRefreshAttrWeights <- function(network, minThresh){
+  cls <- class(network)
+  ea  <- igraph::edge_attr(network)
+  w   <- vftAttrWeights(ea[["SHAPE_Leng"]], ea[VFT_DULN_TYPE_COLS], minThresh)
+  ea[names(w)] <- w
+  igraph::edge_attr(network) <- ea
+  igraph::graph_attr(network, "vftWeights") <- VFT_WEIGHTS_VERSION
+  class(network) <- cls
+  network
+}
+
 #' The node geometry in EPSG:4326, transformed only if it is not there already.
 #'
 #' IT ALWAYS IS. sf_to_tidygraph3() samples the residential and DULN rasters -
@@ -271,56 +366,20 @@ vftPrepareNetwork <- function(network, finalPolygons, minThresh,
   }
 
   # DETERMINE ATTR WEIGHTED DISTANCES ####
-  # determine new distances that are weighted by attractivity
-  # ex: walkNat, walkNat_attr, walkNat_ATTR => slightly, moderately, heavily weighted by attractivity
-  # bigger the attractivity, shorter the "distance".
-  # 0 and negatives create problems, thus add min()+1
-
-  #Removed min()+1, as these change weight of various DULNs.
-  #Instead, added single value (min(all DULN)) to all DULNs at creation, to bring all values to positive
-
-  #divide distance in a way that, attr values close to the minimum threshold (for AoIs), are halved for ATTR, reduced by 0.25 for attr, and reduced by 0.125 for distance
-  #(minThresh has 24.11 added to avoid 0s and negatives in attractivity maps)
-  #
-  #TWENTY-ONE COLUMNS IN ONE PASS EACH. This was 21 assignments, then 21
-  #"max distance is not increased" clamps by logical index, then 21 "min is not
-  #below 10" clamps by logical index - 63 passes over the edge table, each one
-  #materialising a logical vector and subassigning into an sf data frame.
-  #pmin/pmax is the same arithmetic in one pass on a plain numeric vector, and
-  #it propagates an NA in a DULN column instead of raising "NAs are not allowed
-  #in subscripted assignments", which is what the old form did.
+  #See vftAttrWeights() below for the formula and for why it changed.
   vftDbgCat("PREPARE NETWORK: edges\n")
   p(0.75, "Weggewichte werden berechnet...")
 
-  lenv <- igraph::edge_attr(network, "SHAPE_Leng")
-
-  #DULN_WALK_ serves as DULN_ALL
-  dulnCols <- c(walkNat   = "DULN_WALK_", walkSoc   = "DULN_WALK1",
-                dogNat    = "DULN_DOG_N", dogProx   = "DULN_DOG_P",
-                ebikeNat  = "DULN_EBIKE", bikeSport = "DULN_BIKER",
-                jogger    = "DULN_JOGGE")
-  #plain, _attr, _ATTR => slightly, moderately, heavily weighted by attractivity
-  weightFactors <- c(8, 4, 2)
-  weightSuffix  <- c("", "_attr", "_ATTR")
-
-  weights <- vector("list", length(dulnCols) * length(weightFactors))
-  names(weights) <- as.vector(outer(names(dulnCols), weightSuffix,
-                                    function(a, b) paste0("SHAPE_Leng_", a, b)))
-  for(k in seq_along(dulnCols)){
-    duln <- igraph::edge_attr(network, dulnCols[[k]])
-    for(j in seq_along(weightFactors)){
-      x <- weightFactors[[j]] / (34.2423 + minThresh)
-      #max distance is not increased, min distance is not 0 or negative
-      weights[[paste0("SHAPE_Leng_", names(dulnCols)[[k]], weightSuffix[[j]])]] <-
-        pmax(pmin(lenv * (1 - (1/(x * duln))), lenv), 10)
-    }
-  }
+  weights <- vftAttrWeights(igraph::edge_attr(network, "SHAPE_Leng"),
+                            igraph::edge_attr(network)[VFT_DULN_TYPE_COLS],
+                            minThresh)
 
   #### write it all back onto the graph that came in ####
   p(0.95, "Wegnetz wird zusammengesetzt...")
 
   for(nm in names(weights))
     network <- igraph::set_edge_attr(network, nm, value = weights[[nm]])
+  igraph::graph_attr(network, "vftWeights") <- VFT_WEIGHTS_VERSION
 
   network <- igraph::set_vertex_attr(network, "AOI", value = AOI)
   if(!is.null(parkingCap)){

@@ -1,7 +1,11 @@
 #function to determine Agents' AOI goal, timer, habit etc..
 
 
-determineAgentCharacteristics <- function(dayPop, currentDay, network, finalPolygons, listOfPointers){
+#' @param attrWeight the destination utility's attractivity weight against
+#'   distance; 1 is the calibrated model, a heatwave run raises it
+#'   (R/heatwave_helpers.R).
+determineAgentCharacteristics <- function(dayPop, currentDay, network, finalPolygons, listOfPointers,
+                                          attrWeight = 1){
   # Make sure it closes when we exit this reactive, even if there's an error
   # ABMprogress <- shiny::Progress$new()
   # on.exit(ABMprogress$close())
@@ -209,16 +213,20 @@ determineAgentCharacteristics <- function(dayPop, currentDay, network, finalPoly
   #see adjListsToPtr_cpp(). Built here if a caller did not.
   adjPtr <- listOfPointers$adj
   if(is.null(adjPtr)) adjPtr <- adjListsToPtr_cpp(listOfPointers)
-   AOIInfo <- findClosestAOI_cpp(AOIList,
-                                igraph::V(network)$AOI,
-                                adjPtr,
-                                dayPop$startV,
-                                dayPop$speed,
-                                dayPop$timeExt,
-                                finalPolygons$AOI,
-                                finalPolygons$DULN,
-                                dayPop$agentTyp,
-                                finalPolygons$area)
+  aoiArgs <- list(AOIList,
+                  igraph::V(network)$AOI,
+                  adjPtr,
+                  dayPop$startV,
+                  dayPop$speed,
+                  dayPop$timeExt,
+                  finalPolygons$AOI,
+                  finalPolygons$DULN,
+                  dayPop$agentTyp,
+                  finalPolygons$area)
+  #Only a heatwave run passes the weight: the survey-validation scripts replace
+  #findClosestAOI_cpp() with R hooks of the signature it had before.
+  if(!isTRUE(attrWeight == 1)) aoiArgs$attrWeight <- attrWeight
+  AOIInfo <- do.call(findClosestAOI_cpp, aoiArgs)
 
 # ABMprogress$set(3/4, message = "Erzeugen von Agenten")
 #use AOIList_DULN to translate polygon names to DULN values

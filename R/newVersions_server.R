@@ -64,7 +64,14 @@ newVersions_server <- function(id, networkList, i18n, currentLang, isFirstRun,
                                selectedVersion = shiny::reactive(NULL),
                                #"4" when the nav bar's Hitzeminderung button is what sent the user
                                #here, NULL otherwise. See the contextChoice_ui render below.
-                               contextPreset = shiny::reactive(NULL)){
+                               contextPreset = shiny::reactive(NULL),
+                               #the session's heat maps (heatStoreNew()), a plain environment
+                               #rather than a reactive: shared with step 5, which simulates on
+                               #them, and made once per session in app_server
+                               heatStore = heatStoreNew(),
+                               #list(card, bin) when step 5's "create a heat map" link sent the
+                               #user here: open on that card and that time of day. NULL otherwise.
+                               heatTarget = shiny::reactive(NULL)){
 
   #count this instantiation. A module server should be created once per
   #session; this app re-calls it from an observeEvent on a trigger, so any
@@ -82,7 +89,7 @@ newVersions_server <- function(id, networkList, i18n, currentLang, isFirstRun,
               shp_PA = shp_PA, finalPolygons = finalPolygons,
               versionsUI = versionsUI, DULN = DULN, shape = shape,
               minThresh = minThresh, selectedVersion = selectedVersion,
-              contextPreset = contextPreset)
+              contextPreset = contextPreset, heatTarget = heatTarget)
 
   # r$mapRefresh <- 0
   shiny::moduleServer(id, function(input, output, session) {
@@ -2093,7 +2100,8 @@ shiny::observeEvent(input$ugIgnore, {
 #
 #`heatShown` is list(card, bin) of the map on screen, or NULL. It is the only
 #record of whose map that is, which may not be the selected card's.
-heatStore <- heatStoreNew()
+#`heatStore` is the module's argument: ONE per session, made in app_server and
+#shared with step 5, whose heatwave simulation reads the maps computed here.
 heatShown <- NULL
 
 heatCardKey <- function(pos){
@@ -2120,13 +2128,7 @@ heatAOI <- function(){
 #its key, remembered per `shape` object: asked on every icon refresh, and
 #`shape` only changes when enter() hands in a new one
 heatAoiMemo <- new.env(parent = emptyenv())
-heatAoiKey <- function(){
-  aoi <- heatAOI()
-  if(!is.null(heatAoiMemo$src) && identical(heatAoiMemo$src, aoi)) return(heatAoiMemo$key)
-  heatAoiMemo$key <- tryCatch(paintBaselineKey(aoi), error = function(e) NULL)
-  heatAoiMemo$src <- aoi
-  heatAoiMemo$key
-}
+heatAoiKey <- function() heatAoiKeyCached(heatAoiMemo, heatAOI())
 
 heatIconsFor <- function(card){
   shown <- if(identical(heatShown$card, card)) heatShown$bin else NULL
@@ -2822,7 +2824,8 @@ langChangeObs <- observeEvent(input$languageSelect_7, {
   if(isTRUE(shiny::isolate(input$contextChoice) == 1))
     networkLegends(leaflet::leafletProxy("versionMap"))
   if(!is.null(usageDrawn))
-    usageLegend(leaflet::leafletProxy("versionMap"), sub("^.* ", "", usageDrawn))
+    usageLegend(leaflet::leafletProxy("versionMap"), sub("^.* ", "", usageDrawn),
+                usageStash[[sub(" .*$", "", usageDrawn)]]$hw)
 })
 ##Observe end of render ####
       #observe event when map finishes rendering
@@ -5374,8 +5377,12 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
                   #recreate network graph and insert in reactives
                   tbl <- tidygraph::tbl_graph(edges = r$networkList[[r$position]]$network %>% tidygraph::activate(edges) %>% dplyr::as_tibble(), nodes = networkNodes, directed = FALSE)
 
-                  r$networkList[[r$position]] <- list(network = tbl, pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential ,newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster, canopyRaster = r$networkList[[r$position]]$canopyRaster )
-                  # r$networkList[[r$position]]$network <- network
+                  #The network alone. This was a rebuild of the whole scenario from
+                  #seven named fields, and an isolated node is the one edit here that
+                  #KEEPS the simulation - so it dropped what the list did not name
+                  #along with it: dayPop (the starting points and the download), the
+                  #conflict search, the heat-only flag and the heatwave record.
+                  r$networkList[[r$position]]$network <- tbl
 
                   vftDbg(r$networkList[[r$position]]$network)
                   #insert node in dataframe
@@ -5949,11 +5956,13 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
         #the graph, which is the usual case. `dp` is the same simulation's
         #population (dayPop), for the starting points - see startPoints(). A
         #NULL one keeps what the entry has: some edits drop dayPop too.
-        usageStashPut <- function(key, pu, dp = NULL){
+        #`hw` is the simulation's heatwave record (vftScenarioHeatwave()), for
+        #the legend; it travels with `pu`, so it is only taken with a new one.
+        usageStashPut <- function(key, pu, dp = NULL, hw = NULL){
           if(is.null(key) || is.null(pu)) return(invisible(NULL))
           old <- usageStash[[key]]
           if(is.null(old) || !identical(old$pu, pu)){
-            usageStash[[key]] <- list(pu = pu, dp = dp, layer = NULL, start = NULL)
+            usageStash[[key]] <- list(pu = pu, dp = dp, hw = hw, layer = NULL, start = NULL)
           }else if(!is.null(dp) && !identical(old$dp, dp)){
             old$dp <- dp
             old$start <- NULL
@@ -5969,7 +5978,8 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
           heatStoreDrop(usageStash, setdiff(ls(usageStash, all.names = TRUE), keys))
           nl <- r$networkList
           for(i in seq_along(nl)){
-            if(i <= length(keys)) usageStashPut(keys[[i]], nl[[i]]$pathUsage, nl[[i]]$dayPop)
+            if(i <= length(keys)) usageStashPut(keys[[i]], nl[[i]]$pathUsage, nl[[i]]$dayPop,
+                                                vftScenarioHeatwave(nl[[i]]))
           }
         }
 
@@ -5981,13 +5991,13 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
           key <- usageCardKey(pos)
           if(is.null(key)) return(NULL)
           if(!is.null(nl[[pos]]$pathUsage)){
-            usageStashPut(key, nl[[pos]]$pathUsage, nl[[pos]]$dayPop)
+            usageStashPut(key, nl[[pos]]$pathUsage, nl[[pos]]$dayPop, vftScenarioHeatwave(nl[[pos]]))
             return(list(key = key, kind = "own"))
           }
           if(!is.null(usageStash[[key]])) return(list(key = key, kind = "stale"))
           origKey <- usageCardKey(1)
           if(!is.null(nl[[1]]$pathUsage)){
-            usageStashPut(origKey, nl[[1]]$pathUsage, nl[[1]]$dayPop)
+            usageStashPut(origKey, nl[[1]]$pathUsage, nl[[1]]$dayPop, vftScenarioHeatwave(nl[[1]]))
             return(list(key = origKey, kind = "original"))
           }
           NULL
@@ -6041,13 +6051,17 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
         }
 
         #the legend: step 5's classes, less "kein" - unused paths are not drawn
-        usageLegend <- function(map, kind){
+        usageLegend <- function(map, kind, hw = NULL){
           title <- switch(kind,
                           own      = "Wegnutzung:",
                           stale    = "Wegnutzung (letzte Simulation)",
                           original = "Wegnutzung (Original)")
+          title <- vftTrText(i18n(), title)
+          #a heatwave simulation says so, with its time of day
+          if(!is.null(hw))
+            title <- paste(sub(":$", "", title), "·", vftHeatwaveTag(i18n(), hw$bin))
           leaflet::addLegend(map, position = "topright",
-                             title  = vftTrText(i18n(), title),
+                             title  = title,
                              labels = vapply(c("niedrigste", "mittlere", "hohe", "höchste"),
                                              function(k) vftTrText(i18n(), k), character(1)),
                              colors = c("lightblue", "steelblue", "#182db5", "#37046e"),
@@ -6065,7 +6079,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
             map <- do.call(leaflet::invokeMethod, c(list(map, NULL, cl$method), cl$args))
           }
           usageDrawn <<- usageId(src)
-          usageLegend(map, src$kind)
+          usageLegend(map, src$kind, usageStash[[src$key]]$hw)
         }
 
         clearUsage <- function(map){
@@ -6095,7 +6109,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
           }else if(!is.null(usageDrawn) && !identical(usageId(src), usageDrawn) &&
                    startsWith(usageDrawn, paste0(src$key, " "))){
             usageDrawn <<- usageId(src)
-            usageLegend(leaflet::leafletProxy("versionMap"), src$kind)
+            usageLegend(leaflet::leafletProxy("versionMap"), src$kind, usageStash[[src$key]]$hw)
           }
         })
 
@@ -6673,6 +6687,19 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
         if(is.null(r$paintCanEdit)) r$paintCanEdit <- FALSE
       }
       seeded <- seedNewVersion()
+      #Step 5's "create a heat map" link names the card and the time of day to
+      #open on (vftGoHitze() in R/navigation.R). Applied AFTER the seeding, which
+      #selects its new copy and would put the map on the wrong card. r$heatBin is
+      #set with the radio so the time-of-day observer sees no change to act on:
+      #nothing is computed until the user asks.
+      tgt <- .rx$heatTarget()
+      if(!is.null(tgt) && isTRUE(tgt$card %in% vapply(r$versionsUI, function(v) v$name, character(1)))){
+        r$selectedVersion <- tgt$card
+        if(isTRUE(tgt$bin %in% HEAT_BINS)){
+          r$heatBin <- tgt$bin
+          shiny::updateRadioButtons(session, "heatBin", selected = tgt$bin)
+        }
+      }
       #heat maps of cards that no longer exist, and the record of a map on a map
       #instance this visit is about to replace
       heatStoreDrop(heatStore, setdiff(ls(heatStore, all.names = TRUE),

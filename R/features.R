@@ -16,7 +16,7 @@
 #'   - step 1's "area too large for heat mitigation" warning, which would warn
 #'     about a feature the user cannot reach.
 #' A click on any of the greyed controls raises vftNotImplementedModal().
-HEAT_MITIGATION <- FALSE
+HEAT_MITIGATION <- TRUE
 
 #' HEAT_MITIGATION, read at call time.
 #'

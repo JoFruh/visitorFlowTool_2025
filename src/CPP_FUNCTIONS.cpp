@@ -1847,7 +1847,12 @@ List findClosestAOI_cpp(std::vector<std::string> AOIList_o,
                         std::vector<std::string> AOI_aois,
                         std::vector<double> AOI_dulns,
                         std::vector<std::string> agentTyps,
-                        std::vector<double> AOI_areas){
+                        std::vector<double> AOI_areas,
+                        double attrWeight = 1.0){
+
+  // attrWeight scales the attractivity term of the utility against the distance
+  // term. 1 is the calibrated model; a heatwave run raises it (VFT_HEATWAVE in
+  // R/heatwave_helpers.R), and only a heatwave run passes it at all.
 
   // the adjacency lists, converted once by adjListsToPtr_cpp(). This search has
   // always used the "_attr" weighting (listOfPointers[[4]] on the R side).
@@ -2265,7 +2270,7 @@ List findClosestAOI_cpp(std::vector<std::string> AOIList_o,
 
 
               //new calibrated formula (highest significance in calibration and standardised to 1-10)
-              aoiProb_v[probNo] =  (3.23695 * dulnByAreaPerDurationSTD) +  (-6.65703 * distPerDurationSTD ) ; //ratio of time by time available  //*(1-(agentDuration/agentDurationMax))
+              aoiProb_v[probNo] =  (attrWeight * 3.23695 * dulnByAreaPerDurationSTD) +  (-6.65703 * distPerDurationSTD ) ; //ratio of time by time available  //*(1-(agentDuration/agentDurationMax))
 
               // aoiProb_v[probNo] =  -1*distPerDurationSTD  ; //ratio of time by time available  //*(1-(agentDuration/agentDurationMax))
 

@@ -7,7 +7,12 @@
 #output:
   # pop = large dataframe of all agents with their characteristics
 
-generatePopulation <- function(network, parkingIntensity = 1, nAgents = 2000){
+#' @param parkingAttr the car parks' attractiveness, one value per node, in place
+#'   of the graph's own `parkingAttr` - a heatwave run's heat-weighted copy
+#'   (vftHeatwaveParkingAttr()). NULL reads the graph's.
+generatePopulation <- function(network, parkingIntensity = 1, nAgents = 2000,
+                               parkingAttr = NULL){
+  if(is.null(parkingAttr)) parkingAttr <- igraph::V(network)$parkingAttr
 
   vftDbg("GENERATE POPULATION")
   #TODO: generate population based on habitation maps and statistics from the region studies (TLM3D buildings, regional statistics)
@@ -36,7 +41,7 @@ generatePopulation <- function(network, parkingIntensity = 1, nAgents = 2000){
   #determining start areas by sampling residential and parking areas (parkingIntensity determines ratio parking/residents)
   #parking are weighed by attractivity of nearest AOI
   pop$startV <- sample(c(igraph::V(network)$nodeID[areResidents], igraph::V(network)$nodeID[areParking], igraph::V(network)$nodeID[areNewResidents] ), length(pop$startV), replace = TRUE,
-                       prob = c(igraph::V(network)$Residents[areResidents], igraph::V(network)$newResidential[areNewResidents], (igraph::V(network)$parking[areParking] * igraph::V(network)$parkingAttr[areParking] * parkingIntensity)  ) )
+                       prob = c(igraph::V(network)$Residents[areResidents], igraph::V(network)$newResidential[areNewResidents], (igraph::V(network)$parking[areParking] * parkingAttr[areParking] * parkingIntensity)  ) )
 
 
   # terra::writeRaster(residential_tif_wgs, filetype = "GTiff", filename = "C:/Users/frueh/Documents/visitorFlowTool/inst/app/www/data/maps/residential/residentialData_raster_final.tif")

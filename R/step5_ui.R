@@ -57,6 +57,25 @@ STEP5_CSS <- "
 #placeholder_step5 .btn.noSim::after{ border:2px solid #9aa3a1; }
 #placeholder_step5 .btn.withSim::after{ background:#006268 url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E\") center / 12px no-repeat; }
 
+/* a heatwave result: the time of day's sun, bottom right of the card, across
+   from the simulated tick. Grey once the scenario has been repainted since -
+   the result is kept, as the Hitzeminderung page keeps a stale map. */
+#placeholder_step5 .btn .vft5HwBadge{ position:absolute; right:5px; bottom:4px; display:none;
+  width:20px; height:20px; }
+#placeholder_step5 .btn.vftHw .vft5HwBadge{ display:block; }
+#placeholder_step5 .btn.vftHwStale .vft5HwBadge{ filter:grayscale(1); opacity:.6; }
+
+/* the heatwave switch over the launch button, and what it opens */
+.vft5-hw{ display:flex; flex-direction:column; gap:6px; width:200px; margin:0 0 10px; }
+.vft5-hw .vftRailRow.vft-switch-pill{ width:100%; font-size:13px; }
+.vft5-hwOpts{ display:flex; flex-direction:column; gap:6px; }
+.vft5-hwNone{ display:flex; flex-direction:column; gap:6px; padding:6px 8px; border-radius:8px;
+  background:#fff4e0; color:#6b4a00; font-size:12px; line-height:1.3; }
+.vft5-hwGo{ display:flex; align-items:center; justify-content:center; gap:6px; padding:5px 8px;
+  border:1px solid #d97700; border-radius:7px; background:#ffffff; color:#8a4b00;
+  font-size:12px; font-weight:600; }
+.vft5-hwGo:hover{ background:#fff8ec; }
+
 .leaflet .legend{ text-align:left; font-size:15px; }
 "
 
@@ -220,6 +239,39 @@ vftDbg("UI6")
               ),
 
               shiny::div(style = "height: 16px"),
+
+              #HEATWAVE ####
+              #A setting of the NEXT run, so it sits over the button that starts
+              #it rather than in the rail, which is about what the map shows (and
+              #whose cards the tutorial addresses by position). Off: a normal run.
+              #On: the selected scenario's heat map for the chosen time of day
+              #reshapes attractivity - see R/heatwave_helpers.R. Which times of day
+              #can be chosen depends on the maps the Hitzeminderung page has
+              #computed for the card; heatwaveSync() in step5_server.R keeps the
+              #choices, the hint and the link in step. Greyed but live while the
+              #heat extension is switched off (vftHeatEnabled()).
+              shiny::fluidRow(shiny::column(12, shiny::div(class = "vft5-hw",
+                vftSwitchRow(ns("heatwaveSwitch"), i18n$t("Hitzewellen-Simulation"), "heat",
+                             inputClass = if(!vftHeatEnabled()) "vftRailOff",
+                             class = "vft-switch-pill"),
+                shinyjs::hidden(shiny::div(id = ns("heatwaveOpts"), class = "vft5-hwOpts",
+                  shiny::tagAppendAttributes(
+                    shiny::radioButtons(
+                      inputId = ns("heatwaveBin"), label = NULL, inline = TRUE,
+                      choiceNames = lapply(VFT_HEATWAVE_BINS, function(b)
+                        shiny::tagList(shiny::HTML(heatBinIconSVG(b)),
+                                       shiny::span(i18n$t(HEAT_BIN_KEYS[[b]])))),
+                      choiceValues = VFT_HEATWAVE_BINS,
+                      selected = "afternoon"),
+                    class = "vftSeg"),
+                  shinyjs::hidden(shiny::div(id = ns("heatwaveNone"), class = "vft5-hwNone",
+                    shiny::span(i18n$t("Für dieses Szenario gibt es zu dieser Tageszeit noch keine Hitzekarte.")),
+                    shiny::tags$button(id = ns("heatwaveGo"), type = "button",
+                                       class = "vftB action-button vft5-hwGo",
+                                       vftIcon("heat", 16),
+                                       shiny::span(i18n$t("Hitzekarte erstellen")))))
+                ))
+              ))),
 
               #launch new simulation
               shiny::fluidRow(shiny::column(12,

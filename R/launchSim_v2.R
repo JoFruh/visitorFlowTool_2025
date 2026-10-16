@@ -20,8 +20,11 @@ nodes <- NULL
 #'   this function used to build them again for itself - two full materialisations
 #'   of a tens-of-thousands-of-rows edge table, geometry included, per run.
 #'   Computed here when NULL, so any other caller is unaffected.
+#' @param nodeDULN a heatwave run's heat-weighted node DULN: a list of the seven
+#'   DULN columns, one value per vertex row, in place of the vertex table's own
+#'   in the junction choice. NULL for a normal run. See R/heatwave_helpers.R.
 launchSim <- function(dayPop, network, AOIList, listOfPointers, iter = 1, trackable = FALSE, areasOfInterest = NULL, debug = FALSE, progress = NULL,
-                      edgeTable = NULL, vertexTable = NULL){
+                      edgeTable = NULL, vertexTable = NULL, nodeDULN = NULL){
 
   # save(dayPop, network, AOIList,iter, trackable, areasOfInterest, debug, file = "dataForAssessement_2000agents.RData")
   #### sub - functions ####
@@ -81,6 +84,9 @@ launchSim <- function(dayPop, network, AOIList, listOfPointers, iter = 1, tracka
   edgeEnds    <- as.data.frame(edgeTable[, c("from", "to", "edgeID")])
   DULN_df     <- as.data.frame(vertexTable[, c("DULN_DOG_P","DULN_BIKER","DULN_DOG_N","DULN_EBIKE",
                                                "DULN_JOGGE","DULN_WALK_","DULN_WALK1" , "nodeID")])
+  #a heatwave run decides on heat-weighted attractivity; vertexTable itself, which
+  #pathUsage is built from, keeps the plain values
+  for(col in intersect(names(nodeDULN), names(DULN_df))) DULN_df[[col]] <- nodeDULN[[col]]
   vOutsideAOI <- vertexTable$nodeID[vertexTable$AOI == "0"]
   #a matrix handed to an Rcpp DataFrame argument goes through as.data.frame()
   #on every call

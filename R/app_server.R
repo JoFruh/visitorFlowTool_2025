@@ -33,6 +33,14 @@ app_server <- function(input, output, session){
   #reaches it with no further wiring. See .vftT().
   session$userData$vftI18n <- i18n
 
+  #The session's heat maps, one store shared by the two pages that use them:
+  #newVersions computes them (Hitzeminderung), step 5 simulates on them
+  #(Hitzewellen-Simulation). A plain environment - see heatStoreNew() in
+  #R/heat_helpers.R - parked on userData too, so a state restore can empty it
+  #(vftApplyState() in R/state.R).
+  heatStore <- heatStoreNew()
+  session$userData$vftHeatStore <- heatStore
+
   r <- shiny::reactiveValues()
 
   #give banners an original value.
@@ -792,7 +800,9 @@ app_server <- function(input, output, session){
                                 #computed at the simulation launch now, not at
                                 #step 4's confirm. See R/prepare_network.R.
                                 minThresh       = shiny::reactive(r$minThresh),
-                                selectedVersion = shiny::reactive(r$selectedVersion)))
+                                selectedVersion = shiny::reactive(r$selectedVersion),
+                                #the session's heat maps, for the heatwave simulation
+                                heatStore       = heatStore))
 
     #### step 5's results, published into `r` as they are produced ####
     #
@@ -916,6 +926,21 @@ app_server <- function(input, output, session){
       vftGoToStep(r, "step2", session)
     }, ignoreInit = TRUE)
 
+    #### "make me a heat map" ####
+    #
+    #Step 5's heatwave switch found no map for the selected card at the chosen
+    #time of day, and the user followed the link: the Hitzeminderung page, on
+    #that card and that time of day. The card is set here, as the newVersions
+    #button sets it, and the page's enter() reads the target - after its own
+    #first-visit seeding, which would otherwise select the new "Neu" copy.
+    shiny::observeEvent(step5return$heatCreate(), {
+      hc <- step5return$heatCreate()
+      if(!isTRUE(hc$n > 0)) return(invisible(NULL))
+      vftDbg(paste0("From step 5, go to Hitzeminderung for ", hc$name, " / ", hc$bin))
+      r$selectedVersion <- hc$name
+      vftGoHitze(r, session, check = FALSE, target = list(card = hc$name, bin = hc$bin))
+    }, ignoreInit = TRUE)
+
     step5return
     })
 
@@ -964,7 +989,12 @@ app_server <- function(input, output, session){
                                             #after - see vftNavBarServer() in R/navigation.R. Passed in like
                                             #every other app-level value this module reads, since its own `r`
                                             #is module-local (see the note above newVersions_server()).
-                                            contextPreset = shiny::reactive(r$vftContextPreset))
+                                            contextPreset = shiny::reactive(r$vftContextPreset),
+                                            #the same store step 5 reads
+                                            heatStore     = heatStore,
+                                            #step 5's "create a heat map" link: which card and
+                                            #time of day to open on. See vftGoHitze().
+                                            heatTarget    = shiny::reactive(r$vftHeatTarget))
 
     #### this page's results, published into `r` as they are produced ####
     #

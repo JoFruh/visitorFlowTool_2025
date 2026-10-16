@@ -551,6 +551,18 @@ heatStoreValidBins <- function(s, key, aoi){
                    logical(1))]
 }
 
+#' The study-area key a stored map must match (paintBaselineKey()), remembered per
+#' `aoi` object in `memo`, an environment of its own. Asked on every icon refresh,
+#' and by step 5 on every card change; the AOI only changes when a page's enter()
+#' hands in a new one. The memo is NEVER the store itself: the store's ls() is its
+#' list of cards.
+heatAoiKeyCached <- function(memo, aoi){
+  if(!is.null(memo$src) && identical(memo$src, aoi)) return(memo$key)
+  memo$key <- tryCatch(paintBaselineKey(aoi), error = function(e) NULL)
+  memo$src <- aoi
+  memo$key
+}
+
 #' Forget `keys` altogether (a deleted card), or everything when `keys` is NULL.
 heatStoreDrop <- function(s, keys = NULL){
   if(is.null(keys)) keys <- ls(s, all.names = TRUE)

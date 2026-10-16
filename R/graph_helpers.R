@@ -119,5 +119,12 @@ vftShiftAttractivity <- function(graph, edgeID, deltas){
 
   igraph::edge_attr(graph)   <- ea
   igraph::vertex_attr(graph) <- va
+  #the attractivity-weighted distances were computed from the DULN just changed;
+  #without the stamp the next simulation recomputes them (vftWeightsCurrent())
+  if("vftWeights" %in% igraph::graph_attr_names(graph)){
+    cls   <- class(graph)
+    graph <- igraph::delete_graph_attr(graph, "vftWeights")
+    class(graph) <- cls
+  }
   graph
 }

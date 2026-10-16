@@ -185,8 +185,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // findClosestAOI_cpp
-List findClosestAOI_cpp(std::vector<std::string> AOIList_o, std::vector<std::string> AOI_v, SEXP adj_ptr, std::vector<int> src_v, std::vector<double> agentSpeeds, std::vector<double> agentDurations, std::vector<std::string> AOI_aois, std::vector<double> AOI_dulns, std::vector<std::string> agentTyps, std::vector<double> AOI_areas);
-RcppExport SEXP _visitorFlowTool_findClosestAOI_cpp(SEXP AOIList_oSEXP, SEXP AOI_vSEXP, SEXP adj_ptrSEXP, SEXP src_vSEXP, SEXP agentSpeedsSEXP, SEXP agentDurationsSEXP, SEXP AOI_aoisSEXP, SEXP AOI_dulnsSEXP, SEXP agentTypsSEXP, SEXP AOI_areasSEXP) {
+List findClosestAOI_cpp(std::vector<std::string> AOIList_o, std::vector<std::string> AOI_v, SEXP adj_ptr, std::vector<int> src_v, std::vector<double> agentSpeeds, std::vector<double> agentDurations, std::vector<std::string> AOI_aois, std::vector<double> AOI_dulns, std::vector<std::string> agentTyps, std::vector<double> AOI_areas, double attrWeight);
+RcppExport SEXP _visitorFlowTool_findClosestAOI_cpp(SEXP AOIList_oSEXP, SEXP AOI_vSEXP, SEXP adj_ptrSEXP, SEXP src_vSEXP, SEXP agentSpeedsSEXP, SEXP agentDurationsSEXP, SEXP AOI_aoisSEXP, SEXP AOI_dulnsSEXP, SEXP agentTypsSEXP, SEXP AOI_areasSEXP, SEXP attrWeightSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -200,7 +200,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< std::vector<double> >::type AOI_dulns(AOI_dulnsSEXP);
     Rcpp::traits::input_parameter< std::vector<std::string> >::type agentTyps(agentTypsSEXP);
     Rcpp::traits::input_parameter< std::vector<double> >::type AOI_areas(AOI_areasSEXP);
-    rcpp_result_gen = Rcpp::wrap(findClosestAOI_cpp(AOIList_o, AOI_v, adj_ptr, src_v, agentSpeeds, agentDurations, AOI_aois, AOI_dulns, agentTyps, AOI_areas));
+    Rcpp::traits::input_parameter< double >::type attrWeight(attrWeightSEXP);
+    rcpp_result_gen = Rcpp::wrap(findClosestAOI_cpp(AOIList_o, AOI_v, adj_ptr, src_v, agentSpeeds, agentDurations, AOI_aois, AOI_dulns, agentTyps, AOI_areas, attrWeight));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -278,7 +279,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_visitorFlowTool_appendCurrentToPrior_cpp", (DL_FUNC) &_visitorFlowTool_appendCurrentToPrior_cpp, 4},
     {"_visitorFlowTool_generateAdjListAndDistTbl_cpp", (DL_FUNC) &_visitorFlowTool_generateAdjListAndDistTbl_cpp, 2},
     {"_visitorFlowTool_findShortestRoute_cpp", (DL_FUNC) &_visitorFlowTool_findShortestRoute_cpp, 5},
-    {"_visitorFlowTool_findClosestAOI_cpp", (DL_FUNC) &_visitorFlowTool_findClosestAOI_cpp, 10},
+    {"_visitorFlowTool_findClosestAOI_cpp", (DL_FUNC) &_visitorFlowTool_findClosestAOI_cpp, 11},
     {"_visitorFlowTool_aoi_basins", (DL_FUNC) &_visitorFlowTool_aoi_basins, 4},
     {"_visitorFlowTool_aoi_edt", (DL_FUNC) &_visitorFlowTool_aoi_edt, 5},
     {"_visitorFlowTool_ccl_big_patches", (DL_FUNC) &_visitorFlowTool_ccl_big_patches, 4},

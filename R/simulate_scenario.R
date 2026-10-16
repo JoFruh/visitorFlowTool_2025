@@ -52,14 +52,21 @@ VFT_SIM_NETWORK_SHARE <- 0.4
 #' @param parking an already-loaded parking table, to skip the read.
 #' @param residentDivision residents per simulated agent.
 #' @param progPrep,progSim the two handles from vftProgressPair().
+#' @param heat a heatwave run's heat map: a SpatRaster, or the PackedSpatRaster
+#'   it crossed the process boundary as (terra::wrap()). NULL is a normal run.
+#' @param heatParams the heatwave model's parameters, VFT_HEATWAVE by default.
+#'   See R/heatwave_helpers.R.
 #'
 #' @return list(network = , parking = , results = ). `network` and `parking` are
 #'   NULL when the scenario was already prepared and there is nothing to write
 #'   back - which also means the prepared graph does not cross the process
-#'   boundary a second time for every re-run of the same card.
+#'   boundary a second time for every re-run of the same card. A heatwave run's
+#'   `results$heatwave` summarises the parameters and the exposure; the graph
+#'   and the pathUsage carry no heat.
 vftSimulateScenario <- function(network, finalPolygons, minThresh, parking = NULL,
                                 residentDivision = 50,
-                                progPrep = NULL, progSim = NULL){
+                                progPrep = NULL, progSim = NULL,
+                                heat = NULL, heatParams = VFT_HEATWAVE){
 
   p <- function(f, detail = NULL){
     if(!is.null(progPrep))
@@ -81,8 +88,32 @@ vftSimulateScenario <- function(network, finalPolygons, minThresh, parking = NUL
     network    <- out$network
     outNetwork <- out$network
     outParking <- out$parking
+  }else if(!vftWeightsCurrent(network)){
+    #prepared before the weight formula was corrected, or edited since: the
+    #weights are recomputed from the DULN the graph carries now, and the graph
+    #goes back so the card does not pay for this again. See vftAttrWeights().
+    vftDbg("SIMULATE: recomputing the attractivity-weighted distances")
+    network    <- vftRefreshAttrWeights(network, minThresh)
+    outNetwork <- network
   }else{
     vftDbg("SIMULATE: network already prepared")
+  }
+
+  #### a heatwave run: how hot every edge, node and area is ####
+  #The tables are built here because the exposure needs their geometry, and
+  #handed on so launchMultiSim() does not build them a second time. No random
+  #numbers are drawn, so the stream the population draws from is unchanged.
+  heatwave    <- NULL
+  edgeTable   <- NULL
+  vertexTable <- NULL
+  if(!is.null(heat)){
+    p(0.6, "Hitzebelastung der Wege wird bestimmt...")
+    if(inherits(heat, "PackedSpatRaster")) heat <- terra::unwrap(heat)
+    edgeTable   <- vftGraphTibble(network, "edges")
+    vertexTable <- vftGraphTibble(network, "nodes")
+    heatwave <- list(exposure = vftHeatwaveExposure(edgeTable, vertexTable,
+                                                    finalPolygons, heat, heatParams),
+                     params   = heatParams)
   }
 
   #### the population ####
@@ -96,7 +127,13 @@ vftSimulateScenario <- function(network, finalPolygons, minThresh, parking = NUL
 
   vftDbg("GENERATE POPULATION")
   #get dataframe of all agents, their characteristics and their starting positions
-  pop <- generatePopulation(network, nAgents = nbAgents, parkingIntensity = 0.1)
+  #(a car park weighs as much as its nearest area is attractive - heat-weighted
+  #in a heatwave run)
+  pop <- generatePopulation(network, nAgents = nbAgents, parkingIntensity = 0.1,
+                            parkingAttr = if(!is.null(heatwave))
+                              vftHeatwaveParkingAttr(vertexTable, finalPolygons,
+                                                     heatwave$exposure$area,
+                                                     heatParams$kappa))
 
   #### the agents, then the ABM ####
   vftDbg("LAUNCH MULTISIM")
@@ -108,7 +145,10 @@ vftSimulateScenario <- function(network, finalPolygons, minThresh, parking = NUL
                             #than two stacked ones.
                             onPrepDone = function(){
                               if(!is.null(progPrep)) try(progPrep$close(), silent = TRUE)
-                            })
+                            },
+                            minThresh = minThresh,
+                            edgeTable = edgeTable, vertexTable = vertexTable,
+                            heatwave = heatwave)
 
   if(!is.null(progSim)) try(progSim$close(), silent = TRUE)
 
