@@ -312,22 +312,67 @@ vftSegmentAoI <- function(D, minThresh, paths2056,
   if(!length(P)) return(P)
 
   #1. + 2.
-  edges <- sf::st_line_merge(sf::st_union(sf::st_cast(sf::st_boundary(P), "MULTILINESTRING")))
-  if(is.finite(tolerance) && tolerance > 0)
-    edges <- sf::st_simplify(edges, dTolerance = tolerance, preserveTopology = TRUE)
+  #Edges that share BOTH endpoints are split at their middle vertex first.
+  #Two edges between the same two junctions (the two sides round a one-cell
+  #notch, say) can each be straightened by GEOS <= 3.12's simplifier into the
+  #SAME segment: preserveTopology does not stop two lines collapsing onto each
+  #other there (GEOS 3.14 does). The overlapping pair then leaves the faces
+  #next to it unclosed, and polygonize drops them: on the server (GEOS 3.12)
+  #filBleu at threshold 8 lost 90 of 330 faces and 36 of 221 areas, one grown
+  #to 3909 ha. Reproduced with GEOS 3.11.4; with the split, 330 at 10-150 m.
+  edges0 <- sf::st_line_merge(sf::st_union(sf::st_cast(sf::st_boundary(P), "MULTILINESTRING")))
+  nLab   <- length(unique(stats::na.omit(terra::values(labels, mat = FALSE))))
+  faces  <- NULL
+  for(tol in unique(c(if(is.finite(tolerance) && tolerance > 0) tolerance, 0))){
+    edges <- if(tol > 0) sf::st_simplify(.vftSplitMultiEdges(edges0), dTolerance = tol,
+                                               preserveTopology = TRUE) else edges0
 
-  #3.
-  faces <- suppressWarnings(sf::st_collection_extract(sf::st_polygonize(edges), "POLYGON"))
-  if(!length(faces)) return(faces)
-  pts <- sf::st_transform(sf::st_point_on_surface(faces), sf::st_crs(crs))
-  lab <- terra::extract(labels, terra::vect(pts))[, 2]
-  keep <- !is.na(lab)
+    #3.
+    faces <- suppressWarnings(sf::st_collection_extract(sf::st_polygonize(edges), "POLYGON"))
+    if(!length(faces)) return(faces)
+    pts <- sf::st_transform(sf::st_point_on_surface(faces), sf::st_crs(crs))
+    lab <- terra::extract(labels, terra::vect(pts))[, 2]
+    keep <- !is.na(lab)
+    #every area must still have a face of its own; if the simplification lost
+    #one (a GEOS that breaks the coverage some other way), the unsimplified
+    #borders are used rather than letting two areas silently run together
+    if(length(unique(lab[keep])) >= nLab) break
+    vftDbgCat(sprintf("WARNING aoi coverage: %d of %d areas lost at tolerance %g m, GEOS %s\n",
+                      nLab - length(unique(lab[keep])), nLab, tol,
+                      sf::sf_extSoftVersion()[["GEOS"]]))
+  }
 
   #4.
   areas <- do.call(c, lapply(split(which(keep), lab[keep]), function(ix)
     sf::st_union(faces[ix])))
   areas <- .vftPolygonParts(areas)
   .vftAbsorbFragments(areas, minArea)
+}
+
+#' Every open LINESTRING of `edges` that shares both endpoints with another
+#' one split in two at its middle vertex, as one MULTILINESTRING: the halves
+#' end at a vertex no other edge ends at, so no two can collapse onto each
+#' other. See .vftSimplifyCoverage() for why. A two-point edge stays whole -
+#' it is straight already. Closed rings are left alone; GEOS keeps those from
+#' collapsing on its own.
+.vftSplitMultiEdges <- function(edges){
+  l  <- sf::st_cast(sf::st_cast(edges, "MULTILINESTRING"), "LINESTRING")
+  ms <- lapply(l, unclass)
+  pairKey <- function(m){
+    k <- c(paste(m[1, 1], m[1, 2]), paste(m[nrow(m), 1], m[nrow(m), 2]))
+    if(k[1] == k[2]) NA_character_ else paste(sort(k), collapse = "|")
+  }
+  keys  <- vapply(ms, pairKey, "")
+  multi <- !is.na(keys) & keys %in% keys[duplicated(keys)]
+  parts <- lapply(seq_along(ms), function(i){
+    m <- ms[[i]]
+    n <- nrow(m)
+    if(!multi[i] || n < 3) return(list(m))
+    k <- min(n - 1L, max(2L, (n + 1L) %/% 2L))
+    list(m[seq_len(k), , drop = FALSE], m[k:n, , drop = FALSE])
+  })
+  sf::st_sfc(sf::st_multilinestring(unlist(parts, recursive = FALSE)),
+             crs = sf::st_crs(edges))
 }
 
 #' Parts under `minArea` join the neighbour they share the most border with,
