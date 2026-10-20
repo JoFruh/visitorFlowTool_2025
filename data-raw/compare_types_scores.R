@@ -31,7 +31,8 @@ ref <- d[d$type == "Survey half vs half" & d$engine == names(dirs)[1], ]
 d <- d[d$type != "Survey half vs half", ]
 utils::write.csv(d, file.path(OUTDIR, "types_scores.csv"), row.names = FALSE)
 
-TYPE_ORDER <- c("Full", "Nearby", "Nearby-Random", "Random", "Full-Random")
+TYPE_ORDER <- c("Full", "Nearby", "Nearby-Random", "Random", "Full-Random", "Two-stage", "Two-stage x3", "Two-stage x10",
+                "Two-st. s0.5", "Two-st. q2", "Two-st. a5", "Two-st. a5 s0.5", "Two-st. a5 q2")
 SCORES <- c(pearson = "Pearson r", hit = "hit\n(survey use covered)", auc = "AUC\n(used vs unused)",
             boyce = "Boyce index", contra = "contradicted presence\n(lower = better)",
             top5 = "busiest 5 % of cells\n(target: survey)")

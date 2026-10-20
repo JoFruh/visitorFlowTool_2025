@@ -26,7 +26,8 @@
 # Switches (environment variables, all optional):
 #   VFT_VAL_STAGES    comma list; default aoi,survey,network,sim,compare,figures
 #   VFT_VAL_CONTEXTS  any of glattPark,wigger,glatt (default all three)
-#   VFT_VAL_MODES     any of full,nearby,nearbyRandom,random,fullRandom (default all five)
+#   VFT_VAL_MODES     any of full,nearby,nearbyRandom,random,fullRandom (default all five),
+#                     also fullCal and twoStage (the two-stage simulation, R/two_stage.R)
 #   VFT_VAL_REPS      replicates per context and type, default 100
 #   VFT_VAL_WORKERS   simulations in parallel (mirai daemons), default 1. Each
 #                     daemon holds a whole network: mind the memory on Glatt.
@@ -48,6 +49,26 @@
 #                     envBase_finalPolygons and envBase_minThresh replace the aoi
 #                     stage's own areas for that context. Use a fresh VFT_VAL_OUT:
 #                     the stamp gets a "_save" suffix, but aoi/<ctx>.rds is shared.
+#   VFT_VAL_DURATION  multiplies every agent's outing duration (timeExt); unset = the
+#                     engine's durations. VFT_VAL_DURSCOPE "outing" (default) lets the
+#                     reach grow with it, "walk" only the time inside the areas (the
+#                     area choice sees the drawn durations; corrected engine, single-
+#                     stage types only). Use a fresh VFT_VAL_OUT: runs carry it.
+#   VFT_VAL_OUTING    "area" (default, the engine): the duration is spent inside the
+#                     area, the walk there and back comes on top. "whole": the duration
+#                     is the whole outing - an agent turns home once its time out plus
+#                     the walk back (taken as long as its walk there) reaches it
+#                     (vftTimeOver() hooked; single-stage types only).
+#   VFT_VAL_DURSRC    an rds of outing durations per agent type (data-raw/
+#                     calibrate_aoi_rum.R: the Glatt routes'); every agent's duration
+#                     is drawn again from its type's after the engine's draw, and the
+#                     area choice's standardisation is bounded by DUR_RANGE instead of
+#                     the population's shortest and longest outing.
+#   VFT_VAL_PARKING   one share of car-park starts for Full at every site (unset: the
+#                     contexts' parkingShare).
+#   VFT_VAL_RUM       an rds of area-choice coefficients (data-raw/calibrate_aoi_rum.R)
+#                     for the types fullRumG, fullRumGT and nearbyRumG.
+#                     Runs carry all four; compare refuses a type that mixes them.
 #
 # Every stage writes to VFT_VAL_OUT and skips work already done, so an interrupted
 # run continues where it stopped. Nothing here is used by the app.
@@ -141,6 +162,71 @@ FORCE     <- envList("VFT_VAL_FORCE", character(0))
 OUT       <- Sys.getenv("VFT_VAL_OUT", "C:/Users/frueh/Documents/Local Data/pathUsageValidation_2026")
 ENGINE_MODE <- Sys.getenv("VFT_VAL_ENGINE", "engine")
 if(!ENGINE_MODE %in% c("engine", "corrected")) stop("VFT_VAL_ENGINE must be engine or corrected")
+#Longer (or shorter) outings: every agent's duration (timeExt) times VFT_VAL_DURATION.
+#VFT_VAL_DURSCOPE "outing" (default): everything that reads the duration sees the new
+#one - the time inside the areas, the reach (CORR$reach of the outing) and the
+#fallback cap. "walk": only the time inside the areas; the area choice keeps the drawn
+#durations. Unset = no hook; set (even to 1) = the hook is in place, so a factor of 1
+#proves it changes nothing.
+DURATION <- local({
+  f <- envNum("VFT_VAL_DURATION", NA_real_)
+  if(is.na(f)) NULL else {
+    s <- Sys.getenv("VFT_VAL_DURSCOPE", "outing")
+    if(!s %in% c("outing", "walk")) stop("VFT_VAL_DURSCOPE must be outing or walk")
+    if(!(f > 0)) stop("VFT_VAL_DURATION must be positive")
+    list(factor = f, scope = s)
+  }
+})
+#what the area choices divide the (scaled) durations by
+durChoiceDiv <- function() if(!is.null(DURATION) && DURATION$scope == "walk") DURATION$factor else 1
+#the engine's agent types, in the order vftAgentTimeAndSpeed() draws them
+AGENT_TYPES <- c("walkNat", "walkSoc", "dogNat", "dogProx", "ebikeNat", "bikeSport", "jogger")
+#What the duration covers (see the header). "whole": an agent turns home when its time
+#out (timer, the walk there included) plus the walk back - taken as long as the walk
+#there, timeNotAccounted - reaches its duration.
+OUTING <- Sys.getenv("VFT_VAL_OUTING", "area")
+if(!OUTING %in% c("area", "whole")) stop("VFT_VAL_OUTING must be area or whole")
+#Other outing durations: list(durs = one vector of minutes per agent type). With them
+#the drawn durations are no longer the engine's 30-240 classes, so the area choice's
+#bounds are fixed at those (a population's shortest drawn route of a few minutes would
+#flatten every agent's standardised terms).
+DURSRC <- local({
+  f <- Sys.getenv("VFT_VAL_DURSRC", "")
+  if(!nzchar(f)) NULL else {
+    x <- readRDS(f)
+    if(!all(AGENT_TYPES %in% names(x$durs)) || !all(vapply(x$durs[AGENT_TYPES], function(d) length(d) > 0 && all(d > 0), TRUE)))
+      stop("VFT_VAL_DURSRC: ", f, " needs positive durations for every agent type")
+    list(file = normalizePath(f, winslash = "/"), md5 = unname(tools::md5sum(f)), durs = x$durs[AGENT_TYPES])
+  }
+})
+DUR_RANGE <- c(30, 240)
+aoiDurRange <- function() if(is.null(DURSRC)) NULL else DUR_RANGE
+#one car-park share for every context; NA = CTX's parkingShare
+PARKING <- envNum("VFT_VAL_PARKING", NA_real_)
+if(!is.na(PARKING) && !(PARKING >= 0 && PARKING < 1)) stop("VFT_VAL_PARKING must be in [0, 1)")
+#The RUM types' area-choice coefficients: list(pooled = c(bAttr =, bDist =), distance =
+#c(bAttr = 0, bDist =), types = data.frame(type, bAttr, bDist) over AGENT_TYPES).
+RUM <- local({
+  f <- Sys.getenv("VFT_VAL_RUM", "")
+  if(!nzchar(f)) NULL else {
+    x <- readRDS(f)
+    if(!all(c("pooled", "distance", "types") %in% names(x)) || !all(AGENT_TYPES %in% x$types$type))
+      stop("VFT_VAL_RUM: ", f, " needs pooled, distance and types for every agent type")
+    c(x[c("pooled", "distance", "types")], list(file = normalizePath(f, winslash = "/"), md5 = unname(tools::md5sum(f))))
+  }
+})
+#a RUM type's coefficients, one per agent
+rumCoefs <- function(spec, agentTyps){
+  if(is.null(RUM)) stop("type ", spec$label, " needs VFT_VAL_RUM")
+  if(spec$rum %in% c("pooled", "distance")){
+    b <- RUM[[spec$rum]]
+    return(list(bAttr = unname(b[["bAttr"]]), bDist = unname(b[["bDist"]])))
+  }
+  k <- match(as.character(agentTyps), RUM$types$type)
+  if(anyNA(k)) stop("VFT_VAL_RUM has no coefficients for agent type(s) ",
+                    paste(unique(agentTyps[is.na(k)]), collapse = ", "))
+  list(bAttr = RUM$types$bAttr[k], bDist = RUM$types$bDist[k])
+}
 AOI_SAVES <- local({
   v <- envList("VFT_VAL_AOI_SAVES", character(0))
   stats::setNames(sub("^[^=]*=", "", v), sub("=.*$", "", v))
@@ -171,6 +257,8 @@ PATHS <- list(
   swisscom      = file.path(ONEDRIVE, "Local Large Datasets/Swisscom/Days (raster)/raster_2022-10-05_heatmapDailyUniqueCounts.tif"),
   wiggerLines   = "C:/Users/frueh/Documents/Local Data/Shared visitorFlow Project Data/Social Data/Wigger_data/Linien_GEOREF.gdb",
   filBleuDir    = file.path(ONEDRIVE, "Local Data/FilBleuUsage_withCar"),
+  #the full FilBleu export: every route with its activity and motives
+  filBleuAll    = file.path(ONEDRIVE, "Local Large Datasets/FilBleu/filBleu_allPaths_clean.shp"),
   glattParkHeat = file.path(ONEDRIVE, "Local Large Datasets/GlattPark/GlattPark_heatMap.tif"),
   #reference only: the published survey rasters, old areas and old results.
   #VFT_VAL_OLD_DIR stands in when the H: share is not mounted (any folder holding
@@ -179,6 +267,28 @@ PATHS <- list(
   oldAoiDir     = file.path(ONEDRIVE, "Local Data/pathUsageReplicates")
 )
 FILBLEU_LAYERS <- c("E_bike", "dogWalking", "bike", "walking", "jogging_nordicWalking")
+#Where the Glatt routes come from (VFT_VAL_FILBLEU):
+#  "full"    (default since 2026-10-18) filBleu_allPaths_clean.shp, the routes whose
+#            activity is walking, biking, e-biking, dog walking or jogging / Nordic
+#            walking - commuting, inline skating and routes without an activity
+#            answer are left out;
+#  "exports" the five Copy_activity_*.shp exports the published raster was built
+#            from. Their jogging export holds NO jogging: it is 79 of the 99 dog-walking
+#            routes again (same ids and geometry), so those were counted twice and the
+#            260 jogging routes (201 respondents) were missing. Kept to reproduce the
+#            published numbers.
+FILBLEU_SOURCE <- Sys.getenv("VFT_VAL_FILBLEU", "full")
+if(!FILBLEU_SOURCE %in% c("full", "exports")) stop("VFT_VAL_FILBLEU must be full or exports")
+#the full file's activity answers -> the export layer names
+filBleuLayerOf <- function(a){
+  out <- rep(NA_character_, length(a))
+  out[a %in% "Spazieren / Wandern"] <- "walking"
+  out[a %in% "Velo fahren / Biken"] <- "bike"
+  out[a %in% c("E-Bike", "E-Biken")] <- "E_bike"
+  out[grepl("^Hund ausf", a)] <- "dogWalking"
+  out[a %in% "Joggen / Nordic Walking"] <- "jogging_nordicWalking"
+  out
+}
 
 #Data-directory paths (perimeter, residential) go through vftData().
 #nAgents NA = the respondent raster's sum over the network's extent, undivided.
@@ -218,11 +328,86 @@ TYPES <- list(
   nearby       = list(label = "Nearby",        aoiChoice = "distance", routing = "length", movement = "engine", parking = FALSE),
   nearbyRandom = list(label = "Nearby-Random", aoiChoice = "distance", routing = "length", movement = "flat",   parking = FALSE),
   random       = list(label = "Random",        aoiChoice = "uniform",  routing = "length", movement = "flat",   parking = FALSE),
-  fullRandom   = list(label = "Full-Random",   aoiChoice = "uniformAll", routing = "length", movement = "uniform", parking = FALSE)
+  fullRandom   = list(label = "Full-Random",   aoiChoice = "uniformAll", routing = "length", movement = "uniform", parking = FALSE),
+  #the two-stage simulation (R/two_stage.R): Full explores, then a second population
+  #chooses among the walks it recorded. Under VFT_VAL_ENGINE=corrected the walk choice
+  #has the corrected reach rule (choosePathsCorr() in data-raw/engine_corrections.R).
+  #Not in the default VFT_VAL_MODES.
+  twoStage     = list(label = "Two-stage",     aoiChoice = "engine",   routing = "engine", movement = "engine", parking = TRUE,
+                      twoStage = TRUE),
+  #...with 3 and 10 times as many explorers as agents: a richer library of walks
+  twoStageX3   = list(label = "Two-stage x3",  aoiChoice = "engine",   routing = "engine", movement = "engine", parking = TRUE,
+                      twoStage = TRUE, twoStageParams = list(explorers = 3)),
+  twoStageX10  = list(label = "Two-stage x10", aoiChoice = "engine",   routing = "engine", movement = "engine", parking = TRUE,
+                      twoStage = TRUE, twoStageParams = list(explorers = 10)),
+  #...with a more selective walk choice: a logit scale of 0.5 (P ~ exp(U / 0.5)), or
+  #the attractivity coefficient doubled; and the explorers at route alpha 5 instead of
+  #the run's (exploreAlpha: phase 1's chooseBestRoutes hook only)
+  twoStageS05  = list(label = "Two-st. s0.5",  aoiChoice = "engine",   routing = "engine", movement = "engine", parking = TRUE,
+                      twoStage = TRUE, twoStageParams = list(alpha = 0.5)),
+  twoStageQ2   = list(label = "Two-st. q2",    aoiChoice = "engine",   routing = "engine", movement = "engine", parking = TRUE,
+                      twoStage = TRUE, twoStageParams = list(bAttr = 2 * 3.23695)),
+  twoStageA5   = list(label = "Two-st. a5",    aoiChoice = "engine",   routing = "engine", movement = "engine", parking = TRUE,
+                      twoStage = TRUE, exploreAlpha = 5),
+  twoStageA5S05 = list(label = "Two-st. a5 s0.5", aoiChoice = "engine", routing = "engine", movement = "engine", parking = TRUE,
+                      twoStage = TRUE, exploreAlpha = 5, twoStageParams = list(alpha = 0.5)),
+  twoStageA5Q2 = list(label = "Two-st. a5 q2", aoiChoice = "engine",   routing = "engine", movement = "engine", parking = TRUE,
+                      twoStage = TRUE, exploreAlpha = 5, twoStageParams = list(bAttr = 2 * 3.23695)),
+  #...and the other way: a SOFTER walk choice (logit scale 2) after explorers at alpha
+  #5, and explorers at alpha 10
+  twoStageA5S2 = list(label = "Two-st. a5 s2", aoiChoice = "engine",   routing = "engine", movement = "engine", parking = TRUE,
+                      twoStage = TRUE, exploreAlpha = 5, twoStageParams = list(alpha = 2)),
+  twoStageA10  = list(label = "Two-st. a10",   aoiChoice = "engine",   routing = "engine", movement = "engine", parking = TRUE,
+                      twoStage = TRUE, exploreAlpha = 10),
+  #the calibrated model (data-raw/calibrate_full.R): CAL_PAR, see aoiProbsCal() in
+  #data-raw/engine_corrections.R. Not in the default VFT_VAL_MODES.
+  fullCal      = list(label = "Full-Calibrated", aoiChoice = "cal", routing = "cal", movement = "cal", parking = TRUE),
+  #the area choice re-fitted on the Glatt survey's routes (data-raw/calibrate_aoi_rum.R;
+  #VFT_VAL_RUM, corrected engine only): Full with the pooled coefficients, with one pair
+  #per agent type, and Nearby with the distance-only fit. Not in the default VFT_VAL_MODES.
+  fullRumG     = list(label = "Full RUM-G",       aoiChoice = "engine",   routing = "engine", movement = "engine", parking = TRUE,
+                      rum = "pooled"),
+  fullRumGT    = list(label = "Full RUM-G types", aoiChoice = "engine",   routing = "engine", movement = "engine", parking = TRUE,
+                      rum = "types"),
+  nearbyRumG   = list(label = "Nearby RUM-G",     aoiChoice = "distance", routing = "length", movement = "engine", parking = FALSE,
+                      rum = "distance")
 )
 CONTRASTS <- list(c("full", "nearby"), c("nearby", "nearbyRandom"),
                   c("nearbyRandom", "random"), c("full", "random"),
-                  c("random", "fullRandom"), c("full", "fullRandom"))
+                  c("random", "fullRandom"), c("full", "fullRandom"),
+                  c("fullCal", "nearby"), c("fullCal", "nearbyRandom"), c("fullCal", "full"),
+                  c("twoStage", "full"), c("twoStage", "nearby"), c("twoStage", "nearbyRandom"),
+                  c("twoStageX3", "full"), c("twoStageX10", "full"),
+                  c("twoStageX3", "twoStage"), c("twoStageX10", "twoStage"), c("twoStageX10", "twoStageX3"),
+                  c("twoStageS05", "full"), c("twoStageQ2", "full"), c("twoStageA5", "full"),
+                  c("twoStageA5S05", "full"), c("twoStageA5Q2", "full"),
+                  c("twoStageS05", "twoStage"), c("twoStageQ2", "twoStage"), c("twoStageA5", "twoStage"),
+                  c("twoStageA5S05", "twoStage"), c("twoStageA5Q2", "twoStage"),
+                  c("twoStageA5S05", "twoStageA5"), c("twoStageA5Q2", "twoStageA5"),
+                  c("twoStageA5S2", "full"), c("twoStageA10", "full"),
+                  c("twoStageA5S2", "twoStageA5"), c("twoStageA10", "twoStageA5"),
+                  c("twoStageA5S2", "nearby"), c("twoStageA5S2", "nearbyRandom"),
+                  c("full", "nearbyRandom"),
+                  c("fullRumG", "full"), c("fullRumGT", "full"), c("fullRumGT", "fullRumG"),
+                  c("nearbyRumG", "nearby"), c("fullRumG", "nearbyRumG"), c("fullRumGT", "nearbyRumG"),
+                  c("fullRumG", "nearby"), c("fullRumGT", "nearby"),
+                  c("fullRumG", "nearbyRandom"), c("fullRumGT", "nearbyRandom"))
+#Compare-only aliases: another setting's runs of a type (e.g. route alpha 0.5) copied
+#under <type><suffix> into a folder that holds the type's runs at the first setting, so
+#the paired bootstrap gives the difference between settings on the same seeds. Never
+#simulated: a sim would run the folder's settings. Suffixes: route alpha 0.5 / 5 / 10;
+#outings 1.25 / 1.5 times as long (D: the whole outing, so the reach too; W: only the
+#time inside the areas - VFT_VAL_DURATION / VFT_VAL_DURSCOPE); IA the engine's outing
+#(time inside the area, the engine's durations), WE the whole outing on the engine's
+#durations (VFT_VAL_OUTING).
+ALIAS_SETTINGS <- c(A05 = "a0.5", A5 = "a5", A10 = "a10", D125 = "time x1.25", D150 = "time x1.5",
+                    W125 = "walk x1.25", W150 = "walk x1.5", IA = "old outing", WE = "whole eng.dur")
+for(sfx in names(ALIAS_SETTINGS)){
+  for(t in c("full", "nearby", "nearbyRandom", "random"))
+    TYPES[[paste0(t, sfx)]] <- utils::modifyList(TYPES[[t]], list(label = paste(TYPES[[t]]$label, ALIAS_SETTINGS[[sfx]])))
+  CONTRASTS <- c(CONTRASTS, lapply(c("full", "nearby", "nearbyRandom", "random"), function(t) c(paste0(t, sfx), t)),
+                 list(c(paste0("full", sfx), paste0("nearbyRandom", sfx)), c(paste0("full", sfx), paste0("nearby", sfx))))
+}
 #the baseline performance is standardised against: (r - r_base) / (1 - r_base)
 BASELINE <- "fullRandom"
 
@@ -263,10 +448,21 @@ terra::terraOptions(progress = 0)
 ORIG <- list(historyToPassage_cpp = ns$historyToPassage_cpp,
              findClosestAOI_cpp   = ns$findClosestAOI_cpp,
              chooseBestRoutes_cpp = ns$chooseBestRoutes_cpp,
-             vftDbgCat            = ns$vftDbgCat)
+             vftChoosePaths       = ns$vftChoosePaths,
+             vftDbgCat            = ns$vftDbgCat,
+             vftAgentTimeAndSpeed = ns$vftAgentTimeAndSpeed,
+             vftTimeOver          = ns$vftTimeOver)
 
 #the corrected engine's hooks (definitions only)
 source(file.path(REPO, "data-raw", "engine_corrections.R"), local = TRUE)
+#the fullCal type's parameters: VFT_VAL_CAL names an RDS list (CAL_DEFAULT's names);
+#data-raw/calibrate_full.R sets CAL_PAR per task instead
+CAL_PAR <- local({
+  f <- Sys.getenv("VFT_VAL_CAL", "")
+  p <- CAL_DEFAULT
+  if(nzchar(f)) p[names(readRDS(f))] <- readRDS(f)
+  p
+})
 
 GIT <- tryCatch({
   h <- system2("git", c("-C", REPO, "rev-parse", "--short", "HEAD"), stdout = TRUE, stderr = FALSE)
@@ -627,7 +823,7 @@ readSurveyLines <- function(kind){
     x <- sf::st_zm(sf::st_read(PATHS$wiggerLines, quiet = TRUE))
     sf::st_sf(resp = paste0("w", x$CODE), layer = "wigger",
               geometry = sf::st_geometry(sf::st_transform(x, 2056)))
-  }else{
+  }else if(identical(FILBLEU_SOURCE, "exports")){
     parts <- lapply(FILBLEU_LAYERS, function(ly){
       x <- sf::st_zm(sf::st_read(file.path(PATHS$filBleuDir, paste0("Copy_activity_", ly, ".shp")),
                                  quiet = TRUE))
@@ -635,6 +831,14 @@ readSurveyLines <- function(kind){
                 geometry = sf::st_geometry(sf::st_transform(x, 2056)))
     })
     do.call(rbind, parts)
+  }else{
+    x <- sf::st_zm(sf::st_read(PATHS$filBleuAll, quiet = TRUE))
+    x$layer <- filBleuLayerOf(x$um_welche_)
+    x <- x[!is.na(x$layer) & !duplicated(x$geoansweri), ]
+    #the motives travel along: data-raw/tailor_duln_types.R types the routes by them
+    sf::st_sf(resp = paste0("f", x$respondent), layer = x$layer, id = x$geoansweri,
+              nature = x$natur_erle, social = x$sozialer_a, access = x$wie_gelang,
+              geometry = sf::st_geometry(sf::st_transform(x, 2056)))
   }
 }
 
@@ -791,9 +995,21 @@ stageNetwork <- function(ctx){
 
 #The network and areas of one type, from the prepared base (see the header).
 #`share`: the share of the starts that go to car parks, where the type has them.
-typeVariant <- function(net, polys, type, share = 0){
+typeVariant <- function(net, polys, type, share = 0, thr = NULL){
   sp <- TYPES[[type]]
   parkShare <- 0
+  #fullCal: the legs' weights ("") at strength CAL_PAR$f, the other two as prepared
+  if(identical(sp$routing, "cal")){
+    ea <- igraph::edge_attr(net)
+    w  <- ns$vftAttrWeights(ea[["SHAPE_Leng"]], ea[ns$VFT_DULN_TYPE_COLS], thr,
+                            factors = c(CAL_PAR$f, 4, 2))
+    w  <- w[!grepl("_(attr|ATTR)$", names(w))]
+    ea[names(w)] <- w
+    cls <- class(net)
+    igraph::edge_attr(net) <- ea
+    igraph::graph_attr(net, "vftWeights") <- ns$VFT_WEIGHTS_VERSION
+    class(net) <- cls
+  }
   if(identical(sp$routing, "length")){
     len <- pmax(igraph::edge_attr(net, "SHAPE_Leng"), 10)
     for(nm in grep("^SHAPE_Leng_", igraph::edge_attr_names(net), value = TRUE))
@@ -849,7 +1065,8 @@ expandEdges <- function(ix, agent, edge){
 #(seconds) rather than kept beside it - memory is the scarce resource here.
 .valCache <- new.env()
 scenarioFor <- function(ctx, type){
-  key <- paste(ctx, type)
+  #fullCal's network depends on the legs' strength
+  key <- paste(ctx, type, if(identical(TYPES[[type]]$routing, "cal")) CAL_PAR$f else "")
   if(identical(.valCache$key, key)) return(.valCache$sc)
   if(!identical(.valCache$ctx, ctx)){
     rm(list = ls(.valCache), envir = .valCache)
@@ -869,7 +1086,9 @@ scenarioFor <- function(ctx, type){
   .valCache$sc <- NULL; .valCache$key <- NULL
   invisible(gc())
   base <- readRDS(netFile(ctx))
-  v    <- typeVariant(base$net, .valCache$aoi$polys, type, share = CTX[[ctx]]$parkingShare)
+  v    <- typeVariant(base$net, .valCache$aoi$polys, type,
+                      share = if(is.na(PARKING)) CTX[[ctx]]$parkingShare else PARKING,
+                      thr = .valCache$aoi$thr)
   v$parking <- base$parking
   rm(base)
   res <- igraph::vertex_attr(v$net, "Residents")
@@ -915,10 +1134,51 @@ simCore <- function(sc, seed, capture = TRUE){
     })
     on.exit(nsSet("historyToPassage_cpp", ORIG$historyToPassage_cpp), add = TRUE)
   }
+  #other durations (VFT_VAL_DURSRC): drawn again per type, in the engine's type order,
+  #after the engine's own draw; longer outings (VFT_VAL_DURATION): the durations are
+  #scaled after they are drawn, so the random stream is the unscaled run's. Under the
+  #"walk" scope the area choices below divide them back (durChoiceDiv()).
+  if(!is.null(DURATION) || !is.null(DURSRC)){
+    if(identical(DURATION$scope, "walk") && (isTRUE(sc$spec$twoStage) || !identical(ENGINE_MODE, "corrected")))
+      stop("VFT_VAL_DURSCOPE=walk needs the corrected engine and a single-stage type")
+    if(!is.null(DURSRC) && (isTRUE(sc$spec$twoStage) || !identical(ENGINE_MODE, "corrected")))
+      stop("VFT_VAL_DURSRC needs the corrected engine and a single-stage type")
+    dfac <- if(is.null(DURATION)) 1 else DURATION$factor
+    nsSet("vftAgentTimeAndSpeed", function(dayPop){
+      dp <- ORIG$vftAgentTimeAndSpeed(dayPop)
+      if(!is.null(DURSRC)){
+        for(k in AGENT_TYPES){
+          i <- which(dp$agentTyp == k)
+          if(length(i)) dp$timeExt[i] <- DURSRC$durs[[k]][sample.int(length(DURSRC$durs[[k]]), length(i), replace = TRUE)]
+        }
+        rnd$durDrawn <- TRUE
+      }
+      if(!is.null(DURATION)){
+        dp$timeExt <- dp$timeExt * dfac
+        rnd$durScaled <- TRUE
+      }
+      dp
+    })
+    on.exit(nsSet("vftAgentTimeAndSpeed", ORIG$vftAgentTimeAndSpeed), add = TRUE)
+  }
+  #the whole outing (VFT_VAL_OUTING=whole): turn home when the time out plus the walk
+  #back, taken as long as the walk there, reaches the duration
+  if(identical(OUTING, "whole")){
+    if(isTRUE(sc$spec$twoStage)) stop("VFT_VAL_OUTING=whole is for single-stage types only")
+    nsSet("vftTimeOver", function(timeExt, timeNotAccounted, timer){
+      rnd$outing <- TRUE
+      timeExt <= timer + timeNotAccounted
+    })
+    on.exit(nsSet("vftTimeOver", ORIG$vftTimeOver), add = TRUE)
+  }
+  if(!is.null(sc$spec$rum) && !identical(ENGINE_MODE, "corrected"))
+    stop("type ", sc$spec$label, " needs VFT_VAL_ENGINE=corrected")
+  dDiv <- durChoiceDiv()
   if(sc$spec$aoiChoice %in% c("uniform", "uniformAll")){
     reach <- if(identical(sc$spec$aoiChoice, "uniformAll")) Inf else RANDOM_REACH
     nsSet("findClosestAOI_cpp", function(AOIList_o, AOI_v, adj_ptr, src_v, agentSpeeds,
                                          agentDurations, AOI_aois, AOI_dulns, agentTyps, AOI_areas){
+      agentDurations <- agentDurations / dDiv
       res <- ORIG$findClosestAOI_cpp(AOIList_o, AOI_v, adj_ptr, src_v, agentSpeeds,
                                      agentDurations, AOI_aois, AOI_dulns, agentTyps, AOI_areas)
       rnd$n <- rnd$n + 1L
@@ -940,31 +1200,79 @@ simCore <- function(sc, seed, capture = TRUE){
   #the corrected engine: the area choice of the engine-driven types, and the walk
   #of every type that walks with the engine's route choice
   .corrStats$fallback <- 0L
+  .corrStats$pathFallback <- 0L
+  #the calibrated model, whatever the engine mode
+  if(identical(sc$spec$aoiChoice, "cal")){
+    trueD <- trueAreaDistances(sc$ctx, sc$net)
+    par <- CAL_PAR
+    nsSet("findClosestAOI_cpp", function(AOIList_o, AOI_v, adj_ptr, src_v, agentSpeeds,
+                                         agentDurations, AOI_aois, AOI_dulns, agentTyps, AOI_areas){
+      agentDurations <- agentDurations / dDiv
+      res <- ORIG$findClosestAOI_cpp(AOIList_o, AOI_v, adj_ptr, src_v, agentSpeeds,
+                                     agentDurations, AOI_aois, AOI_dulns, agentTyps, AOI_areas)
+      rnd$calAoi <- TRUE
+      res$prob <- aoiProbsCal(res, src_v, agentSpeeds, agentDurations, AOI_aois, AOI_dulns,
+                              AOI_areas, trueD, par)
+      res
+    })
+    on.exit(nsSet("findClosestAOI_cpp", ORIG$findClosestAOI_cpp), add = TRUE)
+  }
+  if(identical(sc$spec$movement, "cal")){
+    par <- CAL_PAR
+    nsSet("chooseBestRoutes_cpp", function(viableRoutes, DULN_df, priorVs, agentTyps,
+                                           V_coords_df, currentVs, nodeRow_ptr){
+      rnd$calWalk <- TRUE
+      chooseRoutesCal(viableRoutes, DULN_df, priorVs, agentTyps, V_coords_df, currentVs, par)
+    })
+    on.exit(nsSet("chooseBestRoutes_cpp", ORIG$chooseBestRoutes_cpp), add = TRUE)
+  }
   if(identical(ENGINE_MODE, "corrected")){
     if(sc$spec$aoiChoice %in% c("engine", "distance")){
       trueD <- trueAreaDistances(sc$ctx, sc$net)
       nsSet("findClosestAOI_cpp", function(AOIList_o, AOI_v, adj_ptr, src_v, agentSpeeds,
                                            agentDurations, AOI_aois, AOI_dulns, agentTyps, AOI_areas){
+        agentDurations <- agentDurations / dDiv
         res <- ORIG$findClosestAOI_cpp(AOIList_o, AOI_v, adj_ptr, src_v, agentSpeeds,
                                        agentDurations, AOI_aois, AOI_dulns, agentTyps, AOI_areas)
         td <- lapply(seq_along(res$prob), function(i)
           trueD[cbind(rep(src_v[i], length(res$aoi[[i]])), match(res$aoi[[i]], colnames(trueD)))])
         rnd$corrAoi <- TRUE
+        b <- if(is.null(sc$spec$rum)) list(bAttr = 3.23695, bDist = -6.65703) else rumCoefs(sc$spec, agentTyps)
+        if(!is.null(sc$spec$rum)) rnd$rum <- TRUE
         res$prob <- aoiProbsR(res, agentSpeeds, agentDurations, AOI_aois, AOI_dulns, AOI_areas,
                               CORR$reach, td, floorH = CORR$floorH, fallback = TRUE,
-                              fallbackCap = CORR$fallbackCap)
+                              fallbackCap = CORR$fallbackCap, bAttr = b$bAttr, bDist = b$bDist,
+                              durRange = aoiDurRange())
         res
       })
       on.exit(nsSet("findClosestAOI_cpp", ORIG$findClosestAOI_cpp), add = TRUE)
     }
     if(sc$spec$movement %in% c("engine", "flat")){
+      #the edge DULN junction choice, only where the walk reads DULN at all
+      edgeTab <- if(identical(CORR$junction, "edge") && identical(sc$spec$movement, "engine")){
+        if(is.null(sc$edgeTab)) sc$edgeTab <- edgeDulnTable(sc$net)
+        .valCache$sc$edgeTab <- sc$edgeTab
+        sc$edgeTab
+      } else NULL
       nsSet("chooseBestRoutes_cpp", function(viableRoutes, DULN_df, priorVs, agentTyps,
                                              V_coords_df, currentVs, nodeRow_ptr){
         rnd$corrWalk <- TRUE
         chooseRoutesR(viableRoutes, DULN_df, priorVs, agentTyps, V_coords_df, currentVs, CORR$straight,
-                      revisit = CORR$revisit, alpha = CORR$alpha)
+                      revisit = CORR$revisit, alpha = runAlpha(sc$spec), wQ = CORR$wQ, edgeTab = edgeTab)
       })
       on.exit(nsSet("chooseBestRoutes_cpp", ORIG$chooseBestRoutes_cpp), add = TRUE)
+    }
+    #a two-stage run's walk choice: the reach rule of the area choice above (real
+    #path length, floor, capped fallback) for the entrances of the recorded walks
+    if(isTRUE(sc$spec$twoStage)){
+      if(is.null(sc$lenPtr)) sc$lenPtr <- lengthAdjPtr(sc$net)
+      .valCache$sc$lenPtr <- sc$lenPtr
+      nsSet("vftChoosePaths", function(agents, lib, adjPtr, params, attrWeight = 1){
+        rnd$corrPaths <- TRUE
+        choosePathsCorr(agents, lib, adjPtr, params, attrWeight, lenPtr = sc$lenPtr,
+                        reach = CORR$reach, floorH = CORR$floorH, fallbackCap = CORR$fallbackCap)
+      })
+      on.exit(nsSet("vftChoosePaths", ORIG$vftChoosePaths), add = TRUE)
     }
   }
   set.seed(seed, kind = "Mersenne-Twister", normal.kind = "Inversion", sample.kind = "Rejection")
@@ -976,7 +1284,9 @@ simCore <- function(sc, seed, capture = TRUE){
   sink(quiet)
   out <- tryCatch(ns$vftSimulateScenario(sc$net, sc$polys, sc$thr, parking = sc$parking,
                                          residentDivision = sc$residentDivision,
-                                         progPrep = pp, progSim = pp),
+                                         progPrep = pp, progSim = pp,
+                                         twoStage = if(isTRUE(sc$spec$twoStage))
+                                           (if(is.null(sc$spec$twoStageParams)) TRUE else sc$spec$twoStageParams)),
                   finally = { sink(); close(quiet) })
   list(out = out, cap = cap, rnd = rnd, secs = proc.time()[["elapsed"]] - t0)
 }
@@ -1009,6 +1319,28 @@ summariseTracks <- function(priorE, ix){
   list(cells = nz, counts = tab[nz], visits = visits)
 }
 
+#the switches' hooks (duration, outing, RUM) fired in a run that needs them
+settingHooksFired <- function(sc, r){
+  if(!is.null(DURATION) && !isTRUE(r$rnd$durScaled)) stop("the duration hook never fired")
+  if(!is.null(DURSRC) && !isTRUE(r$rnd$durDrawn)) stop("the duration source hook never fired")
+  if(identical(OUTING, "whole") && !isTRUE(r$rnd$outing)) stop("the whole-outing hook never fired")
+  if(!is.null(sc$spec$rum) && !isTRUE(r$rnd$rum)) stop("the RUM area choice never fired")
+}
+
+#the run settings a type's runs must share in a comparison (an alias type may carry
+#others than its base): outing durations, what they cover, their source, the car
+#parks' share and the RUM coefficients
+settingOf <- function(x) paste0(
+  if(is.null(x$duration)) "x1" else paste0("x", x$duration$factor, " ", x$duration$scope),
+  if(is.null(x$outing) || identical(x$outing, "area")) "" else paste0(", ", x$outing, " outing"),
+  if(is.null(x$durSource)) "" else paste0(", durations ", basename(x$durSource$file), " ", substr(x$durSource$md5, 1, 8)),
+  if(is.null(x$parking)) "" else paste0(", car parks ", x$parking),
+  if(is.null(x$rum)) "" else paste0(", RUM ", x$rum$set, " ", substr(x$rum$md5, 1, 8)))
+
+#the route choice's alpha of a type's runs: the run's (CORR), or the type's own for
+#its explorers (exploreAlpha, two-stage types)
+runAlpha <- function(spec) if(is.null(spec$exploreAlpha)) CORR$alpha else spec$exploreAlpha
+
 simTask <- function(ctx, type, rep){
   sc <- scenarioFor(ctx, type)
   f  <- runFile(ctx, sc$stamp, type, rep)
@@ -1025,7 +1357,14 @@ simTask <- function(ctx, type, rep){
       stop("the corrected area choice never fired")
     if(sc$spec$movement %in% c("engine", "flat") && !isTRUE(r$rnd$corrWalk))
       stop("the corrected walk never fired")
+    if(isTRUE(sc$spec$twoStage) && !isTRUE(r$rnd$corrPaths))
+      stop("the corrected walk choice of the two-stage run never fired")
   }
+  if(isTRUE(sc$spec$twoStage) && is.null(r$out$results$twoStage))
+    stop("the two-stage run returned no two-stage summary")
+  settingHooksFired(sc, r)
+  if(identical(sc$spec$aoiChoice, "cal") && !isTRUE(r$rnd$calAoi)) stop("the calibrated area choice never fired")
+  if(identical(sc$spec$movement, "cal") && !isTRUE(r$rnd$calWalk)) stop("the calibrated walk never fired")
   dp <- r$out$results$dayPop
   tr <- summariseTracks(r$cap$priorE, sc$ix)
   startRes <- sc$residents[match(dp$startV, sc$nodeID)]
@@ -1039,7 +1378,23 @@ simTask <- function(ctx, type, rep){
   res <- list(ctx = ctx, type = type, rep = rep, seed = seed, stamp = sc$stamp, git = GIT,
               trackVersion = TRACK_VERSION,
               engine = ENGINE_MODE, revisit = if(identical(ENGINE_MODE, "corrected")) CORR$revisit else NULL,
-              alpha = if(identical(ENGINE_MODE, "corrected")) CORR$alpha else NULL,
+              alpha = if(identical(ENGINE_MODE, "corrected")) runAlpha(sc$spec) else NULL,
+              twoStageParams = sc$spec$twoStageParams,
+              reach = if(identical(ENGINE_MODE, "corrected")) CORR$reach else NULL,
+              wQ = if(identical(ENGINE_MODE, "corrected")) CORR$wQ else NULL,
+              junction = if(identical(ENGINE_MODE, "corrected")) CORR$junction else NULL,
+              cal = if(identical(sc$spec$aoiChoice, "cal")) CAL_PAR else NULL,
+              duration = DURATION,
+              outing = if(identical(OUTING, "area")) NULL else OUTING,
+              durSource = if(is.null(DURSRC)) NULL else DURSRC[c("file", "md5")],
+              parking = if(is.na(PARKING)) NULL else PARKING,
+              rum = if(is.null(sc$spec$rum)) NULL else
+                list(set = sc$spec$rum, file = RUM$file, md5 = RUM$md5, coefs = RUM[[sc$spec$rum]]),
+              #phase 2 of a two-stage run: the library, who found no walk, and who
+              #took another duration's walk (fallback) or the closest one (pathFallback)
+              twoStage = if(isTRUE(sc$spec$twoStage))
+                c(r$out$results$twoStage[c("nExplorers", "nExplorerNoArea", "nPaths", "nNoPath", "nFallback", "secs")],
+                  list(nPathFallback = .corrStats$pathFallback)),
               nFallback = .corrStats$fallback, walk = walk,
               secs = r$secs, nAgents = nrow(dp),
               nNoGoal = sum(dp$AOIGoal %in% "NO_GOAL" | dp$goalV %in% -1),
@@ -1049,6 +1404,50 @@ simTask <- function(ctx, type, rep){
               passage = as.integer(round(igraph::edge_attr(r$out$results$pathUsage, "passage"))))
   saveAtomic(res, f)
   list(status = "done", secs = r$secs, nAgents = res$nAgents, nNoGoal = res$nNoGoal)
+}
+
+#One replicate of a type, returned instead of written: data-raw/calibrate_full.R's
+#search, which tries many fullCal parameter sets on the same seeds. `par` replaces
+#CAL_PAR for this call (and the cached network when its legs' strength differs).
+#`corr` overrides entries of CORR (the corrected engine: reach, alpha, straight...) for
+#this and later calls in the same process.
+simMemory <- function(ctx, type, rep, par = NULL, corr = NULL){
+  if(!is.null(par)){ p <- CAL_DEFAULT; p[names(par)] <- par; CAL_PAR <<- p }
+  if(!is.null(corr)) CORR[names(corr)] <<- corr
+  sc <- scenarioFor(ctx, type)
+  r  <- simCore(sc, BASE_SEED + rep)
+  if(r$cap$n != 1L) stop("the track capture fired ", r$cap$n, " times, expected once")
+  settingHooksFired(sc, r)
+  dp <- r$out$results$dayPop
+  tr <- summariseTracks(r$cap$priorE, sc$ix)
+  list(status = "done", ctx = ctx, type = type, rep = rep, secs = r$secs, nAgents = nrow(dp),
+       nNoGoal = sum(dp$AOIGoal %in% "NO_GOAL" | dp$goalV %in% -1), nFallback = .corrStats$fallback,
+       goals = table(dp$AOIGoal), cells = tr$cells, counts = tr$counts, visits = tr$visits)
+}
+
+#The headline Pearson r of a set of replicates (simMemory() results or run files), as
+#the compare stage computes it: 100 m and 500 m, GlattPark 500 m only. For the
+#searches and sweeps; data-raw/calibrate_full.R checks it against compare.rds.
+HEAD_VIEWS <- function(ctx) if(ctx == "glattPark") "1_all" else c("1_all", "5_all")
+scorerFor <- function(ctx){
+  cfg <- CTX[[ctx]]
+  aoi <- readRDS(aoiFile(ctx)); sv <- readRDS(surveyFile(ctx)); edg <- readRDS(edgesFile(ctx))
+  G  <- buildGrid(ctx, aoi, sv, edg)
+  vn <- HEAD_VIEWS(ctx)
+  surV <- lapply(stats::setNames(vn, vn), function(v) surveyView(G, G$views[[v]], sv$surveyBase))
+  n100 <- terra::ncell(G$t100)
+  lab  <- stats::setNames(paste0("r", vapply(vn, function(v) G$views[[v]]$scale_m, 1)), vn)
+  function(runs){
+    x <- numeric(n100)
+    for(r in runs) x[r$cells] <- x[r$cells] + r$counts
+    r <- vapply(vn, function(v)
+      stats::cor(trans(as.vector(G$views[[v]]$Msim %*% x), cfg$simTransform), surV[[v]]), 1)
+    stats::setNames(r, lab[vn])
+  }
+}
+runsFrom <- function(ctx, type, reps){
+  aoi <- readRDS(aoiFile(ctx))
+  lapply(reps, function(k) readRDS(runFile(ctx, aoi$stamp, type, k)))
 }
 
 #The capture hook must change nothing: the same seed with and without it.
@@ -1328,6 +1727,12 @@ compareContext <- function(ctx){
   if(!identical(engines, ENGINE_MODE))
     stop(ctx, ": runs of engine(s) ", paste(engines, collapse = "/"), " under VFT_VAL_ENGINE=",
          ENGINE_MODE, " - use the matching setting or a fresh VFT_VAL_OUT")
+  #one setting per type (an alias type may carry another than its base)
+  for(t in types){
+    d <- unique(vapply(runs[[t]], settingOf, ""))
+    if(length(d) != 1) stop(ctx, ": the runs of ", t, " mix settings: ", paste(d, collapse = " | "))
+    if(d != "x1") logf("compare %s: %s runs on %s", ctx, TYPES[[t]]$label, d)
+  }
   S <- lapply(runs, function(rr) Matrix::sparseMatrix(
     i = unlist(lapply(rr, `[[`, "cells")),
     j = rep.int(seq_along(rr), vapply(rr, function(x) length(x$cells), 1L)),
@@ -1943,7 +2348,8 @@ checkInputs <- function(){
     if(is.null(cfg)) stop("unknown context ", ctx)
     need <- c(need, ns$vftData(cfg$perimeter), ns$vftData(cfg$residential),
               switch(cfg$survey, heatmap = PATHS$glattParkHeat, wigger = PATHS$wiggerLines,
-                     filBleu = file.path(PATHS$filBleuDir, paste0("Copy_activity_", FILBLEU_LAYERS, ".shp"))))
+                     filBleu = if(identical(FILBLEU_SOURCE, "full")) PATHS$filBleuAll else
+                       file.path(PATHS$filBleuDir, paste0("Copy_activity_", FILBLEU_LAYERS, ".shp"))))
   }
   bad <- setdiff(TYPES_RUN, names(TYPES))
   if(length(bad)) stop("unknown type(s): ", paste(bad, collapse = ", "))

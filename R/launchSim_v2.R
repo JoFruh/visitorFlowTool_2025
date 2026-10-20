@@ -15,6 +15,17 @@
 edges <- NULL
 nodes <- NULL
 
+#' Whether each agent's time is up and it turns home.
+#'
+#' The outing duration (timeExt) is spent inside the area: the walk there
+#' (timeNotAccounted, the "shortest" legs) is set aside, and the walk back comes
+#' on top. A function of its own so the survey validation (data-raw/) can swap
+#' in other definitions of the outing.
+#'
+#' @param timeExt,timeNotAccounted,timer minutes, one value per agent.
+#' @return logical, one per agent.
+vftTimeOver <- function(timeExt, timeNotAccounted, timer) timeExt + timeNotAccounted <= timer
+
 #' @param edgeTable,vertexTable the graph as tables, when the caller already has
 #'   them. launchMultiSim() builds both for the adjacency lists one call up, and
 #'   this function used to build them again for itself - two full materialisations
@@ -23,8 +34,11 @@ nodes <- NULL
 #' @param nodeDULN a heatwave run's heat-weighted node DULN: a list of the seven
 #'   DULN columns, one value per vertex row, in place of the vertex table's own
 #'   in the junction choice. NULL for a normal run. See R/heatwave_helpers.R.
+#' @param explore TRUE for the first phase of a two-stage run (R/two_stage.R):
+#'   the same simulation, but it records every agent's walk inside the areas and
+#'   returns list(paths = <the path library>, dayPop = ) instead of passage.
 launchSim <- function(dayPop, network, AOIList, listOfPointers, iter = 1, trackable = FALSE, areasOfInterest = NULL, debug = FALSE, progress = NULL,
-                      edgeTable = NULL, vertexTable = NULL, nodeDULN = NULL){
+                      edgeTable = NULL, vertexTable = NULL, nodeDULN = NULL, explore = FALSE){
 
   # save(dayPop, network, AOIList,iter, trackable, areasOfInterest, debug, file = "dataForAssessement_2000agents.RData")
   #### sub - functions ####
@@ -93,19 +107,10 @@ launchSim <- function(dayPop, network, AOIList, listOfPointers, iter = 1, tracka
   vertexCoordsDF <- as.data.frame(vertexCoords)
   nodeIDs     <- igraph::V(network)$nodeID
 
-  #edge id -> row, as a direct index rather than a match() per timestep. Ids are
-  #positive whole numbers; the first row wins for a duplicated id, which is what
-  #match() returned. An id with no row (getEdges_cpp reports a missing edge as 0)
-  #gives NA, as match() did - and keeps its place, which a 0 index would not.
+  #edge id -> row, as a direct index rather than a match() per timestep. See
+  #vftEdgeRowLookup() below.
   edgeLength <- edgeTable$SHAPE_Leng
-  edgeRowIdx <- rep(NA_integer_, max(edgeTable$edgeID, 0L, na.rm = TRUE))
-  okRows     <- which(!is.na(edgeTable$edgeID) & edgeTable$edgeID >= 1)
-  edgeRowIdx[rev(edgeTable$edgeID[okRows])] <- rev(okRows)
-  rowOfEdge <- function(ids){
-    ids <- as.integer(ids)
-    ids[!is.na(ids) & (ids < 1L | ids > length(edgeRowIdx))] <- NA_integer_
-    edgeRowIdx[ids]
-  }
+  rowOfEdge  <- vftEdgeRowLookup(edgeTable$edgeID)
 
   #the C++ side's two lookups - edge by its two end nodes, node row by id - built
   #ONCE here instead of inside getEdges_cpp() and chooseBestRoutes_cpp() on every
@@ -190,6 +195,17 @@ cannotRecreate <- dayPop$goalV == -1
 
   #mark all agents with -1 goal as inactive
   dayPop$active[cannotRecreate] <- FALSE
+
+  #TRUE once an agent has turned home (its time is up, or it is stuck); only a
+  #returning agent that reaches its start node is done
+  dayPop$returning <- FALSE
+
+  #a two-stage run's exploration: where each walk inside an area starts (goalV is
+  #overwritten with startV once the agent turns home) and the walk's nodes
+  if(explore){
+    dayPop$entryV    <- dayPop$goalV
+    dayPop$priorVAOI <- list(NULL)
+  }
   # for(agentNo in 1:nrow(dayPop)){
   #   # PROGRESS BAR (INTIALIZATION) ####
   #   if(!debug){
@@ -433,8 +449,13 @@ cannotRecreate <- dayPop$goalV == -1
     dayPop$nextV[agentsReachedNextV] <- NA
     #determine if agents are still active (did they return home?)
     #make inactive if they were returning home and reached home
-    dayPop$active[( (timer > dayPop$timeExt) | (dayPop$behaviour %in% c("shortest", "nicestShortest"))) &
-                    agentsReachedNextV & dayPop$startV == dayPop$goalV &
+    #
+    #`returning`, not goalV == startV. That test also held for an agent whose start
+    #node IS the nearest node of its area - goalV == startV from the outset - so it
+    #was retired on the first timestep, before it took a step (until 2026-10-18;
+    #31 % of the agents with an area at GlattPark). For every other agent the two
+    #tests are the same: goalV becomes startV exactly when it turns home.
+    dayPop$active[dayPop$returning & agentsReachedNextV &
                     dayPop$currentV == dayPop$startV] <- FALSE
 
     #update active agents to reflect change
@@ -463,10 +484,13 @@ cannotRecreate <- dayPop$goalV == -1
     #if not already returning home
 
     #determine if time ran out (consider time not accounted ie. while reaching aoi)
-    isTimeOver <- dayPop$timeExt + dayPop$timeNotAccounted <= timer
+    isTimeOver <- vftTimeOver(dayPop$timeExt, dayPop$timeNotAccounted, timer)
 
     #if(isTimeOver[dayPop$id == 159] == TRUE){browser()}
-    dayPop$behaviour[agentsReachedNextV & isTimeOver & (dayPop$goalV != dayPop$startV)] <- "shortest"
+    #(not "goalV != startV" for "not already returning": see `returning` above)
+    turnHome <- agentsReachedNextV & isTimeOver & !dayPop$returning
+    dayPop$behaviour[turnHome] <- "shortest"
+    dayPop$returning[turnHome] <- TRUE
     dayPop$goalV[agentsReachedNextV & isTimeOver] <- dayPop$startV[agentsReachedNextV & isTimeOver]
     #remove pathToGoal
     dayPop$pathToGoal[agentsReachedNextV & isTimeOver] <- list(NULL)
@@ -766,6 +790,7 @@ cannotRecreate <- dayPop$goalV == -1
         #make the agent go home by fastest route
         dayPop$behaviour[toDecideRetracing][sameCV_NV] <- "nicestShortest"
         dayPop$goalV[toDecideRetracing][sameCV_NV] <- dayPop$startV[toDecideRetracing][sameCV_NV]
+        dayPop$returning[toDecideRetracing][sameCV_NV] <- TRUE
 
         toDecideRetracing[toDecideRetracing][sameCV_NV] <- FALSE
 
@@ -886,8 +911,11 @@ cannotRecreate <- dayPop$goalV == -1
       addedTime <- ceiling((dayPop$totalDistance[toDecideShortest]) /(dayPop$speed[toDecideShortest]*1000/60))
       dayPop$moving[toDecideShortest] <- timestep + convertToTimesteps(time = addedTime, unit = "m")#+ ceiling( ((dayPop$totalDistance[toDecideShortest]) / (dayPop$speed[toDecideShortest])/60 ) * 3 )
 
-      #determine time not accounted for (the moving time during shortest)
-      dayPop$timeNotAccounted[toDecideShortest] <- dayPop$timeNotAccounted[toDecideShortest] + dayPop$moving[toDecideShortest]
+      #determine time not accounted for (the moving time during shortest), in MINUTES:
+      #isTimeOver compares it with timeExt and timer, both minutes. Until 2026-10-16
+      #this added dayPop$moving - the arrival TIMESTEP (3 per minute, counted from the
+      #start) - so an agent stayed in its area timeExt + ~2x its approach walk.
+      dayPop$timeNotAccounted[toDecideShortest] <- dayPop$timeNotAccounted[toDecideShortest] + addedTime
 
     }
 
@@ -986,7 +1014,11 @@ cannotRecreate <- dayPop$goalV == -1
                                                                           oldPriorEs = list(NULL))
 
       dayPop$currentE[toDecideRetracing | toDecideNicest] <- edgesResultsNice$currentE[[1]]
-      dayPop$priorE[toDecideRetracing | toDecideNicest] <- edgesResultsNice$priorE[[1]]
+      #NOT priorE. Without a pathToGoal, getEdges_cpp() returns an EMPTY priorE for
+      #every agent, and this line used to assign it - wiping, at the first step
+      #inside the area, the whole walk TO the area. Passage then counted only the
+      #walk inside and the walk home (until 2026-10-18). The walk inside goes to
+      #priorEAOI below; priorE keeps the way there and back.
 
     }
 
@@ -1176,16 +1208,22 @@ cannotRecreate <- dayPop$goalV == -1
     }
 
     ## SAVE CURRENT EDGE AS PRIORE ####
-    #save currentE into priorE for all agents that took decisions
-    dayPop$priorE[toDecideRetracing | toDecideNicest] <- mapply(function(hstry, vstd) list(c(hstry, vstd)),
-                                                                dayPop$priorE[toDecideRetracing | toDecideNicest],
-                                                                dayPop$currentE[toDecideRetracing | toDecideNicest]
-                                                                )
-
+    #save currentE for all agents that took decisions: the walk INSIDE the areas
+    #(nicest, retracing) goes to priorEAOI only, the way there and back (shortest,
+    #nicestShortest) to priorE. The inside edges used to go to priorE as well,
+    #where the reset above dropped all but the last of them.
     dayPop$priorEAOI[toDecideRetracing | toDecideNicest] <- mapply(function(hstry, vstd) list(c(hstry, vstd)),
                                                                 dayPop$priorEAOI[toDecideRetracing | toDecideNicest],
                                                                 dayPop$currentE[toDecideRetracing | toDecideNicest]
     )
+    #a two-stage run's exploration also records the nodes of that walk, in order
+    #(the walk starts at entryV; its last node is where the agent turns home)
+    if(explore){
+      dayPop$priorVAOI[toDecideRetracing | toDecideNicest] <- mapply(function(hstry, vstd) list(c(hstry, vstd)),
+                                                                     dayPop$priorVAOI[toDecideRetracing | toDecideNicest],
+                                                                     dayPop$nextV[toDecideRetracing | toDecideNicest]
+      )
+    }
 
 
 
@@ -1225,8 +1263,80 @@ cannotRecreate <- dayPop$goalV == -1
   }
 
   # TRANSFORM AGENT HISTORY INTO PATH USAGE ####
-  # V(network)$passage <- 0
-  # E(network)$passage <- 0
+  #A two-stage run's exploration stops here: what it hands on is the walks
+  #themselves, and phase 2 counts the passage (R/two_stage.R). Skipping it also
+  #keeps historyToPassage_cpp() at one call per simulation, which the survey
+  #validation's track capture relies on.
+  if(explore){
+    paths  <- vftPathLibrary(dayPop, edgeLength, rowOfEdge)
+    dayPop <- dayPop[, setdiff(names(dayPop), c(VFT_HISTORY_COLS, "priorVAOI", "returning")), drop = FALSE]
+    return(list(paths = paths, dayPop = dayPop))
+  }
+  network <- vftHistoryToPathUsage(dayPop, network, edgeTable, vertexTable)
+
+  vftDbg(paste0(nrow(dayPop), " AGENTS!"))
+  vftDbg(paste0(sum(dayPop$active == TRUE), " AGENTS STILL ACTIVE!"))
+
+  #There used to be a loop here turning every agent's vertex history into a
+  #MULTILINESTRING, returned as `pathGeo` / `pathNicestGeo`. Nothing in the
+  #package ever read either, and it was the most expensive thing in the whole
+  #simulation: it materialised igraph::V(network)$nodeID and $geometry twice PER
+  #AGENT and grew an sfc with c(), so it scaled with agents x nodes and then
+  #quadratically. Measured with data-raw/verify_abm_speed.R on a 35k-node network
+  #with 3300 agents: ~65 s of a ~82 s run. The lines can still be rebuilt from
+  #the passage counts on the edges, which is what every consumer draws.
+
+  #THE AGENTS, WITHOUT THEIR HISTORIES. The list columns below are the walk
+  #itself - every vertex and edge each agent passed, per behaviour - and
+  #vftHistoryToPathUsage() above has already turned them into the passage counts.
+  #Nothing after this point reads them: the app takes `startV` (the starting
+  #points layer) and nothing else. Carried along, they were most of what this job
+  #sends back to the SHARED main thread to be unserialised, most of what each
+  #scenario holds in memory, and most of every save file.
+  dayPop <- dayPop[, setdiff(names(dayPop), c(VFT_HISTORY_COLS, "returning")), drop = FALSE]
+
+  return(list(pathUsage = network, dayPop = dayPop))
+
+}
+
+
+#' The agents' walk histories: every vertex and edge each agent passed, per
+#' behaviour. launchSim() drops them before returning (see there).
+VFT_HISTORY_COLS <- c("priorV", "priorE", "priorEAOI", "nicestPriorV", "shortestPriorV",
+                      "nicestShortestPriorV", "pathToGoal", "retracedV")
+
+#' Edge id -> row of the edge table, as a direct index rather than a match().
+#'
+#' Ids are positive whole numbers; the first row wins for a duplicated id, which
+#' is what match() returned. An id with no row (getEdges_cpp() reports a missing
+#' edge as 0) gives NA, as match() did - and keeps its place, which a 0 index
+#' would not.
+#'
+#' @param edgeID the edge table's `edgeID` column.
+#' @return a function of a vector of edge ids, giving their rows.
+vftEdgeRowLookup <- function(edgeID){
+  edgeRowIdx <- rep(NA_integer_, max(edgeID, 0L, na.rm = TRUE))
+  okRows     <- which(!is.na(edgeID) & edgeID >= 1)
+  edgeRowIdx[rev(edgeID[okRows])] <- rev(okRows)
+  function(ids){
+    ids <- as.integer(ids)
+    ids[!is.na(ids) & (ids < 1L | ids > length(edgeRowIdx))] <- NA_integer_
+    edgeRowIdx[ids]
+  }
+}
+
+#' The agents' histories as passage counts on the graph.
+#'
+#' The end of every simulation: launchSim()'s, and phase 2 of a two-stage run
+#' (vftFollowPaths() in R/two_stage.R), whose agents carry the same history
+#' columns without having walked a timestep.
+#'
+#' @param dayPop the agents with priorV, retracedV, priorE (the way to and from
+#'   the areas), priorEAOI (the walk inside them) and agentTyp.
+#' @param network the graph the agents walked on.
+#' @param edgeTable,vertexTable that graph as tables (vftGraphTibble()).
+#' @return the graph rebuilt from the tables, with the passage columns.
+vftHistoryToPathUsage <- function(dayPop, network, edgeTable, vertexTable){
   #add passage column initialised with 0
   edgeTable$passage <- 0
   vertexTable$passage <- 0
@@ -1297,54 +1407,5 @@ cannotRecreate <- dayPop$goalV == -1
   edgeTable$passageAOI2 <- 0
   edgeTable$passageAOI2[igraph::E(network)$edgeID %in% edgesWithin] <- edgeTable$passage[igraph::E(network)$edgeID %in% edgesWithin]
 
-
-  network <- tidygraph::tbl_graph(nodes = vertexTable, edges = edgeTable, directed = FALSE)
-
-    #
-  # for(agentNo in 1:nrow(dayPop) ){
-  #   #for vertices
-  #   history <- factor( dayPop$priorV[agentNo][[1]] )
-  #   nodeIDs <- factor(V(network)$nodeID)
-  #
-  #   passageTable <- table(nodeIDs[match(history, nodeIDs)])
-  #
-  #
-  #   V(network)$passage <- V(network)$passage + as.vector(passageTable)
-  #
-  #   #for edges
-  #   history <- factor( dayPop$priorE[agentNo][[1]] )
-  #   edgeIDs <- factor(E(network)$edgeID)
-  #
-  #   passageTable <- table(edgeIDs[match(history, edgeIDs)])
-  #
-  #
-  #   E(network)$passage <- E(network)$passage + as.vector(passageTable)
-  #
-  # }
-
-  vftDbg(paste0(nrow(dayPop), " AGENTS!"))
-  vftDbg(paste0(sum(dayPop$active == TRUE), " AGENTS STILL ACTIVE!"))
-
-  #There used to be a loop here turning every agent's vertex history into a
-  #MULTILINESTRING, returned as `pathGeo` / `pathNicestGeo`. Nothing in the
-  #package ever read either, and it was the most expensive thing in the whole
-  #simulation: it materialised igraph::V(network)$nodeID and $geometry twice PER
-  #AGENT and grew an sfc with c(), so it scaled with agents x nodes and then
-  #quadratically. Measured with data-raw/verify_abm_speed.R on a 35k-node network
-  #with 3300 agents: ~65 s of a ~82 s run. The lines can still be rebuilt from
-  #the passage counts on the edges, which is what every consumer draws.
-
-  #THE AGENTS, WITHOUT THEIR HISTORIES. The list columns below are the walk
-  #itself - every vertex and edge each agent passed, per behaviour - and
-  #historyToPassage_cpp() above has already turned them into the passage counts.
-  #Nothing after this point reads them: the app takes `startV` (the starting
-  #points layer) and nothing else. Carried along, they were most of what this job
-  #sends back to the SHARED main thread to be unserialised, most of what each
-  #scenario holds in memory, and most of every save file.
-  historyCols <- c("priorV", "priorE", "priorEAOI", "nicestPriorV", "shortestPriorV",
-                   "nicestShortestPriorV", "pathToGoal", "retracedV")
-  dayPop <- dayPop[, setdiff(names(dayPop), historyCols), drop = FALSE]
-
-  return(list(pathUsage = network, dayPop = dayPop))
-
+  tidygraph::tbl_graph(nodes = vertexTable, edges = edgeTable, directed = FALSE)
 }

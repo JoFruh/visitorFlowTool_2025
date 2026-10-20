@@ -130,6 +130,7 @@ fingerprint <- function(out){
        vertex = va[grep("^passage", names(va))],
        edgeID = ea$edgeID,
        startV = out$results$dayPop$startV,
+       aoiGoal = out$results$dayPop$AOIGoal,
        nAgents = nrow(out$results$dayPop))
 }
 
@@ -143,6 +144,8 @@ compareFP <- function(ref, now){
   }
   for(nm in c("edgeID", "startV", "nAgents"))
     if(!identical(ref[[nm]], now[[nm]])) bad <- c(bad, nm)
+  #the agents' areas: only against a reference that recorded them
+  if(!is.null(ref$aoiGoal) && !identical(ref$aoiGoal, now$aoiGoal)) bad <- c(bad, "aoiGoal")
   bad
 }
 
@@ -205,7 +208,7 @@ for(f in saves){
                 R0$secs, res$secs, R0$secs / res$secs))
     if(length(bad)){
       if(diffOK){
-        cat("   results differ (expected with --diff):\n")
+        cat("   results differ (expected with --diff) in:", paste(bad, collapse = ", "), "\n")
         describeShift(R0$fp, fp)
       }else{
         failed <- TRUE

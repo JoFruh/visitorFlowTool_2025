@@ -25,11 +25,14 @@
 #' @param heatwave NULL for a normal run, or list(exposure =
 #'   vftHeatwaveExposure(...), params = VFT_HEATWAVE...). See
 #'   R/heatwave_helpers.R.
+#' @param twoStage NULL for a normal run, or list(params = vftTwoStageParams(),
+#'   makePop = <a function drawing phase 2's population>). `pop` is then phase
+#'   1's - the explorers. See R/two_stage.R.
 launchMultiSim <- function(pop, network, days, finalPolygons, iter = 1,
                            progress = NULL, progressSim = progress,
                            base = 0, span = 1, onPrepDone = NULL,
                            minThresh = NULL, edgeTable = NULL, vertexTable = NULL,
-                           heatwave = NULL){
+                           heatwave = NULL, twoStage = NULL){
 
   p <- function(f, detail = NULL){
     if(!is.null(progress))
@@ -57,6 +60,7 @@ launchMultiSim <- function(pop, network, days, finalPolygons, iter = 1,
   adjEdges   <- edgeTable
   aoiPolys   <- finalPolygons
   nodeDULN   <- NULL
+  edgeDULN   <- NULL
   attrWeight <- 1
   if(!is.null(heatwave)){
     ex <- heatwave$exposure
@@ -72,6 +76,8 @@ launchMultiSim <- function(pop, network, days, finalPolygons, iter = 1,
     class(adjEdges) <- cls
 
     nodeDULN <- vftHeatwaveDULN(unclass(vertexTable)[VFT_DULN_TYPE_COLS], ex$node, hp$kappa)
+    #what a two-stage run's walks are judged on
+    edgeDULN <- duln
     aoiPolys$DULN <- finalPolygons$DULN - hp$kappa * unname(ex$area)
     attrWeight    <- hp$attrWeight
   }
@@ -115,7 +121,18 @@ launchMultiSim <- function(pop, network, days, finalPolygons, iter = 1,
                        trackable = FALSE, areasOfInterest = areasOfInterest,
                        debug = FALSE, progress = progressSim,
                        edgeTable = edgeTable, vertexTable = vertexTable,
-                       nodeDULN = nodeDULN)
+                       nodeDULN = nodeDULN, explore = !is.null(twoStage))
+
+  #### a two-stage run: phase 2 chooses among the walks phase 1 recorded ####
+  #Its population is drawn only now, so that everything above - phase 1 - is
+  #exactly the normal run the same seed gives. See R/two_stage.R.
+  if(!is.null(twoStage)){
+    vftDbg("Two-stage run: choosing among the recorded walks")
+    simData <- vftFollowPaths(twoStage$makePop(), simData, network, listOfPointers,
+                              edgeTable, vertexTable, edgeDULN = edgeDULN,
+                              attrWeight = attrWeight, params = twoStage$params,
+                              progress = progressSim)
+  }
   if(!is.null(heatwave))
     simData$heatwave <- vftHeatwaveSummary(heatwave$exposure, heatwave$params)
 

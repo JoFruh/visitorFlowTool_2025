@@ -184,6 +184,22 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// nodeDistances_cpp
+NumericMatrix nodeDistances_cpp(SEXP adj_ptr, String weighingMethod, std::string agentTyp, std::vector<int> sources, std::vector<int> targets, double cutoff);
+RcppExport SEXP _visitorFlowTool_nodeDistances_cpp(SEXP adj_ptrSEXP, SEXP weighingMethodSEXP, SEXP agentTypSEXP, SEXP sourcesSEXP, SEXP targetsSEXP, SEXP cutoffSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type adj_ptr(adj_ptrSEXP);
+    Rcpp::traits::input_parameter< String >::type weighingMethod(weighingMethodSEXP);
+    Rcpp::traits::input_parameter< std::string >::type agentTyp(agentTypSEXP);
+    Rcpp::traits::input_parameter< std::vector<int> >::type sources(sourcesSEXP);
+    Rcpp::traits::input_parameter< std::vector<int> >::type targets(targetsSEXP);
+    Rcpp::traits::input_parameter< double >::type cutoff(cutoffSEXP);
+    rcpp_result_gen = Rcpp::wrap(nodeDistances_cpp(adj_ptr, weighingMethod, agentTyp, sources, targets, cutoff));
+    return rcpp_result_gen;
+END_RCPP
+}
 // findClosestAOI_cpp
 List findClosestAOI_cpp(std::vector<std::string> AOIList_o, std::vector<std::string> AOI_v, SEXP adj_ptr, std::vector<int> src_v, std::vector<double> agentSpeeds, std::vector<double> agentDurations, std::vector<std::string> AOI_aois, std::vector<double> AOI_dulns, std::vector<std::string> agentTyps, std::vector<double> AOI_areas, double attrWeight);
 RcppExport SEXP _visitorFlowTool_findClosestAOI_cpp(SEXP AOIList_oSEXP, SEXP AOI_vSEXP, SEXP adj_ptrSEXP, SEXP src_vSEXP, SEXP agentSpeedsSEXP, SEXP agentDurationsSEXP, SEXP AOI_aoisSEXP, SEXP AOI_dulnsSEXP, SEXP agentTypsSEXP, SEXP AOI_areasSEXP, SEXP attrWeightSEXP) {
@@ -279,6 +295,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_visitorFlowTool_appendCurrentToPrior_cpp", (DL_FUNC) &_visitorFlowTool_appendCurrentToPrior_cpp, 4},
     {"_visitorFlowTool_generateAdjListAndDistTbl_cpp", (DL_FUNC) &_visitorFlowTool_generateAdjListAndDistTbl_cpp, 2},
     {"_visitorFlowTool_findShortestRoute_cpp", (DL_FUNC) &_visitorFlowTool_findShortestRoute_cpp, 5},
+    {"_visitorFlowTool_nodeDistances_cpp", (DL_FUNC) &_visitorFlowTool_nodeDistances_cpp, 6},
     {"_visitorFlowTool_findClosestAOI_cpp", (DL_FUNC) &_visitorFlowTool_findClosestAOI_cpp, 11},
     {"_visitorFlowTool_aoi_basins", (DL_FUNC) &_visitorFlowTool_aoi_basins, 4},
     {"_visitorFlowTool_aoi_edt", (DL_FUNC) &_visitorFlowTool_aoi_edt, 5},

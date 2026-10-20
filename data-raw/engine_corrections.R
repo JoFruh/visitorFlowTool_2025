@@ -22,7 +22,10 @@
 #   below 5 minutes; the closest-area fallback, capped at 33 % of the outing.
 CORR <- list(straight = local({ v <- Sys.getenv("VFT_VAL_STRAIGHT", ""); if(nzchar(v)) as.numeric(v) else 0 }),
              #(VFT_VAL_STRAIGHT overrides the turn-term scale: 1 = the engine's)
-             reach = 0.10, floorH = 5 / 60, fallbackH = 1 / 60, fallbackCap = 0.33,
+             #(VFT_VAL_REACH overrides the reach: the share of the outing an area may
+             #be away, on the real distance)
+             reach = local({ v <- Sys.getenv("VFT_VAL_REACH", ""); if(nzchar(v)) as.numeric(v) else 0.10 }),
+             floorH = 5 / 60, fallbackH = 1 / 60, fallbackCap = 0.33,
              #the weight of a node the agent has already passed (the engine: 0.00001).
              #NA = no penalty: the walk may come back over its own track. VFT_VAL_REVISIT
              #overrides it ("none" or a number) for diagnostic runs.
@@ -31,9 +34,21 @@ CORR <- list(straight = local({ v <- Sys.getenv("VFT_VAL_STRAIGHT", ""); if(nzch
              #the scale of the route choice's random utility, exp(value / alpha): the
              #engine's 0.5 makes the most attractive neighbour ~10^4 times likelier
              #than the least at a median junction. VFT_VAL_ALPHA overrides it.
-             alpha = local({ v <- Sys.getenv("VFT_VAL_ALPHA", ""); if(nzchar(v)) as.numeric(v) else 0.5 }))
+             alpha = local({ v <- Sys.getenv("VFT_VAL_ALPHA", ""); if(nzchar(v)) as.numeric(v) else 0.5 }),
+             #the junction DULN weight wQ in exp(wQ * DULN + (s / alpha) * turn), set on
+             #its own; NA = DULN / alpha as the engine has it. VFT_VAL_WQ overrides it.
+             wQ = local({ v <- Sys.getenv("VFT_VAL_WQ", ""); if(nzchar(v)) as.numeric(v) else NA_real_ }),
+             #which DULN the junction choice reads: "node" (the engine: the candidate
+             #node's raster value) or "edge" (the paths GDB value of the edge to it, times
+             #EDGE_K). VFT_VAL_JUNCTION overrides it.
+             junction = local({ v <- Sys.getenv("VFT_VAL_JUNCTION", ""); if(nzchar(v)) v else "node" }))
 FLOOR_H    <- 5 / 60                #the floor, hours
 FALLBACK_H <- 1 / 60                #the fallback band above the closest area, hours
+#edge DULN differences between the edges of one junction are ~1.4x smaller than the
+#node DULN differences of its neighbours (within-junction SD, junctions of degree >= 3:
+#walkNat 2.81/2.00 GlattPark, 2.73/1.97 Wigger, 3.08/2.14 Glatt; cor .64-.81), so the
+#edge values are scaled by this to keep the same weight on the same spread
+EDGE_K     <- 1.4
 .corrStats <- new.env()
 
 #### the area choice, with another reach ####
@@ -41,10 +56,17 @@ FALLBACK_H <- 1 / 60                #the fallback band above the closest area, h
 #findClosestAOI_cpp()'s probabilities, from its own distances (~2021-2396)
 #`trueDist`, if given: per agent, the REAL path length to each area in res$aoi
 #order; the reach test then uses it instead of the engine's weighted distance.
+#`bAttr`, `bDist`: the utility's two coefficients (the engine's GlattPark pair by
+#default), one value or one per agent. `durRange`: the shortest and longest outing
+#the standardisation is bounded by; NULL = the population's, as the engine does
+#(30 and 240 minutes whenever the durations are the engine's classes).
 aoiProbsR <- function(res, agentSpeeds, agentDurations, AOI_aois, AOI_dulns, AOI_areas, reach,
-                      trueDist = NULL, floorH = 0, fallback = FALSE, fallbackCap = Inf){
+                      trueDist = NULL, floorH = 0, fallback = FALSE, fallbackCap = Inf,
+                      bAttr = 3.23695, bDist = -6.65703, durRange = NULL){
   dulnMax <- max(AOI_dulns); dulnMin <- min(AOI_dulns)
-  durMax  <- max(agentDurations); durMin <- min(agentDurations)
+  if(is.null(durRange)) durRange <- range(agentDurations)
+  durMax  <- durRange[2]; durMin <- durRange[1]
+  bAttr <- rep_len(bAttr, length(res$prob)); bDist <- rep_len(bDist, length(res$prob))
   lastMatch <- function(x, table){ k <- match(x, rev(table)); ifelse(is.na(k), NA_integer_, length(table) + 1L - k) }
   lapply(seq_along(res$prob), function(i){
     d <- res$distances[[i]]
@@ -65,7 +87,7 @@ aoiProbsR <- function(res, agentSpeeds, agentDurations, AOI_aois, AOI_dulns, AOI
       dbMax  <- (dulnMax * 15000) / durMin; dbMin <- (dulnMin * 316) / durMax
       dbSTD <- ((10 - 1) * (dbapd - dbMin) / (dbMax - dbMin)) + 1
       dSTD  <- ((10 - 1) * (dpd - dpdMin) / (dpdMax - dpdMin)) + 1
-      u <- (3.23695 * dbSTD) + (-6.65703 * dSTD)
+      u <- (bAttr[i] * dbSTD) + (bDist[i] * dSTD)
     }else u <- rep(1, length(d))
     tReach <- if(is.null(trueDist)) td else trueDist[[i]] / (speed * 1000)
     u[tReach > max(reach * (dur / 60), floorH)] <- 0
@@ -111,6 +133,138 @@ trueAreaDistances <- function(ctx, net){
   D
 }
 
+#### the two-stage walk choice, with the corrected reach (type twoStage) ####
+
+#The engine's adjacency lists with every weight the REAL edge length (SHAPE_Leng, no
+#10 m floor), for ns$nodeDistances_cpp(): the real path length between two nodes.
+lengthAdjPtr <- function(net){
+  el  <- igraph::as_edgelist(net, names = FALSE)
+  len <- igraph::edge_attr(net, "SHAPE_Leng")
+  et  <- data.frame(from = as.integer(el[, 1]), to = as.integer(el[, 2]))
+  for(t in names(ns$VFT_DULN_TYPE_COLS)) for(s in c("", "_attr", "_ATTR"))
+    et[[paste0("SHAPE_Leng_", t, s)]] <- len
+  vt <- data.frame(nodeID = as.integer(igraph::vertex_attr(net, "nodeID")))
+  ns$adjListsToPtr_cpp(ns$generateAdjListAndDistTbl_cpp(edgeTable = et, vertexTable = vt))
+}
+
+#vftChoosePaths() (R/two_stage.R) with aoiProbsR()'s corrections for the areas: the
+#same utility (ns$vftPathUtility(), on the engine's "_attr" distance to a walk's
+#entrance, over every walk of the class), but the reach test on the REAL path length,
+#never below floorH; with nothing in reach, a uniform pick among the walks whose
+#entrance is within fallbackH of the closest one, if that one is within fallbackCap of
+#the outing (counted in .corrStats$pathFallback). params$alpha scales the logit as in
+#vftChoosePaths(); the fallback stays uniform.
+choosePathsCorr <- function(agents, lib, adjPtr, params, attrWeight = 1, lenPtr,
+                            reach = CORR$reach, floorH = CORR$floorH,
+                            fallbackCap = CORR$fallbackCap, fallbackH = FALLBACK_H){
+  n        <- nrow(agents)
+  pick     <- rep(NA_integer_, n)
+  fallback <- rep(FALSE, n)
+  distance <- rep(NA_real_, n)
+  Dall     <- lib$DULN - params$dulnOffset
+  Drange   <- range(Dall[is.finite(Dall)])
+  durRange <- range(agents$timeExt)
+  for(typ in unique(agents$agentTyp)){
+    ai <- which(agents$agentTyp == typ)
+    li <- which(lib$agentTyp == typ & is.finite(lib$DULN))
+    if(!length(li)) next
+    entries <- unique(lib$entryV[li])
+    starts  <- unique(as.integer(agents$startV[ai]))
+    #the real length only as far as any of these agents may go, by the reach or
+    #the fallback; the utility's distances to every entrance
+    far <- max(pmax(max(reach, fallbackCap) * agents$timeExt[ai] / 60, floorH + fallbackH) *
+                 agents$speed[ai] * 1000)
+    Dr   <- ns$nodeDistances_cpp(lenPtr, "distance", typ, entries, starts, far)
+    Dw   <- ns$nodeDistances_cpp(adjPtr, params$weighting, typ, entries, starts, Inf)
+    eRow <- match(lib$entryV[li], entries)
+    durs <- sort(unique(lib$timeExt[li]))
+    for(i in ai){
+      dur <- agents$timeExt[i]
+      cls <- if(dur %in% durs) dur else durs[which.min(abs(durs - dur))]
+      fallback[i] <- cls != dur
+      j   <- which(lib$timeExt[li] == cls)
+      col <- match(as.integer(agents$startV[i]), starts)
+      sp  <- agents$speed[i]
+      dw  <- Dw[cbind(eRow[j], col)]
+      fin <- is.finite(dw)
+      if(!any(fin)) next
+      j <- j[fin]; dw <- dw[fin]
+      hR  <- Dr[cbind(eRow[j], col)] / (1000 * sp)
+      ok  <- is.finite(hR) & hR <= max(reach * dur / 60, floorH)
+      if(any(ok)){
+        U  <- ns$vftPathUtility(Dall[li][j], dw, sp, dur, durRange, Drange, attrWeight,
+                                params$bAttr, params$bDist)[ok]
+        jj <- which(ok)
+        k  <- if(length(jj) == 1L) 1L else sample.int(length(jj), 1L, prob = exp((U - max(U)) / params$alpha))
+        pick[i]     <- li[j[jj[k]]]
+        distance[i] <- dw[jj[k]]
+      }else{
+        okF <- is.finite(hR)
+        if(any(okF) && min(hR[okF]) <= fallbackCap * dur / 60){
+          cand <- which(okF & hR <= min(hR[okF]) + fallbackH)
+          k    <- if(length(cand) == 1L) 1L else sample.int(length(cand), 1L)
+          pick[i]     <- li[j[cand[k]]]
+          distance[i] <- dw[cand[k]]
+          .corrStats$pathFallback <- .corrStats$pathFallback + 1L
+        }
+      }
+    }
+  }
+  list(pick = pick, fallback = fallback, distance = distance)
+}
+
+#### the calibrated model (type fullCal of validate_usage_surveys.R) ####
+#
+# One parameter list, CAL_DEFAULT's names:
+#   area choice  a multinomial logit over the areas the engine found, on the REAL path
+#                length t (hours) and the outing duration T (hours):
+#                  U = bT * t/T + bD * t + bQ * DULN + bA * log(area in ha)
+#                DULN and area per letter (area-weighted, summed). An area is in reach
+#                when t <= max(reach * T, floorH); with none in reach, the closest-area
+#                fallback (FALLBACK_H band) if the closest is within fallbackCap * T.
+#                No standardisation: the coefficients are on the raw scales, so they
+#                transfer between sites.
+#   movement     chooseRoutesR() with the node DULN times wQ and the turn term (+1 / 0
+#                / -2) times wS, at alpha 1: weight exp(wQ * DULN + wS * turn). The
+#                engine is wQ = 2, wS = 2 (alpha 0.5, s = 1). wQ = 0 and wS = 0 walk
+#                uniformly (the revisit penalty stays).
+#   legs         f, the strength of the "" weights (vftAttrWeights(), 8 normally)
+CAL_DEFAULT <- list(bT = 0, bD = -30, bQ = 0, bA = 0, reach = 0.10, floorH = 5 / 60,
+                    fallbackCap = 0.33, wQ = 2, wS = 2, revisit = 0.00001, f = 8)
+
+aoiProbsCal <- function(res, src_v, agentSpeeds, agentDurations, AOI_aois, AOI_dulns, AOI_areas,
+                        trueD, par){
+  duln <- tapply(AOI_dulns * AOI_areas, AOI_aois, sum) / tapply(AOI_areas, AOI_aois, sum)
+  area <- tapply(AOI_areas, AOI_aois, sum)
+  lapply(seq_along(res$prob), function(i){
+    a <- as.character(res$aoi[[i]])
+    if(!length(a)) return(res$prob[[i]])
+    d <- trueD[src_v[i], match(a, colnames(trueD))]
+    t <- d / (agentSpeeds[i] * 1000); T <- agentDurations[i] / 60
+    t[!is.finite(t)] <- Inf
+    u <- par$bT * t / T + par$bD * t + par$bQ * unname(duln[a]) + par$bA * log(unname(area[a]) / 1e4)
+    ok <- is.finite(t) & is.finite(u) & t <= max(par$reach * T, par$floorH)
+    if(any(ok)){
+      e <- numeric(length(a))
+      e[ok] <- exp(u[ok] - max(u[ok]))
+      return(e / sum(e))
+    }
+    ok <- is.finite(t)
+    if(any(ok) && min(t[ok]) <= par$fallbackCap * T){
+      pick <- ok & t <= min(t[ok]) + FALLBACK_H
+      .corrStats$fallback <- .corrStats$fallback + 1L
+      return(pick / sum(pick))
+    }
+    numeric(length(a))
+  })
+}
+
+chooseRoutesCal <- function(viableRoutes, DULN_df, priorVs, agentTyps, V_coords_df, currentVs, par){
+  for(cl in DULN_BY_TYPE) DULN_df[[cl]] <- DULN_df[[cl]] * par$wQ
+  chooseRoutesR(viableRoutes, DULN_df, priorVs, agentTyps, V_coords_df, currentVs, par$wS,
+                revisit = par$revisit, alpha = 1)
+}
+
 #### the route choice, with the turn term scaled ####
 
 f32 <- function(x) readBin(writeBin(as.double(x), raw(), size = 4), "double", size = 4, n = length(x))
@@ -118,9 +272,31 @@ DULN_BY_TYPE <- c(walkNat = "DULN_WALK_", walkSoc = "DULN_WALK1", dogNat = "DULN
                   dogProx = "DULN_DOG_P", ebikeNat = "DULN_EBIKE", bikeSport = "DULN_BIKER",
                   jogger = "DULN_JOGGE")
 
+#The edge DULN per (junction, neighbour) for the "edge" junction choice: both
+#directions of every edge, parallel edges averaged. Keys are from * N + to on the
+#vertex index, which is the nodeID in the validation networks (checked).
+edgeDulnTable <- function(net){
+  if(!identical(as.numeric(igraph::vertex_attr(net, "nodeID")), as.numeric(seq_len(igraph::vcount(net)))))
+    stop("edgeDulnTable: nodeID is not the vertex index")
+  el <- igraph::ends(net, igraph::E(net), names = FALSE)
+  N  <- igraph::vcount(net) + 1
+  M  <- vapply(DULN_BY_TYPE, function(cl) as.numeric(igraph::edge_attr(net, cl)), numeric(nrow(el)))
+  #named by column, as chooseRoutesR() looks them up (vapply names them by agent type)
+  colnames(M) <- unname(DULN_BY_TYPE)
+  key <- c(el[, 1] * N + el[, 2], el[, 2] * N + el[, 1])
+  M  <- rbind(M, M)
+  #parallel edges: the mean
+  u  <- unique(key)
+  g  <- match(key, u)
+  M  <- rowsum(M, g, reorder = FALSE, na.rm = TRUE) / rowsum((!is.na(M)) + 0, g, reorder = FALSE)
+  list(key = u, M = M, N = N)
+}
+
 #chooseBestRoutes_cpp() (~135-366) in R. s scales the +1 / 0 / -2 of the turn.
+#wQ (NA = the engine's DULN / alpha) sets the DULN weight on its own; edgeTab (from
+#edgeDulnTable()) swaps the candidate node's DULN for the edge's, times EDGE_K.
 chooseRoutesR <- function(viableRoutes, DULN_df, priorVs, agentTyps, V_coords_df, currentVs, s,
-                          revisit = 0.00001, alpha = 0.5){
+                          revisit = 0.00001, alpha = 0.5, wQ = NA_real_, edgeTab = NULL){
   n  <- lengths(viableRoutes)
   ag <- rep.int(seq_along(viableRoutes), n)
   rt <- as.numeric(unlist(viableRoutes, use.names = FALSE))
@@ -129,7 +305,13 @@ chooseRoutesR <- function(viableRoutes, DULN_df, priorVs, agentTyps, V_coords_df
   M   <- as.matrix(DULN_df[, DULN_BY_TYPE])
   colI <- match(DULN_BY_TYPE[as.character(agentTyps)], colnames(M))
   val <- M[cbind(row, colI[ag])]
+  if(!is.null(edgeTab)){
+    er  <- match(as.numeric(currentVs)[ag] * edgeTab$N + rt, edgeTab$key)
+    val <- EDGE_K * edgeTab$M[cbind(er, match(DULN_BY_TYPE[as.character(agentTyps)], colnames(edgeTab$M))[ag])]
+    if(length(val) && all(is.na(val))) stop("chooseRoutesR: no edge DULN found for any candidate")
+  }
   val[is.na(val)] <- 0
+  if(!is.na(wQ)) val <- val * (wQ * alpha)
   X <- f32(V_coords_df$X); Y <- f32(V_coords_df$Y)
   hasP <- !vapply(priorVs, is.null, logical(1))
   if(s != 0 && any(hasP)){

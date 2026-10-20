@@ -496,6 +496,17 @@ List getEdges_cpp(IntegerVector currentVs, IntegerVector nextVs, SEXP edgeMap_pt
         crrnt = path[path.size()-2];
 
         std::vector<int> priorEs;
+        //THE FIRST EDGE: findShortestRoute_cpp() returns the path WITHOUT its
+        //source, so the pairs below start at the path's first node and the edge
+        //from the source to it (currentVs: every caller passes the leg's source)
+        //was never recorded - one edge short on every leg until 2026-10-18.
+        {
+          int64_t firstKey = ((int64_t)currentVs[agentNo] << 32) | (uint32_t)path[0];
+          auto firstIt = edgeMap.find(firstKey);
+          if(firstIt != edgeMap.end()){
+            priorEs.push_back(firstIt->second);
+          }
+        }
         //CONVERT PriorVs TO priorE (edge history)
         //cycle through priorVs (ignoring last two vertices which are currentE)
         int n = path.size()-2;
@@ -1826,6 +1837,106 @@ List findShortestRoute_cpp(SEXP adj_ptr,
   }
 
   return List::create(Named("path") = outputPath, Named("distance") = outputDist);
+}
+
+
+/*
+ * nodeDistances:
+ * network distances from every source node to every target node, on one agent
+ * type's weights - for phase 2 of a two-stage run (R/two_stage.R), where the
+ * sources are the recorded paths' entrance nodes and the targets the agents'
+ * start nodes.
+ *
+ * One Dijkstra per source, which stops once it is past `cutoff`: nothing beyond
+ * the reach rule is ever chosen, so nothing beyond it is searched. The graph is
+ * undirected (generateAdjListAndDistTbl_cpp() adds every edge both ways with
+ * the same weight), so source -> target is also target -> source - the same
+ * argument as the multi-source search in findClosestAOI_cpp().
+ *
+ * returns a sources x targets matrix; Inf = not reached within the cutoff
+ */
+
+// [[Rcpp::export]]
+NumericMatrix nodeDistances_cpp(SEXP adj_ptr,
+                                String weighingMethod,
+                                std::string agentTyp,
+                                std::vector<int> sources,
+                                std::vector<int> targets,
+                                double cutoff){
+
+  XPtr<AdjLists> adjX(adj_ptr);
+  const AdjLists& adj = *adjX;
+  int V = adj.V;
+  const std::vector<std::vector<int>>& adjList_IDs = adj.ids;
+
+  //the same three weightings as findShortestRoute_cpp()
+  int weighting;
+  if(weighingMethod == "distance"){
+    weighting = 0;
+  }else if(weighingMethod == "little_attr"){
+    weighting = 1;
+  }else{
+    weighting = 2;
+  }
+  const std::vector<std::vector<double>>& adjDist = adj.w[weighting][agentTypeIndex(agentTyp)];
+
+  //target node -> its columns (a node can be asked for twice)
+  std::unordered_map<int, std::vector<int>> targetCols;
+  for(size_t k = 0; k < targets.size(); k++) targetCols[targets[k]].push_back((int)k);
+
+  NumericMatrix out(sources.size(), targets.size());
+  std::fill(out.begin(), out.end(), R_PosInf);
+
+  const double UNREACHED = 100000000.0;
+  typedef std::pair<double, int> pqPair;
+  std::vector<double> dist(V + 1, UNREACHED);
+  std::vector<int> touched;
+
+  for(size_t s = 0; s < sources.size(); s++){
+    int src = sources[s];
+    if(src < 0 || src > V) continue;
+
+    //reset only what the last search wrote
+    for(int v : touched) dist[v] = UNREACHED;
+    touched.clear();
+
+    std::priority_queue<pqPair, std::vector<pqPair>, std::greater<pqPair>> pq;
+    dist[src] = 0.0;
+    touched.push_back(src);
+    pq.push(std::make_pair(0.0, src));
+    size_t found = 0;
+
+    while(!pq.empty()){
+      double d = pq.top().first;
+      int u = pq.top().second;
+      pq.pop();
+      //stale entry (see findShortestRoute_cpp())
+      if(d > dist[u]) continue;
+      //everything left in the queue is farther still
+      if(d > cutoff) break;
+
+      auto tc = targetCols.find(u);
+      if(tc != targetCols.end()){
+        for(int col : tc->second) out(s, col) = d;
+        found += tc->second.size();
+        if(found == targets.size()) break;
+      }
+
+      const std::vector<int>&    adjVrts = adjList_IDs[u];
+      const std::vector<double>& adjD    = adjDist[u];
+      for(size_t k = 0; k < adjVrts.size(); k++){
+        int w = adjVrts[k];
+        double nd = d + adjD[k];
+        if(nd < dist[w]){
+          if(dist[w] == UNREACHED) touched.push_back(w);
+          dist[w] = nd;
+          pq.push(std::make_pair(nd, w));
+        }
+      }
+    }
+  }
+
+  return out;
 }
 
 

@@ -17,6 +17,7 @@
 #   Rscript data-raw/figures_scores_ceiling.R
 #
 # VFT_SC_DIRS  label=path,label=path (default: automatic and manual final areas)
+# VFT_SC_TYPES only these types, by label, comma-separated (default: every type a set has)
 # VFT_SC_OUT   folder of the side-by-side figure (each set's own figure goes to its
 #              figures/)
 
@@ -33,7 +34,19 @@ OUTDIR <- Sys.getenv("VFT_SC_OUT", file.path(LOCAL, "pathUsageValidation_2026_fi
 dir.create(OUTDIR, showWarnings = FALSE, recursive = TRUE)
 
 TYPES  <- c(Full = "Full\nsim.", Nearby = "Near-\nby", `Nearby-Random` = "Nearby-\nrandom",
-            `Full-Random` = "Full\nrandom")
+            `Full-Random` = "Full\nrandom", `Two-stage` = "Two-\nstage",
+            `Two-stage x3` = "Two-st.\nx3", `Two-stage x10` = "Two-st.\nx10",
+            `Two-st. s0.5` = "Two-st.\ns0.5", `Two-st. q2` = "Two-st.\nq×2",
+            `Two-st. a5` = "Two-st.\nα5", `Two-st. a5 s0.5` = "Two-st.\nα5 s0.5",
+            `Two-st. a5 q2` = "Two-st.\nα5 q×2", `Two-st. a5 s2` = "Two-st.\nα5 s2",
+            `Two-st. a10` = "Two-st.\nα10")
+#VFT_SC_TYPES: only these types (their labels, comma-separated), in that order. A label
+#without an axis label above (the compare-only aliases: "Full a5", "Full time x1.5", ...)
+#is drawn as itself, broken after its first word.
+local({ v <- Sys.getenv("VFT_SC_TYPES", "")
+  if(nzchar(v)){ keep <- strsplit(v, ",", fixed = TRUE)[[1]]
+    new <- setdiff(keep, names(TYPES))
+    TYPES <<- c(TYPES, stats::setNames(sub(" ", "\n", new), new))[keep] } })
 SCORES <- c(pearson = "Pearson r", spearman = "Spearman \u03c1", auc = "AUC",
             contra = "Contradicted presence\n(lower = better)")
 #column order of the panels: site, then scale
@@ -74,6 +87,8 @@ readSet <- function(lab, dir){
 sets <- lapply(names(dirs), function(l) readSet(l, dirs[[l]]))
 pts  <- do.call(rbind, lapply(sets, `[[`, "pts"))
 ceil <- do.call(rbind, lapply(sets, `[[`, "ceil"))
+#only the types some set has (Two-stage is run on request only)
+TYPES <- TYPES[names(TYPES) %in% pts$type]
 tidy <- function(d){
   d$panel <- factor(unname(PANELS[paste(d$context, d$scale_m, sep = "|")]), levels = PANELS)
   d$score <- factor(unname(SCORES[d$score]), levels = SCORES)
@@ -132,7 +147,7 @@ base <- function(d, ce, nSets){
                  inherit.aes = FALSE, colour = CEIL_COL, linetype = "22", linewidth = 0.6) +
     geom_linerange(aes(ymin = lo, ymax = hi), position = pd, linewidth = 0.5, na.rm = TRUE) +
     geom_point(position = pd, size = 2.2, na.rm = TRUE) +
-    geom_text(data = gaps, aes(x = 2.5, y = -Inf, label = label), inherit.aes = FALSE,
+    geom_text(data = gaps, aes(x = (length(TYPES) + 1) / 2, y = -Inf, label = label), inherit.aes = FALSE,
               vjust = -1.2, size = 2.8, colour = "grey45") +
     facet_grid(score ~ panel, scales = "free_y", switch = "y") +
     scale_x_continuous(breaks = seq_along(TYPES), labels = unname(TYPES), expand = expansion(add = 0.5)) +
@@ -158,10 +173,10 @@ for(s in names(dirs)){
     theme(legend.position = "none")
   slug <- gsub("[^a-z]+", "_", tolower(s))
   for(o in unique(c(file.path(dirs[[s]], "figures"), OUTDIR)))
-    ggsave(file.path(o, paste0("fig_scores_ceiling_", slug, ".png")), p, width = 8.5, height = 7.6, dpi = 300, bg = "white")
+    ggsave(file.path(o, paste0("fig_scores_ceiling_", slug, ".png")), p, width = 4 + 1.4 * length(TYPES), height = 7.6, dpi = 300, bg = "white")
 }
 if(length(dirs) > 1){
   p <- base(pts, ceil, length(dirs)) + ggtitle("Survey agreement per simulation type - area sets side by side")
-  ggsave(file.path(OUTDIR, "fig_scores_ceiling_sets.png"), p, width = 9, height = 7.9, dpi = 300, bg = "white")
+  ggsave(file.path(OUTDIR, "fig_scores_ceiling_sets.png"), p, width = 4.5 + 1.4 * length(TYPES), height = 7.9, dpi = 300, bg = "white")
 }
 message("written to ", OUTDIR)

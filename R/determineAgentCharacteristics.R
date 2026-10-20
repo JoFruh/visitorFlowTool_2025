@@ -38,51 +38,9 @@ determineAgentCharacteristics <- function(dayPop, currentDay, network, finalPoly
   dayPop$currentE <- NA
 
   #instead, rapidly determine speed and durations based on agentTyp
-  #durations per agent type
-
-  #walkNat
-  dayPop$timeExt[dayPop$agentTyp == "walkNat"] <- sample(c(30, 60, 120, 180, 240), nrow(dayPop[dayPop$agentTyp == "walkNat",] ),
-                                                         prob = c(7.50, 12.50, 51.25, 23.75,  5.00), replace = TRUE)
-  #walkProx
-  dayPop$timeExt[dayPop$agentTyp == "walkSoc"] <- sample(c(30, 60, 120, 180, 240), nrow(dayPop[dayPop$agentTyp == "walkSoc",] ),
-                                                         prob = c(6, 34, 58, 0,  2), replace = TRUE)
-  #dogNat
-  dayPop$timeExt[dayPop$agentTyp == "dogNat"] <- sample(c(30, 60, 120, 180, 240), nrow(dayPop[dayPop$agentTyp == "dogNat",] ),
-                                                         prob = c(0, 34.28, 40, 22.857,  2.87), replace = TRUE)
-  #dogProx
-  dayPop$timeExt[dayPop$agentTyp == "dogProx"] <- sample(c(30, 60, 120, 180, 240), nrow(dayPop[dayPop$agentTyp == "dogProx",] ),
-                                                         prob = c(0, 55.55, 40.7, 3.7,  0), replace = TRUE)
-  #ebikeNat
-  dayPop$timeExt[dayPop$agentTyp == "ebikeNat"] <- sample(c(30, 60, 120, 180, 240), nrow(dayPop[dayPop$agentTyp == "ebikeNat",] ),
-                                                         prob = c(0, 36.84, 42.1, 21.05,  0), replace = TRUE)
-  #bikeSport
-  dayPop$timeExt[dayPop$agentTyp == "bikeSport"] <- sample(c(30, 60, 120, 180, 240), nrow(dayPop[dayPop$agentTyp == "bikeSport",] ),
-                                                         prob = c(0, 18.75, 56.25, 25,  0), replace = TRUE)
-  #jogger
-  dayPop$timeExt[dayPop$agentTyp == "jogger"] <- sample(c(30, 60, 120, 180, 240), nrow(dayPop[dayPop$agentTyp == "jogger",] ),
-                                                         prob = c(5.15, 31.818, 44.848, 13.939,  4.24), replace = TRUE)
-
-
-
-  #speeds
-  #walkNat
-  dayPop$speed[dayPop$agentTyp == "walkNat"] <- 5
-  #walkProx
-  dayPop$speed[dayPop$agentTyp == "walkSoc"] <- 3
-  #dogNat
-  dayPop$speed[dayPop$agentTyp == "dogNat"] <- 3
-  #dogProx
-  dayPop$speed[dayPop$agentTyp == "dogProx"] <- 2
-  #ebikeNat
-  dayPop$speed[dayPop$agentTyp == "ebikeNat"] <- 20
-  #bikeSport
-  dayPop$speed[dayPop$agentTyp == "bikeSport"] <- 20
-  #jogger
-  dayPop$speed[dayPop$agentTyp == "jogger"] <- 7
-
-
-
-
+  #(vftAgentTimeAndSpeed() below; a two-stage run's second population draws its
+  #own the same way)
+  dayPop <- vftAgentTimeAndSpeed(dayPop)
 
   #old method of cycling over agents DEPRECATED
 #   for(agentID in dayPop$id){
@@ -278,4 +236,62 @@ dayPop$AOIGoal <- AOIGoal
 
   vftDbg("DONE!")
   return(dayPop)
+}
+
+
+#' Each agent's outing duration (timeExt, minutes) and speed (km/h), by type.
+#'
+#' The durations are drawn in a fixed order, one sample() per type, so a caller
+#' that draws them consumes the random stream exactly as determineAgentCharacteristics()
+#' always has. The second population of a two-stage run (R/two_stage.R) gets its
+#' durations and speeds here too, without the area search.
+#'
+#' @param dayPop agents with `agentTyp`.
+#' @return dayPop with `timeExt` and `speed` set.
+vftAgentTimeAndSpeed <- function(dayPop){
+  dayPop$timeExt <- NA
+  dayPop$speed <- NA
+  #durations per agent type
+
+  #walkNat
+  dayPop$timeExt[dayPop$agentTyp == "walkNat"] <- sample(c(30, 60, 120, 180, 240), nrow(dayPop[dayPop$agentTyp == "walkNat",] ),
+                                                         prob = c(7.50, 12.50, 51.25, 23.75,  5.00), replace = TRUE)
+  #walkProx
+  dayPop$timeExt[dayPop$agentTyp == "walkSoc"] <- sample(c(30, 60, 120, 180, 240), nrow(dayPop[dayPop$agentTyp == "walkSoc",] ),
+                                                         prob = c(6, 34, 58, 0,  2), replace = TRUE)
+  #dogNat
+  dayPop$timeExt[dayPop$agentTyp == "dogNat"] <- sample(c(30, 60, 120, 180, 240), nrow(dayPop[dayPop$agentTyp == "dogNat",] ),
+                                                         prob = c(0, 34.28, 40, 22.857,  2.87), replace = TRUE)
+  #dogProx
+  dayPop$timeExt[dayPop$agentTyp == "dogProx"] <- sample(c(30, 60, 120, 180, 240), nrow(dayPop[dayPop$agentTyp == "dogProx",] ),
+                                                         prob = c(0, 55.55, 40.7, 3.7,  0), replace = TRUE)
+  #ebikeNat
+  dayPop$timeExt[dayPop$agentTyp == "ebikeNat"] <- sample(c(30, 60, 120, 180, 240), nrow(dayPop[dayPop$agentTyp == "ebikeNat",] ),
+                                                         prob = c(0, 36.84, 42.1, 21.05,  0), replace = TRUE)
+  #bikeSport
+  dayPop$timeExt[dayPop$agentTyp == "bikeSport"] <- sample(c(30, 60, 120, 180, 240), nrow(dayPop[dayPop$agentTyp == "bikeSport",] ),
+                                                         prob = c(0, 18.75, 56.25, 25,  0), replace = TRUE)
+  #jogger
+  dayPop$timeExt[dayPop$agentTyp == "jogger"] <- sample(c(30, 60, 120, 180, 240), nrow(dayPop[dayPop$agentTyp == "jogger",] ),
+                                                         prob = c(5.15, 31.818, 44.848, 13.939,  4.24), replace = TRUE)
+
+
+
+  #speeds
+  #walkNat
+  dayPop$speed[dayPop$agentTyp == "walkNat"] <- 5
+  #walkProx
+  dayPop$speed[dayPop$agentTyp == "walkSoc"] <- 3
+  #dogNat
+  dayPop$speed[dayPop$agentTyp == "dogNat"] <- 3
+  #dogProx
+  dayPop$speed[dayPop$agentTyp == "dogProx"] <- 2
+  #ebikeNat
+  dayPop$speed[dayPop$agentTyp == "ebikeNat"] <- 20
+  #bikeSport
+  dayPop$speed[dayPop$agentTyp == "bikeSport"] <- 20
+  #jogger
+  dayPop$speed[dayPop$agentTyp == "jogger"] <- 7
+
+  dayPop
 }

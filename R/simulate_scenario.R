@@ -56,17 +56,22 @@ VFT_SIM_NETWORK_SHARE <- 0.4
 #'   it crossed the process boundary as (terra::wrap()). NULL is a normal run.
 #' @param heatParams the heatwave model's parameters, VFT_HEATWAVE by default.
 #'   See R/heatwave_helpers.R.
+#' @param twoStage NULL for a normal run; TRUE, or a list overriding entries of
+#'   VFT_TWO_STAGE, for a two-stage run: the simulation explores, and a second
+#'   population chooses among the walks it recorded. See R/two_stage.R.
 #'
 #' @return list(network = , parking = , results = ). `network` and `parking` are
 #'   NULL when the scenario was already prepared and there is nothing to write
 #'   back - which also means the prepared graph does not cross the process
 #'   boundary a second time for every re-run of the same card. A heatwave run's
 #'   `results$heatwave` summarises the parameters and the exposure; the graph
-#'   and the pathUsage carry no heat.
+#'   and the pathUsage carry no heat. A two-stage run's `results$twoStage`
+#'   summarises the path library and the choice.
 vftSimulateScenario <- function(network, finalPolygons, minThresh, parking = NULL,
                                 residentDivision = 50,
                                 progPrep = NULL, progSim = NULL,
-                                heat = NULL, heatParams = VFT_HEATWAVE){
+                                heat = NULL, heatParams = VFT_HEATWAVE,
+                                twoStage = NULL){
 
   p <- function(f, detail = NULL){
     if(!is.null(progPrep))
@@ -129,11 +134,15 @@ vftSimulateScenario <- function(network, finalPolygons, minThresh, parking = NUL
   #get dataframe of all agents, their characteristics and their starting positions
   #(a car park weighs as much as its nearest area is attractive - heat-weighted
   #in a heatwave run)
-  pop <- generatePopulation(network, nAgents = nbAgents, parkingIntensity = 0.1,
-                            parkingAttr = if(!is.null(heatwave))
-                              vftHeatwaveParkingAttr(vertexTable, finalPolygons,
-                                                     heatwave$exposure$area,
-                                                     heatParams$kappa))
+  parkingAttr <- if(!is.null(heatwave))
+    vftHeatwaveParkingAttr(vertexTable, finalPolygons, heatwave$exposure$area,
+                           heatParams$kappa)
+  drawPop <- function(n) generatePopulation(network, nAgents = n, parkingIntensity = 0.1,
+                                            parkingAttr = parkingAttr)
+  #a two-stage run: this population explores (`explorers` times as many), and
+  #phase 2 draws its own from the same call once the exploration is done
+  ts  <- vftTwoStageParams(twoStage)
+  pop <- drawPop(if(is.null(ts)) nbAgents else nbAgents * ts$explorers)
 
   #### the agents, then the ABM ####
   vftDbg("LAUNCH MULTISIM")
@@ -148,7 +157,9 @@ vftSimulateScenario <- function(network, finalPolygons, minThresh, parking = NUL
                             },
                             minThresh = minThresh,
                             edgeTable = edgeTable, vertexTable = vertexTable,
-                            heatwave = heatwave)
+                            heatwave = heatwave,
+                            twoStage = if(!is.null(ts))
+                              list(params = ts, makePop = function() drawPop(nbAgents)))
 
   if(!is.null(progSim)) try(progSim$close(), silent = TRUE)
 
