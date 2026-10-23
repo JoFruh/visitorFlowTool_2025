@@ -190,6 +190,18 @@ vftSegmentAoI <- function(D, minThresh, paths2056,
 #' its border with the lake region however wide that is. The merged basin
 #' keeps the anchor. The watershed split and the cut without lakes pass none.
 #'
+#' `vdepth` is the cut's DULN veto (R/aoiCut.R, VFT_AOI_CUT_DULN_DEPTH): a
+#' border whose MEAN attractiveness dips below the lower of the two bodies'
+#' PEAK attractiveness (`bodyPk`) by `vdepth` or more of the way down to
+#' `vThresh` stays cut - no rule above merges it, contact included (contact
+#' rebuilt most of the clusters: 434 of 501 merges at filBleu, threshold 3.1).
+#' The size rule and the anchors are unaffected, so a fringe under `minArea`
+#' still joins. The relDip of the watershed, with the border's mean (over its
+#' straddling cell pairs: sum `edgeV`, count `edgeN`, both added on a merge) in
+#' place of its highest pass; against the body MEAN, the fringe cells near the
+#' threshold made almost every border read higher than its bodies. Inf (the
+#' default) switches it off.
+#'
 #' Then the pieces under `minArea` - fringes, a bump in a neck - are joined to
 #' the neighbour with the shallowest dip, path or not. They cannot be a
 #' destination on their own, and dropping them would bite holes in the areas.
@@ -198,7 +210,10 @@ vftSegmentAoI <- function(D, minThresh, paths2056,
                             minThresh, depth, neck, minArea,
                             per = rep(Inf, nb), contact = Inf,
                             join = logical(length(a)),
-                            anchor = integer(nb)){
+                            anchor = integer(nb),
+                            vdepth = Inf, vThresh = 0,
+                            bodyPk = numeric(nb),
+                            edgeV = numeric(length(a)), edgeN = rep(1, length(a))){
   root <- seq_len(nb)
   find <- function(i){ while(root[i] != i) i <- root[i]; i }
 
@@ -206,9 +221,15 @@ vftSegmentAoI <- function(D, minThresh, paths2056,
   #data.frame copied whole on every merge cost ~5 s over filBleu's 600 merges.
   #(Not `j` for the joins: merge() below uses i and j for basin ids.)
   s <- saddle; x <- crossed; w <- len; jn <- join; anc <- anchor
+  ev <- edgeV; en <- edgeN
   relDip <- function(k){
     lo <- pmin(peak[a[k]], peak[b[k]])
     (lo - s[k]) / pmax(lo - minThresh, 1e-9)
+  }
+  #the DULN dip of a border, against the lower body peak (see `vdepth`)
+  vDip <- function(k){
+    lo <- pmin(bodyPk[a[k]], bodyPk[b[k]])
+    (lo - ev[k] / pmax(en[k], 1)) / pmax(lo - vThresh, 1e-9)
   }
   #share of the SMALLER circumference the border is - the larger of the two
   #shares
@@ -224,6 +245,7 @@ vftSegmentAoI <- function(D, minThresh, paths2056,
     area[i] <<- area[i] + area[j]
     per[i]  <<- per[i] + per[j] - 2 * w[k]
     anc[i]  <<- max(anc[i], anc[j])
+    bodyPk[i] <<- max(bodyPk[i], bodyPk[j])
     a[a == j] <<- i
     b[b == j] <<- i
     sw <- a > b
@@ -238,10 +260,12 @@ vftSegmentAoI <- function(D, minThresh, paths2056,
       x[first] <<- as.logical(tapply(x[t], g, any))
       w[first] <<- as.numeric(tapply(w[t], g, sum))
       jn[first] <<- as.logical(tapply(jn[t], g, any))
+      ev[first] <<- as.numeric(tapply(ev[t], g, sum))
+      en[first] <<- as.numeric(tapply(en[t], g, sum))
       keep[t[g != seq_along(t)]] <- FALSE
     }
     a <<- a[keep]; b <<- b[keep]; s <<- s[keep]; x <<- x[keep]; w <<- w[keep]
-    jn <<- jn[keep]
+    jn <<- jn[keep]; ev <<- ev[keep]; en <<- en[keep]
   }
 
   #the rule
@@ -250,6 +274,7 @@ vftSegmentAoI <- function(D, minThresh, paths2056,
     k  <- seq_along(a)
     d  <- relDip(k)
     ok <- jn | share(k) > contact | (d < depth & (x | w >= neck))
+    if(is.finite(vdepth)) ok <- ok & vDip(k) < vdepth
     if(any(anc > 0)){
       aA <- anc[a]; aB <- anc[b]
       same <- aA > 0 & aA == aB

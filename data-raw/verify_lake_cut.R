@@ -62,14 +62,14 @@ cut   <- function(D, lakes = NULL, ...) vftCutAoI(D, T, lakes = lakes, crs = crs
 anch  <- function(D, lakes) .vftLakeAnchors(D, T, lakes, 50, 50, crs)
 
 #A 2 km lake inside a 200 m attractive shore, and a 1.8 km forest joined to the
-#shore by an 800 m bridge - over the 700 m floor, so without the lake anchor
-#it all stays one area.
+#shore by an 800 m bridge - over a 700 m floor (the default until 2026-10-20),
+#so without the lake anchor it all stays one area.
 L1    <- lakeP(3000, 2500, 800)
 shore <- disc(3000, 2500, 1000)
 land  <- shore | strip(3900, 4400, 800) | disc(5200, 2500, 900)
 Dl    <- asD(land)
-ok("lake + shore + forest on an 800 m bridge, no lakes: one area",  nLab(cut(Dl)) == 1)
-lab <- labs(cut(Dl, L1))
+ok("lake + shore + forest on an 800 m bridge, no lakes: one area",  nLab(cut(Dl, bridge = 700)) == 1)
+lab <- labs(cut(Dl, L1, bridge = 700))
 ok("...with the lake anchored: two",                                length(unique(stats::na.omit(lab))) == 2)
 ok("...the lake and its shore are one area",                        length(unique(lab[shore])) == 1)
 #The bridge is FLAT - 800 m wide all along - so it has no narrowest point, and

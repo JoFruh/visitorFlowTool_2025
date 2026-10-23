@@ -661,6 +661,24 @@ cannotRecreate <- dayPop$goalV == -1
     #active agents with "retracing" behaviour
     toDecideRetracing <- toDecide & dayPop$behaviour == "retracing"
 
+    #NOTHING LEFT TO RETRACE: an agent that starts inside a dead-end scrap of its area
+    #(no other in-area way on from its start node) retraces its only step and is left
+    #with an empty priorV. retraceSteps_cpp() then failed on the NULL and the run died
+    #(2026-10-21: auto-cut areas at thresholds 6 and 8, 11 of 3,600 runs). It has
+    #explored what it can: home by the dead-end rule below, or done if already home.
+    #Only these agents are touched - every run that finished before is unchanged.
+    stuck <- toDecideRetracing & vapply(dayPop$priorV, is.null, TRUE)
+    if(any(stuck)){
+      done <- stuck & dayPop$currentV == dayPop$startV
+      dayPop$returning[stuck] <- TRUE
+      dayPop$active[done] <- FALSE
+      toDecide[done] <- FALSE
+      agentsReachedNextV[done] <- FALSE
+      dayPop$behaviour[stuck & !done] <- "nicestShortest"
+      dayPop$goalV[stuck & !done] <- dayPop$startV[stuck & !done]
+      toDecideRetracing[stuck] <- FALSE
+    }
+
     if(sum(toDecideRetracing) > 0){
 
       #to insert somehow?

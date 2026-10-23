@@ -129,15 +129,18 @@ aoiProbsR_orig <- aoiProbsR
 #the same arithmetic, the DULN range standardised within the type. With every type
 #given the same DULN it is aoiProbsR() exactly.
 aoiProbsTypeR <- function(res, agentSpeeds, agentDurations, AOI_aois, AOI_dulns, AOI_areas, reach,
-                          trueDist = NULL, floorH = 0, fallback = FALSE, fallbackCap = Inf){
+                          trueDist = NULL, floorH = 0, fallback = FALSE, fallbackCap = Inf,
+                          bAttr = 3.23695, bDist = -6.65703, durRange = NULL){
   D <- .typeCtx$duln; typ <- .typeCtx$typ
   if(is.null(D) || is.null(typ))
     return(aoiProbsR_orig(res, agentSpeeds, agentDurations, AOI_aois, AOI_dulns, AOI_areas, reach,
-                          trueDist, floorH, fallback, fallbackCap))
+                          trueDist, floorH, fallback, fallbackCap, bAttr, bDist, durRange))
   D <- D[match(AOI_aois, rownames(D)), , drop = FALSE]
   if(anyNA(D)) stop("the per-type area DULN misses areas the engine has")
   rngMax <- apply(D, 2, max); rngMin <- apply(D, 2, min)
-  durMax <- max(agentDurations); durMin <- min(agentDurations)
+  if(is.null(durRange)) durRange <- range(agentDurations)
+  durMax <- durRange[2]; durMin <- durRange[1]
+  bAttr <- rep_len(bAttr, length(res$prob)); bDist <- rep_len(bDist, length(res$prob))
   lastMatch <- function(x, table){ k <- match(x, rev(table)); ifelse(is.na(k), NA_integer_, length(table) + 1L - k) }
   lapply(seq_along(res$prob), function(i){
     d <- res$distances[[i]]
@@ -158,7 +161,7 @@ aoiProbsTypeR <- function(res, agentSpeeds, agentDurations, AOI_aois, AOI_dulns,
       dbMax  <- (dulnMax * 15000) / durMin; dbMin <- (dulnMin * 316) / durMax
       dbSTD <- ((10 - 1) * (dbapd - dbMin) / (dbMax - dbMin)) + 1
       dSTD  <- ((10 - 1) * (dpd - dpdMin) / (dpdMax - dpdMin)) + 1
-      u <- (3.23695 * dbSTD) + (-6.65703 * dSTD)
+      u <- (bAttr[i] * dbSTD) + (bDist[i] * dSTD)
     }else u <- rep(1, length(d))
     tReach <- if(is.null(trueDist)) td else trueDist[[i]] / (speed * 1000)
     u[tReach > max(reach * (dur / 60), floorH)] <- 0
@@ -232,11 +235,21 @@ simTyped <- function(ctx, type, rep, vdir, typeArea = FALSE, mixId = NA_characte
     if(!length(i)) return(list(cells = integer(0), counts = integer(0)))
     t <- summariseTracks(cap$priorE[i], sc$ix); t$visits <- NULL; t
   })
+  #the metres walked on stairs per type (every traversal), when STAIR_LEN_OF(ctx)
+  #gives the stair and total length per edgeID
+  sl <- if(is.function(STAIR_LEN_OF)) STAIR_LEN_OF(ctx) else NULL
+  stairs <- if(!is.null(sl)) vapply(TYPES7, function(k){
+    i <- which(cap$typ == k)
+    e <- suppressWarnings(as.integer(unlist(cap$priorE[i], use.names = FALSE)))
+    e <- e[!is.na(e) & e >= 1L & e <= length(sl$stair)]
+    c(stairM = sum(sl$stair[e]), trackM = sum(sl$len[e]), agents = length(i))
+  }, numeric(3)) else NULL
   list(status = "done", ctx = ctx, type = type, rep = rep, secs = r$secs, nAgents = nrow(dp),
        nNoGoal = sum(dp$AOIGoal %in% "NO_GOAL" | dp$goalV %in% -1), typeArea = isTRUE(typeArea), mixId = mixId,
        agentTypes = table(factor(cap$typ, levels = TYPES7)),
-       cells = tot$cells, counts = tot$counts, visits = tot$visits, byType = byType)
+       cells = tot$cells, counts = tot$counts, visits = tot$visits, byType = byType, stairs = stairs)
 }
+STAIR_LEN_OF <- NULL
 
 #runs a grid (ctx, type, rep, vdir, typeArea) on daemons; results in grid order
 runGrid <- function(g, label){
@@ -304,7 +317,60 @@ typeBase <- function(runs, G, k){
   as.vector(G$P %*% x)
 }
 
-fitTypes <- function(ex, sty, nrMaps, label){
+#ridgePois() with box limits on the coefficients: the same objective by L-BFGS-B
+ridgePoisBox <- function(X, y, off, W, lambda, pen, lower, upper, b = NULL){
+  if(is.null(b)) b <- pmin(pmax(numeric(ncol(X)), lower), upper)
+  W <- W / sum(W)
+  obj <- function(bb){ e <- off + drop(X %*% bb); sum(W * (exp(e) - y * e)) + lambda / 2 * sum(pen * bb^2) }
+  gr  <- function(bb){ mu <- exp(off + drop(X %*% bb)); -drop(crossprod(X, W * (y - mu))) + lambda * pen * bb }
+  stats::optim(b, obj, gr, method = "L-BFGS-B", lower = lower, upper = upper,
+               control = list(maxit = 5000, factr = 1e5))$par
+}
+#the Gaussian counterpart of ridgePois(): minimise sum(W (y - off - X b)^2) / 2 +
+#lambda/2 sum(pen b^2), W normalised to 1; closed form
+ridgeGauss <- function(X, y, off, W, lambda, pen){
+  W <- W / sum(W)
+  drop(solve(crossprod(X, X * W) + diag(lambda * pen + 1e-10, ncol(X)), crossprod(X, W * (y - off))))
+}
+mseW <- function(y, mu, W) sum(W * (y - mu)^2) / sum(W)
+#ridgeGauss() with box limits on the coefficients, by L-BFGS-B
+ridgeGaussBox <- function(X, y, off, W, lambda, pen, lower, upper, b = NULL){
+  if(is.null(b)) b <- pmin(pmax(numeric(ncol(X)), lower), upper)
+  W <- W / sum(W)
+  obj <- function(bb){ r <- y - off - drop(X %*% bb); sum(W * r^2) / 2 + lambda / 2 * sum(pen * bb^2) }
+  gr  <- function(bb){ r <- y - off - drop(X %*% bb); -drop(crossprod(X, W * r)) + lambda * pen * bb }
+  stats::optim(b, obj, gr, method = "L-BFGS-B", lower = lower, upper = upper,
+               control = list(maxit = 5000, factr = 1e5))$par
+}
+
+#`types`: the groups fitted - the 7 agent types, or the 4 activities of
+#data-raw/tailor_duln_activities.R (sty$base and nrMaps then keyed by activity).
+#`bounds`: list(pos =, neg =) element names held to that sign (shared weights, and
+#shared + a type's difference), fitted at the unconstrained CV's lambda.
+#`target`: "counts" (survey usage: quasi-Poisson, each type's Nearby-Random map the
+#offset) or "ranks" (normal scores of a relative heat, data-raw/tailor_duln_strava.R:
+#a Gaussian ridge, log Nearby-Random per type an unpenalised covariate - a rank scale
+#is not a log-count scale)
+fitTypes <- function(ex, sty, nrMaps, label, types = TYPES7, bounds = NULL, target = "counts"){
+  TYPES7 <- types
+  ranks <- identical(target, "ranks")
+  fitF <- if(ranks) ridgeGauss else ridgePois
+  boxF <- if(ranks) ridgeGaussBox else ridgePoisBox
+  devF <- if(ranks) mseW else poisDev
+  inv  <- if(ranks) identity else exp
+  #the fit, within the bounds; `base` the part of each coefficient fitted already
+  boxFit <- function(X, yy, oo, WW, l, pp, base = 0){
+    b <- fitF(X, yy, oo, WW, l, pp)
+    if(is.null(bounds)) return(b)
+    cn <- colnames(X); base <- rep_len(base, length(cn))
+    lo <- ifelse(cn %in% bounds$pos, -base, -Inf); hi <- ifelse(cn %in% bounds$neg, -base, Inf)
+    boxF(X, yy, oo, WW, l, pp, lo, hi, b = pmin(pmax(b, lo), hi))
+  }
+  cvAt <- function(X, yy, oo, WW, l, pp, fd, base = 0) mean(vapply(1:5, function(f){
+    tr <- fd != f
+    b <- boxFit(X[tr, , drop = FALSE], yy[tr], oo[tr], WW[tr], l, pp, base)
+    devF(yy[!tr], inv(oo[!tr] + drop(X[!tr, , drop = FALSE] %*% b)), WW[!tr])
+  }, 1))
   els <- ELEMENTS_NEW()
   cells <- ex$cells
   ident <- names(which(colMeans(ex$X[, els] != 0) >= 0.01 & apply(ex$X[, els], 2, stats::sd) > 0))
@@ -317,51 +383,72 @@ fitTypes <- function(ex, sty, nrMaps, label){
   set.seed(11)
   ub <- unique(blk); fold <- stats::setNames(sample(rep_len(1:5, length(ub))), ub)[blk]
   ys <- lapply(TYPES7, function(k) sty$base[[k]][cells])
-  offs <- lapply(TYPES7, function(k){ s <- nrMaps[[k]][cells]
-    s <- s / mean(s) * mean(sty$base[[k]][cells]); log(pmax(s, 0.5 * min(s[s > 0]))) })
-  names(ys) <- names(offs) <- TYPES7
+  #log Nearby-Random: the offset at the type's level (counts), or a covariate (ranks)
+  lnr <- lapply(TYPES7, function(k){ s <- nrMaps[[k]][cells]
+    s <- s / mean(s) * (if(ranks) 1 else mean(sty$base[[k]][cells])); log(pmax(s, 0.5 * min(s[s > 0]))) })
+  offs <- if(ranks) lapply(lnr, function(v) v * 0) else lnr
+  names(ys) <- names(offs) <- names(lnr) <- TYPES7
   #the shared fit: every type's cells stacked, an intercept per type, one weight set
   nT <- length(TYPES7); n <- length(cells)
   Dm <- kronecker(diag(nT), matrix(1, n, 1)); colnames(Dm) <- paste0("type_", TYPES7)
-  M  <- cbind(Dm, logHa = rep(lh, nT), Z[rep(seq_len(n), nT), , drop = FALSE])
+  #ranks: a slope on log Nearby-Random per type
+  Gm <- if(ranks){ g <- Dm * unlist(lnr); colnames(g) <- paste0("nr_", TYPES7); g } else NULL
+  M  <- cbind(Dm, Gm, logHa = rep(lh, nT), Z[rep(seq_len(n), nT), , drop = FALSE])
   y  <- unlist(ys); off <- unlist(offs); W <- rep(1, length(y))
-  pen <- c(rep(0, nT + 1), pz)
+  pen <- c(rep(0, nT + (if(ranks) nT else 0) + 1), pz)
   foldS <- rep(fold, nT)
   cvS <- vapply(LAMBDAS, function(l) mean(vapply(1:5, function(f){
     tr <- foldS != f
-    b <- ridgePois(M[tr, ], y[tr], off[tr], W[tr], l, pen)
-    poisDev(y[!tr], exp(off[!tr] + drop(M[!tr, ] %*% b)), W[!tr])
+    b <- fitF(M[tr, ], y[tr], off[tr], W[tr], l, pen)
+    devF(y[!tr], inv(off[!tr] + drop(M[!tr, ] %*% b)), W[!tr])
   }, 1)), 1)
   lamS <- LAMBDAS[which.min(cvS)]
-  bS <- ridgePois(M, y, off, W, lamS, pen); names(bS) <- colnames(M)
+  bS <- boxFit(M, y, off, W, lamS, pen); names(bS) <- colnames(M)
   betaS <- bS[ident] / sd0
-  logf("types fit %s: shared, %d cells x %d types, %d elements, lambda %.2g, CV deviance %.4f (largest lambda %.4f)",
-       label, n, nT, length(ident), lamS, min(cvS), cvS[length(cvS)])
+  cvSB <- if(is.null(bounds)) NA_real_ else cvAt(M, y, off, W, lamS, pen, foldS)
+  what <- if(ranks) "MSE" else "deviance"
+  logf("types fit %s: shared, %d cells x %d types, %d elements, lambda %.2g, CV %s %.4f (largest lambda %.4f)%s",
+       label, n, nT, length(ident), lamS, what, min(cvS), cvS[length(cvS)],
+       if(is.null(bounds)) "" else sprintf(", within the sign limits %.4f", cvSB))
   #per type: its difference from the shared weights, offset by the shared fit
   LAM2 <- 10^seq(-2, 4, by = 0.5)
   dev <- lapply(TYPES7, function(k){
     j <- which(TYPES7 == k)
     o <- offs[[k]] + bS[[paste0("type_", k)]] + bS[["logHa"]] * lh + drop(Z %*% bS[ident])
+    if(ranks) o <- o + bS[[paste0("nr_", k)]] * lnr[[k]]
     Mk <- cbind(int = 1, Z); pk <- c(0, pz)
     yk <- ys[[k]]; Wk <- rep(1, n)
     cv <- vapply(LAM2, function(l) mean(vapply(1:5, function(f){
       tr <- fold != f
-      b <- ridgePois(Mk[tr, ], yk[tr], o[tr], Wk[tr], l, pk)
-      poisDev(yk[!tr], exp(o[!tr] + drop(Mk[!tr, ] %*% b)), Wk[!tr])
+      b <- fitF(Mk[tr, ], yk[tr], o[tr], Wk[tr], l, pk)
+      devF(yk[!tr], inv(o[!tr] + drop(Mk[!tr, ] %*% b)), Wk[!tr])
     }, 1)), 1)
     cv0 <- mean(vapply(1:5, function(f){
       tr <- fold != f
-      b <- ridgePois(Mk[tr, 1, drop = FALSE], yk[tr], o[tr], Wk[tr], 0, 0)
-      poisDev(yk[!tr], exp(o[!tr] + drop(Mk[!tr, 1, drop = FALSE] %*% b)), Wk[!tr])
+      b <- fitF(Mk[tr, 1, drop = FALSE], yk[tr], o[tr], Wk[tr], 0, 0)
+      devF(yk[!tr], inv(o[!tr] + drop(Mk[!tr, 1, drop = FALSE] %*% b)), Wk[!tr])
     }, 1))
     l <- LAM2[which.min(cv)]
-    b <- ridgePois(Mk, yk, o, Wk, l, pk); names(b) <- colnames(Mk)
-    logf("types fit %s: %-9s lambda %.2g, CV deviance %.4f with its own difference, %.4f at the shared weights",
-         label, k, l, min(cv), cv0)
-    list(delta = b[ident] / sd0, lambda = l, cv = min(cv), cv0 = cv0, cvCurve = cv)
+    b <- boxFit(Mk, yk, o, Wk, l, pk, base = c(0, bS[ident])); names(b) <- colnames(Mk)
+    cvB <- if(is.null(bounds)) NA_real_ else cvAt(Mk, yk, o, Wk, l, pk, fold, base = c(0, bS[ident]))
+    logf("types fit %s: %-9s lambda %.2g, CV %s %.4f with its own difference, %.4f at the shared weights%s",
+         label, k, l, what, min(cv), cv0, if(is.null(bounds)) "" else sprintf(", %.4f within the sign limits", cvB))
+    list(delta = b[ident] / sd0, lambda = l, cv = min(cv), cv0 = cv0, cvCurve = cv, cvBox = cvB)
   })
   names(dev) <- TYPES7
-  list(ident = ident, betaShared = betaS, lambdaShared = lamS, cvShared = cvS, dev = dev, label = label)
+  out <- list(ident = ident, betaShared = betaS, lambdaShared = lamS, cvShared = cvS, cvSharedBox = cvSB, dev = dev,
+              label = label, bounds = bounds)
+  if(!ranks) return(out)
+  #ranks: the slopes on log Nearby-Random, and the shared fit without any element
+  k0 <- pen == 0
+  cvNone <- mean(vapply(1:5, function(f){
+    tr <- foldS != f
+    b <- fitF(M[tr, k0, drop = FALSE], y[tr], off[tr], W[tr], 0, pen[k0])
+    devF(y[!tr], inv(off[!tr] + drop(M[!tr, k0, drop = FALSE] %*% b)), W[!tr])
+  }, 1))
+  logf("types fit %s: shared CV MSE %.4f with the elements, %.4f without; slopes on log Nearby-Random %s", label,
+       min(cvS), cvNone, paste(sprintf("%s %.3f", TYPES7, bS[paste0("nr_", TYPES7)]), collapse = ", "))
+  c(out, list(target = "ranks", gammaNR = bS[paste0("nr_", TYPES7)], cvNone = cvNone))
 }
 
 stageFitTypes <- function(){
@@ -396,15 +483,21 @@ xlsxOld <- function(k){ w <- xlsxWeights(); stats::setNames(w[[k]], w$element) }
 typeWeights <- function(ft, ex){
   fit <- readRDS(tdPath("fit.rds"))
   els <- ELEMENTS_NEW()
+  #the walking xlsx weights on the element set in use (fit.rds's wOldNew on today's)
   sc <- scaleFit(list(ident = ft$ident, beta = ft$betaShared), "glatt", list(glatt = ex),
-                 fit$wOld, fit$wOldNew, els)
+                 fit$wOld, xlsxNew("walkNat")[els], els)
   a <- sc$a
   shared <- sc$w
+  #a fit by activity (ft$actOf: type -> activity) gives each type its activity's difference
   perType <- lapply(stats::setNames(TYPES7, TYPES7), function(k){
     w <- xlsxNew(k)
-    w[ft$ident] <- a * (ft$betaShared[ft$ident] + ft$dev[[k]]$delta[ft$ident])
+    dk <- ft$dev[[if(is.null(ft$actOf)) k else ft$actOf[[k]]]]
+    w[ft$ident] <- a * (ft$betaShared[ft$ident] + dk$delta[ft$ident])
     w
   })
+  #a type that takes another's whole layer, unidentified elements too (ft$sameAs: type ->
+  #type; the Strava fit's dog types)
+  for(k in names(ft$sameAs)) perType[[k]] <- perType[[ft$sameAs[[k]]]]
   list(a = a, shared = shared, perType = perType)
 }
 
@@ -465,8 +558,11 @@ stageVariantsTypes <- function(){
       sp <- TY_VARIANTS[[v]]
       net <- base$net; polys <- aoi$polys
       for(k in TYPES7) polys[[paste0("DULN_", k)]] <- todayType[[k]]
-      #the two per-type variants share one network: built once, then copied
-      same <- Filter(function(u) u != v && identical(TY_VARIANTS[[u]]$kind, sp$kind) &&
+      #the two per-type variants share one network: built once, then copied (variants
+      #that differ in more than the area choice - manual weights, postNet - never do)
+      sameSpec <- function(u) identical(TY_VARIANTS[[u]][setdiff(names(TY_VARIANTS[[u]]), "typeArea")],
+                                        sp[setdiff(names(sp), "typeArea")])
+      same <- Filter(function(u) u != v && sameSpec(u) &&
                        file.exists(file.path(tyVariantDir(u), "network", paste0(ctx, "_net.rds"))), names(TY_VARIANTS))
       if(length(same) && !identical(sp$kind, "today")){
         for(f in c(file.path("aoi", paste0(ctx, ".rds")), file.path("network", paste0(ctx, c("_net.rds", "_edges.rds", "_meta.rds"))))){
@@ -485,6 +581,9 @@ stageVariantsTypes <- function(){
           #takes that same change (the delta rule, as the earlier s0.5 variants);
           #types: each type's own fitted layer, halved
           wNew <- if(identical(sp$kind, "shared")) xlsxNew(k) + S_TY * tw$shared - xlsxNew("walkNat") else S_TY * tw$perType[[k]]
+          #weights set by hand (sp$manual: type -> named weights), after the strength
+          m <- sp$manual[[k]]
+          if(length(m)){ stopifnot(all(names(m) %in% names(wNew))); wNew[names(m)] <- m }
           d <- typeDelta(wNew, k)
           old <- drop(ex$E[, names(xlsxOld(k))] %*% xlsxOld(k))
           b0 <- mean(old) - mean(old + drop(ex$E[, names(d)] %*% d))
@@ -509,6 +608,9 @@ stageVariantsTypes <- function(){
         igraph::edge_attr(net) <- ea; igraph::vertex_attr(net) <- vv
         class(net) <- cls
         net <- ns$vftRefreshAttrWeights(net, aoi$thr)
+        #a change of the refreshed weights themselves (sp$postNet(net, ctx)); they
+        #stay stamped current, so the simulation keeps them
+        if(is.function(sp$postNet)) net <- sp$postNet(net, ctx)
       }
       a2 <- aoi; a2$polys <- polys
       dir.create(file.path(vd, "aoi"), recursive = TRUE, showWarnings = FALSE)

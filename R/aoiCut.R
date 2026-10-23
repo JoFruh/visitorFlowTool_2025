@@ -25,7 +25,7 @@
 #    waist ~1 km wide (Zuerichberg q50) - narrow against the bodies, but no
 #    bridge a visitor would notice. The width is twice the saddle: twice the
 #    distance from the bridge's middle to its edge, exact to within a cell;
-#  - the contact rule (VFT_AOI_SPLIT_CONTACT): a distance transform peaks in
+#  - the contact rule (VFT_AOI_CUT_CONTACT): a distance transform peaks in
 #    every bulge of a wavy outline, and those pieces share a border long
 #    against their own outline, so they rejoin;
 #  - the size rule (VFT_AOI_SPLIT_JOIN_M2): a piece under 25 ha joins its
@@ -65,9 +65,13 @@
 #'   width) is at or above this stays cut - VFT_AOI_CUT_DEPTH.
 #' @param bridge m: a bridge at least this wide is never cut -
 #'   VFT_AOI_CUT_MAX_BRIDGE_M. Inf turns the floor off.
-#' @param contact see vftSegmentAoI() - VFT_AOI_SPLIT_CONTACT.
+#' @param contact see vftSegmentAoI() - VFT_AOI_CUT_CONTACT, the cut's own value.
 #' @param minArea m2 below which a piece joins a neighbour -
 #'   VFT_AOI_SPLIT_JOIN_M2.
+#' @param dulnDepth a border whose mean attractiveness lies this share or more
+#'   of the way from the lower body's peak down to the threshold stays cut,
+#'   however wide or shallow the bridge and whatever the contact (pieces under
+#'   `minArea` still join) - VFT_AOI_CUT_DULN_DEPTH. Inf: shape alone.
 #' @param lakes the lakes (sf or sfc, any CRS) to anchor, or NULL for none. Only
 #'   the qualifying ones are used - see .vftLakeAnchors().
 #' @param crs the CRS of `D`, spelled out (see vftSegmentAoI()).
@@ -75,8 +79,9 @@
 vftCutAoI <- function(D, minThresh,
                       depth   = VFT_AOI_CUT_DEPTH,
                       bridge  = VFT_AOI_CUT_MAX_BRIDGE_M,
-                      contact = VFT_AOI_SPLIT_CONTACT,
+                      contact = VFT_AOI_CUT_CONTACT,
                       minArea = VFT_AOI_SPLIT_JOIN_M2,
+                      dulnDepth = VFT_AOI_CUT_DULN_DEPTH,
                       lakes   = NULL,
                       crs     = "EPSG:4326"){
 
@@ -113,12 +118,36 @@ vftCutAoI <- function(D, minThresh,
   per <- b$ph * yM + b$pv * xM
 
   #### 2. merge: the dip alone, no path veto, wide bridges never cut ####
+  #With dulnDepth, a valley of attractiveness across a border vetoes the
+  #merge, whatever the shape says: the mean over the cell pairs straddling the
+  #border (rook steps, as the borders are counted) against the bodies' peak
+  #values - see .vftMergeBasins()'s `vdepth`.
+  vArgs <- list()
+  if(is.finite(dulnDepth)){
+    l  <- b$label; l[is.na(l)] <- 0L
+    vv <- ifelse(is.na(v), NA_real_, v)
+    bodyCell <- l > 0 & !is.na(vv)
+    bodyPk <- as.numeric(tapply(vv[bodyCell], factor(l[bodyCell], levels = seq_len(nb)), max))
+    bodyPk[is.na(bodyPk)] <- minThresh
+    i  <- seq_len(nr * nc)
+    hI <- i[(i %% nc) != 0]                 # a cell and its right neighbour
+    vI <- i[i <= (nr - 1) * nc]             # a cell and the one below
+    p1 <- c(hI, vI); p2 <- c(hI + 1L, vI + nc)
+    st <- l[p1] > 0 & l[p2] > 0 & l[p1] != l[p2] & !is.na(vv[p1]) & !is.na(vv[p2])
+    p1 <- p1[st]; p2 <- p2[st]
+    key <- paste(pmin(l[p1], l[p2]), pmax(l[p1], l[p2]))
+    k   <- factor(key, levels = paste(b$a, b$b))
+    edgeV <- as.numeric(tapply((vv[p1] + vv[p2]) / 2, k, sum)); edgeV[is.na(edgeV)] <- 0
+    edgeN <- as.numeric(table(k))
+    vArgs <- list(vdepth = dulnDepth, vThresh = minThresh, bodyPk = bodyPk,
+                  edgeV = edgeV, edgeN = edgeN)
+  }
   wide <- 2 * b$saddle >= bridge
-  root <- .vftMergeBasins(nb, b$peak, area, b$a, b$b, b$saddle,
+  root <- do.call(.vftMergeBasins, c(list(nb, b$peak, area, b$a, b$b, b$saddle,
                           crossed = rep(TRUE, length(b$a)), len = len,
                           minThresh = 0, depth = depth, neck = Inf,
                           minArea = minArea, per = per, contact = contact,
-                          join = wide, anchor = ancB)
+                          join = wide, anchor = ancB), vArgs))
 
   vftDbgCat(sprintf("aoi cut: %d body/bodies, %d border(s), %d too wide to cut, %d lake anchor(s) -> %d area(s)\n",
                     nb, length(b$a), sum(wide), length(unique(anchor[anchor > 0])),

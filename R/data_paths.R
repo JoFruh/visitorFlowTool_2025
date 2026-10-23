@@ -235,10 +235,22 @@ VFT_AOI_SPLIT_PATH_STEP_M <- 20
 #'                         read. "cut" is a candidate under comparison
 #'                         (data-raw/compare_aoi_split.R), not the default
 #'   VFT_AOI_CUT_DEPTH     "cut" only: a bridge narrower than (1 - this) x the
-#'                         width of the narrower body it joins is cut. 0.5:
-#'                         cut where the bridge is under half as wide.
-#'                         VFT_AOI_SPLIT_CONTACT and VFT_AOI_SPLIT_JOIN_M2
-#'                         apply to "cut" too
+#'                         width of the narrower body it joins is cut. 0.25:
+#'                         cut where the bridge is under 3/4 as wide.
+#'                         VFT_AOI_SPLIT_JOIN_M2 applies to "cut" too
+#'   VFT_AOI_CUT_CONTACT   "cut" only: VFT_AOI_SPLIT_CONTACT's rule with its own
+#'                         value - a shared border above this share of the
+#'                         smaller piece's outline joins the two outright
+#'
+#'                         The three were set 2026-10-20 by eye from parameter
+#'                         sweeps at filBleu and Wigger, threshold 3.1
+#'                         (data-raw/sweep_aoi_cut.R). Before: depth 0.5, floor
+#'                         700 m, contact 0.2 (shared with the watershed). At
+#'                         filBleu, 434 of 501 merges were contact merges, so
+#'                         0.35 frees most clusters; at Wigger contact did
+#'                         nothing from 0.22 up and depth did the work (16
+#'                         areas at 0.5, 22 at 0.25); the 700 m floor kept the
+#'                         Safenwil-Zofingen-Wikon block whole (2455 ha)
 #'   VFT_AOI_CUT_MAX_BRIDGE_M  "cut" only: a bridge at least this wide (m) is
 #'                         never cut, however narrow against the bodies it
 #'                         joins. Without it two very wide bodies were cut at a
@@ -248,7 +260,15 @@ VFT_AOI_SPLIT_PATH_STEP_M <- 20
 #'                         144-577 m wide, plus that waist at 849 m. 700 sits
 #'                         in the gap; 600 and 800 gave the same areas. 500
 #'                         rejoined a 577 m cut the watershed split makes too,
-#'                         and 300 rebuilt a ~4000 ha area at filBleu q50
+#'                         and 300 rebuilt a ~4000 ha area at filBleu q50.
+#'                         Now 1250 (see VFT_AOI_CUT_DEPTH): from 800 up the
+#'                         sweeps barely changed, 1250 adds an area at depth 0.2
+#'   VFT_AOI_CUT_DULN_DEPTH  "cut" only: a border whose mean attractiveness
+#'                         lies this share or more of the way from the lower
+#'                         body's PEAK down to the threshold stays cut - the
+#'                         bridge dip, the width floor and the contact rule
+#'                         cannot rejoin it; the 25 ha size rule still can.
+#'                         Inf is the cut by shape alone
 #'   VFT_AOI_CUT_LAKES     "cut" only: anchor the lakes (R/aoiCut.R) - a
 #'                         qualifying lake, plus a vftLakeLoopBuffer() band
 #'                         round its water, is the core of an area of its own,
@@ -259,8 +279,10 @@ VFT_AOI_SPLIT_PATH_STEP_M <- 20
 #'                         when more than VFT_LAKE_LOOP_SHARE of its cells are
 #'                         above the threshold
 VFT_AOI_SPLIT_METHOD     <- "cut"
-VFT_AOI_CUT_DEPTH        <- 0.5
-VFT_AOI_CUT_MAX_BRIDGE_M <- 700
+VFT_AOI_CUT_DEPTH        <- 0.25
+VFT_AOI_CUT_MAX_BRIDGE_M <- 1250
+VFT_AOI_CUT_CONTACT      <- 0.35
+VFT_AOI_CUT_DULN_DEPTH   <- Inf
 VFT_AOI_CUT_LAKES        <- TRUE
 VFT_AOI_LAKE_MIN_M2      <- 100000
 

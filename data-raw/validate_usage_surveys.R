@@ -45,6 +45,12 @@
 #                     and compare refuses to mix them.
 #   VFT_VAL_THRESHOLD fixes the step-3 threshold of the aoi stage (default: the
 #                     suggested one, vftSuggestAoIThreshold())
+#   VFT_VAL_DULN_ALL  the raster the aoi stage thresholds and cuts (default the app's
+#                     maps/DULN/DULN_nat_majMaxMeanAGGBlur.tif); e.g. an aggregate of a
+#                     tailored DULN (data-raw/aggregate_tailored_duln.R). It must cover
+#                     the perimeter + 1 km. Use a fresh VFT_VAL_OUT.
+#   VFT_VAL_AOI_CUT   1 (default): the areas are step 4's "Automatic Cuts"; 0: the
+#                     unsplit areas step 4 arrives with
 #   VFT_VAL_AOI_SAVES comma list of context=path to an app save (.RData) whose
 #                     envBase_finalPolygons and envBase_minThresh replace the aoi
 #                     stage's own areas for that context. Use a fresh VFT_VAL_OUT:
@@ -68,6 +74,8 @@
 #                     contexts' parkingShare).
 #   VFT_VAL_RUM       an rds of area-choice coefficients (data-raw/calibrate_aoi_rum.R)
 #                     for the types fullRumG, fullRumGT and nearbyRumG.
+#   VFT_VAL_RUM_TIME  an rds of time-dependent area-choice models (data-raw/
+#                     calibrate_aoi_rum_time.R) for fullRumTime, fullRumShare, fullRumFixed.
 #                     Runs carry all four; compare refuses a type that mixes them.
 #
 # Every stage writes to VFT_VAL_OUT and skips work already done, so an interrupted
@@ -215,6 +223,24 @@ RUM <- local({
     c(x[c("pooled", "distance", "types")], list(file = normalizePath(f, winslash = "/"), md5 = unname(tools::md5sum(f))))
   }
 })
+#The time-dependent area choice (data-raw/calibrate_aoi_rum_time.R; aoiProbsTime() in
+#data-raw/engine_corrections.R): list(models = list(<name> = c(<column> = b, ...)),
+#consts = list(dulnCenter, dulnScale)), optionally areaDuln = list(<ctx> = c(<AOI> = DULN)):
+#the area DULN the choice reads instead of the scenario's.
+RUM_TIME <- local({
+  f <- Sys.getenv("VFT_VAL_RUM_TIME", "")
+  if(!nzchar(f)) NULL else {
+    x <- readRDS(f)
+    if(!all(c("models", "consts") %in% names(x))) stop("VFT_VAL_RUM_TIME: ", f, " needs models and consts")
+    c(x[intersect(c("models", "consts", "areaDuln"), names(x))], list(file = normalizePath(f, winslash = "/"), md5 = unname(tools::md5sum(f))))
+  }
+})
+rumTimeCoefs <- function(spec){
+  if(is.null(RUM_TIME)) stop("type ", spec$label, " needs VFT_VAL_RUM_TIME")
+  b <- RUM_TIME$models[[spec$rumTime]]
+  if(is.null(b)) stop("VFT_VAL_RUM_TIME has no model ", spec$rumTime)
+  b
+}
 #a RUM type's coefficients, one per agent
 rumCoefs <- function(spec, agentTyps){
   if(is.null(RUM)) stop("type ", spec$label, " needs VFT_VAL_RUM")
@@ -227,6 +253,9 @@ rumCoefs <- function(spec, agentTyps){
                     paste(unique(agentTyps[is.na(k)]), collapse = ", "))
   list(bAttr = RUM$types$bAttr[k], bDist = RUM$types$bDist[k])
 }
+#the aoi stage's DULN_all and whether it cuts
+dulnAllFile <- function() Sys.getenv("VFT_VAL_DULN_ALL", ns$vftData("maps/DULN/DULN_nat_majMaxMeanAGGBlur.tif"))
+AOI_CUT <- !identical(Sys.getenv("VFT_VAL_AOI_CUT", "1"), "0")
 AOI_SAVES <- local({
   v <- envList("VFT_VAL_AOI_SAVES", character(0))
   stats::setNames(sub("^[^=]*=", "", v), sub("=.*$", "", v))
@@ -370,7 +399,18 @@ TYPES <- list(
   fullRumGT    = list(label = "Full RUM-G types", aoiChoice = "engine",   routing = "engine", movement = "engine", parking = TRUE,
                       rum = "types"),
   nearbyRumG   = list(label = "Nearby RUM-G",     aoiChoice = "distance", routing = "length", movement = "engine", parking = FALSE,
-                      rum = "distance")
+                      rum = "distance"),
+  #the area choice whose attractivity / proximity trade-off moves with the time in the
+  #area (data-raw/calibrate_aoi_rum_time.R; VFT_VAL_RUM_TIME, corrected engine only):
+  #the interaction model, the smallest fix (the way there as a share of the time), and
+  #the same fixed-scale utility without time (the paired test of the time terms).
+  #Not in the default VFT_VAL_MODES.
+  fullRumTime  = list(label = "Full RUM-time",       aoiChoice = "engine", routing = "engine", movement = "engine", parking = TRUE,
+                      rumTime = "interaction"),
+  fullRumShare = list(label = "Full RUM-time share", aoiChoice = "engine", routing = "engine", movement = "engine", parking = TRUE,
+                      rumTime = "share"),
+  fullRumFixed = list(label = "Full RUM-fixed",      aoiChoice = "engine", routing = "engine", movement = "engine", parking = TRUE,
+                      rumTime = "fixed")
 )
 CONTRASTS <- list(c("full", "nearby"), c("nearby", "nearbyRandom"),
                   c("nearbyRandom", "random"), c("full", "random"),
@@ -391,7 +431,12 @@ CONTRASTS <- list(c("full", "nearby"), c("nearby", "nearbyRandom"),
                   c("fullRumG", "full"), c("fullRumGT", "full"), c("fullRumGT", "fullRumG"),
                   c("nearbyRumG", "nearby"), c("fullRumG", "nearbyRumG"), c("fullRumGT", "nearbyRumG"),
                   c("fullRumG", "nearby"), c("fullRumGT", "nearby"),
-                  c("fullRumG", "nearbyRandom"), c("fullRumGT", "nearbyRandom"))
+                  c("fullRumG", "nearbyRandom"), c("fullRumGT", "nearbyRandom"),
+                  c("fullRumTime", "full"), c("fullRumShare", "full"), c("fullRumTime", "fullRumShare"),
+                  c("fullRumTime", "nearby"), c("fullRumTime", "nearbyRandom"),
+                  c("fullRumShare", "nearby"), c("fullRumShare", "nearbyRandom"),
+                  c("fullRumFixed", "full"), c("fullRumTime", "fullRumFixed"), c("fullRumShare", "fullRumFixed"),
+                  c("fullRumFixed", "nearby"), c("fullRumFixed", "nearbyRandom"))
 #Compare-only aliases: another setting's runs of a type (e.g. route alpha 0.5) copied
 #under <type><suffix> into a folder that holds the type's runs at the first setting, so
 #the paired bootstrap gives the difference between settings on the same seeds. Never
@@ -399,15 +444,50 @@ CONTRASTS <- list(c("full", "nearby"), c("nearby", "nearbyRandom"),
 #outings 1.25 / 1.5 times as long (D: the whole outing, so the reach too; W: only the
 #time inside the areas - VFT_VAL_DURATION / VFT_VAL_DURSCOPE); IA the engine's outing
 #(time inside the area, the engine's durations), WE the whole outing on the engine's
-#durations (VFT_VAL_OUTING).
+#durations (VFT_VAL_OUTING); L2 / L3 the DULN round the lakes doubled / tripled
+#(data-raw/lake_emphasis_duln.R); ACT the DULN per activity, ST3 the stairs x3 for
+#bikers alone (data-raw/tailor_duln_activities.R); E2 / E2C the activities on clean
+#elements, unconstrained / signed (data-raw/tailor_duln_elements.R); S5 / SS the DULN
+#fitted to the Strava heatmap, per group / shared (data-raw/tailor_duln_strava.R), XL
+#today's xlsx DULN on the same areas.
 ALIAS_SETTINGS <- c(A05 = "a0.5", A5 = "a5", A10 = "a10", D125 = "time x1.25", D150 = "time x1.5",
-                    W125 = "walk x1.25", W150 = "walk x1.5", IA = "old outing", WE = "whole eng.dur")
+                    W125 = "walk x1.25", W150 = "walk x1.5", IA = "old outing", WE = "whole eng.dur",
+                    L2 = "lakes x2", L3 = "lakes x3", ACT = "4 activities", ST3 = "stairs x3",
+                    E2 = "clean elements", E2C = "clean el. signed", S5 = "Strava per group",
+                    SS = "Strava shared", XL = "xlsx DULN", S5E = "Strava per group, clean",
+                    SSE = "Strava shared, clean", S5EC = "Strava per group, clean signed")
 for(sfx in names(ALIAS_SETTINGS)){
   for(t in c("full", "nearby", "nearbyRandom", "random"))
     TYPES[[paste0(t, sfx)]] <- utils::modifyList(TYPES[[t]], list(label = paste(TYPES[[t]]$label, ALIAS_SETTINGS[[sfx]])))
   CONTRASTS <- c(CONTRASTS, lapply(c("full", "nearby", "nearbyRandom", "random"), function(t) c(paste0(t, sfx), t)),
                  list(c(paste0("full", sfx), paste0("nearbyRandom", sfx)), c(paste0("full", sfx), paste0("nearby", sfx))))
 }
+#the Strava DULN against today's xlsx DULN, the survey fits (with stairs x3: fullST3;
+#per activity: fullACT; on the clean elements: fullE2 / fullE2C) and each other
+CONTRASTS <- c(CONTRASTS, list(c("fullS5", "fullXL"), c("fullSS", "fullXL"), c("fullSS", "fullST3"),
+                               c("fullS5", "fullACT"), c("fullS5", "fullSS"), c("full", "fullXL"),
+                               c("fullS5E", "fullXL"), c("fullSSE", "fullXL"), c("fullS5EC", "fullXL"),
+                               c("fullS5E", "fullE2"), c("fullS5EC", "fullE2C"), c("fullSSE", "fullST3"),
+                               c("fullS5E", "full"), c("fullS5E", "fullS5"), c("fullS5E", "fullSSE"),
+                               c("fullS5EC", "fullS5E"), c("fullE2", "fullXL"), c("fullS5EC", "full")))
+#the fitted area choices (fullRumFixed / fullRumTime) on the Strava routing (S5E, area
+#choice re-fitted on its area DULN), compare-only like the other aliases
+for(t in c("fullRumFixed", "fullRumTime"))
+  TYPES[[paste0(t, "S5E")]] <- utils::modifyList(TYPES[[t]], list(label = paste(TYPES[[t]]$label, ALIAS_SETTINGS[["S5E"]])))
+CONTRASTS <- c(CONTRASTS, list(c("fullRumFixedS5E", "fullRumFixed"), c("fullRumFixedS5E", "fullS5E"),
+                               c("fullRumFixedS5E", "full"), c("fullRumTimeS5E", "fullRumTime"),
+                               c("fullRumTimeS5E", "fullRumFixedS5E"), c("fullRumTimeS5E", "fullS5E"),
+                               c("fullRumTimeS5E", "full"), c("fullRumFixedS5E", "nearby"),
+                               c("fullRumTimeS5E", "nearby")))
+#...and on the Strava routing with the area choice still reading today's area DULN (S5EA:
+#Strava for the routing only, the user's solution 1; the coefficient file's areaDuln)
+for(t in c("fullRumFixed", "fullRumTime"))
+  TYPES[[paste0(t, "S5EA")]] <- utils::modifyList(TYPES[[t]], list(label = paste(TYPES[[t]]$label, "Strava routing only")))
+CONTRASTS <- c(CONTRASTS, list(c("fullRumFixedS5EA", "fullRumFixed"), c("fullRumFixedS5EA", "fullS5E"),
+                               c("fullRumFixedS5EA", "full"), c("fullRumFixedS5EA", "fullRumFixedS5E"),
+                               c("fullRumTimeS5EA", "fullRumTime"), c("fullRumTimeS5EA", "fullRumFixedS5EA"),
+                               c("fullRumTimeS5EA", "fullS5E"), c("fullRumTimeS5EA", "full"),
+                               c("fullRumTimeS5EA", "fullRumTimeS5E")))
 #the baseline performance is standardised against: (r - r_base) / (1 - r_base)
 BASELINE <- "fullRandom"
 
@@ -740,8 +820,16 @@ stageAoi <- function(ctx){
   if(ctx %in% names(AOI_SAVES)) return(stageAoiFromSave(ctx, shape, shapeLarger, f, t0))
 
   #the two provider crops, R/providers.R:115-171
-  DULN_all <- terra::crop(terra::rast(ns$vftData("maps/DULN/DULN_nat_majMaxMeanAGGBlur.tif")),
-                          sf::st_transform(shapeLarger, "epsg:4326"))
+  DULN_all <- terra::crop(terra::rast(dulnAllFile()), sf::st_transform(shapeLarger, "epsg:4326"))
+  #generateAoI2 masks DULN_all to the perimeter + 1 km: a replacement raster must cover it
+  #(the crop above is shapeLarger, 1 km in 3857, which is narrower on the ground)
+  if(nzchar(Sys.getenv("VFT_VAL_DULN_ALL"))){
+    bufV <- terra::buffer(terra::vect(shape), 1000)
+    cov <- terra::mask(terra::crop(terra::rast(dulnAllFile()), bufV, snap = "out"), bufV)
+    inBuf <- terra::mask(terra::init(cov, 1), bufV)
+    nMiss <- sum(terra::values(is.na(cov) & !is.na(inBuf), mat = FALSE), na.rm = TRUE)
+    if(nMiss > 0) stop(ctx, ": ", basename(dulnAllFile()), " has ", nMiss, " NA cells inside the perimeter + 1 km")
+  }
   DULN <- terra::crop(terra::rast(ns$vftData("maps/attr/allAttrs_COG_final.tif")),
                       terra::project(terra::vect(shapeLarger), "EPSG:4326"))
   names(DULN) <- c("jog", "dogNat", "ebikeNat", "walkNat", "dogProx", "walkSoc", "bikerSport")
@@ -757,23 +845,27 @@ stageAoi <- function(ctx){
   #(R/step4_server.R:293-350, within = NULL because nothing was edited)
   unsplit <- ns$generateAoI2(minThresh = thr, perimeter = shape, walkNat = DULN$walkNat,
                              DULN_all = DULN_all, split = FALSE)$polygons
-  cut <- withDbgCapture(ns$generateAoI2(minThresh = thr, perimeter = shape,
-                                        walkNat = DULN$walkNat, DULN_all = DULN_all,
-                                        split = TRUE)$polygons)
-  bad <- grep("WARNING aoi split", cut$msgs, value = TRUE)
-  if(length(bad)) stop(ctx, ": the automatic cut fell back to unsplit areas: ", bad[1])
-  polys <- cut$value
+  if(AOI_CUT){
+    cut <- withDbgCapture(ns$generateAoI2(minThresh = thr, perimeter = shape,
+                                          walkNat = DULN$walkNat, DULN_all = DULN_all,
+                                          split = TRUE)$polygons)
+    bad <- grep("WARNING aoi split", cut$msgs, value = TRUE)
+    if(length(bad)) stop(ctx, ": the automatic cut fell back to unsplit areas: ", bad[1])
+    polys <- cut$value
+  }else polys <- unsplit
   if(!nrow(polys)) stop(ctx, ": no areas at threshold ", thr)
   polys$id  <- seq_len(nrow(polys))
   polys$AOI <- LETTERS702[seq_len(nrow(polys))]
 
   aoi <- list(ctx = ctx, shape = shape, shapeLarger = shapeLarger, thr = thr,
-              polys = polys, nUnsplit = nrow(unsplit), nCut = nrow(polys))
+              polys = polys, nUnsplit = nrow(unsplit), nCut = nrow(polys),
+              dulnAll = basename(dulnAllFile()), cut = AOI_CUT)
   aoi$stamp <- aoiStamp(aoi)
   saveAtomic(aoi, f)
   sf::st_write(polys, outPath("aoi", paste0(ctx, "_aois.gpkg")), delete_dsn = TRUE, quiet = TRUE)
-  logf("aoi %s: threshold %.1f, %d areas unsplit -> %d after the cut (%.0f ha), %.0f s",
-       ctx, thr, nrow(unsplit), nrow(polys), sum(polys$area) / 1e4,
+  logf("aoi %s: %s, threshold %.2f, %d areas unsplit -> %d %s (%.0f ha), %.0f s",
+       ctx, basename(dulnAllFile()), thr, nrow(unsplit), nrow(polys), if(AOI_CUT) "after the cut" else "(no cut)",
+       sum(polys$area) / 1e4,
        proc.time()[["elapsed"]] - t0)
 }
 
@@ -1171,7 +1263,7 @@ simCore <- function(sc, seed, capture = TRUE){
     })
     on.exit(nsSet("vftTimeOver", ORIG$vftTimeOver), add = TRUE)
   }
-  if(!is.null(sc$spec$rum) && !identical(ENGINE_MODE, "corrected"))
+  if((!is.null(sc$spec$rum) || !is.null(sc$spec$rumTime)) && !identical(ENGINE_MODE, "corrected"))
     stop("type ", sc$spec$label, " needs VFT_VAL_ENGINE=corrected")
   dDiv <- durChoiceDiv()
   if(sc$spec$aoiChoice %in% c("uniform", "uniformAll")){
@@ -1237,6 +1329,20 @@ simCore <- function(sc, seed, capture = TRUE){
         td <- lapply(seq_along(res$prob), function(i)
           trueD[cbind(rep(src_v[i], length(res$aoi[[i]])), match(res$aoi[[i]], colnames(trueD)))])
         rnd$corrAoi <- TRUE
+        if(!is.null(sc$spec$rumTime)){
+          rnd$rum <- TRUE
+          #the file's own area DULN, if it carries one (an area choice fitted on another
+          #DULN than the routing's: Strava routing, the survey-fitted area DULN)
+          aD <- RUM_TIME$areaDuln[[sc$ctx]]
+          if(!is.null(aD)){
+            AOI_dulns <- unname(aD[as.character(AOI_aois)])
+            if(anyNA(AOI_dulns)) stop("VFT_VAL_RUM_TIME's areaDuln misses areas of ", sc$ctx)
+          }
+          res$prob <- aoiProbsTime(res, agentSpeeds, agentDurations, AOI_aois, AOI_dulns, AOI_areas,
+                                   CORR$reach, td, rumTimeCoefs(sc$spec), RUM_TIME$consts, floorH = CORR$floorH,
+                                   fallback = TRUE, fallbackCap = CORR$fallbackCap)
+          return(res)
+        }
         b <- if(is.null(sc$spec$rum)) list(bAttr = 3.23695, bDist = -6.65703) else rumCoefs(sc$spec, agentTyps)
         if(!is.null(sc$spec$rum)) rnd$rum <- TRUE
         res$prob <- aoiProbsR(res, agentSpeeds, agentDurations, AOI_aois, AOI_dulns, AOI_areas,
@@ -1324,7 +1430,7 @@ settingHooksFired <- function(sc, r){
   if(!is.null(DURATION) && !isTRUE(r$rnd$durScaled)) stop("the duration hook never fired")
   if(!is.null(DURSRC) && !isTRUE(r$rnd$durDrawn)) stop("the duration source hook never fired")
   if(identical(OUTING, "whole") && !isTRUE(r$rnd$outing)) stop("the whole-outing hook never fired")
-  if(!is.null(sc$spec$rum) && !isTRUE(r$rnd$rum)) stop("the RUM area choice never fired")
+  if((!is.null(sc$spec$rum) || !is.null(sc$spec$rumTime)) && !isTRUE(r$rnd$rum)) stop("the RUM area choice never fired")
 }
 
 #the run settings a type's runs must share in a comparison (an alias type may carry
@@ -1335,7 +1441,8 @@ settingOf <- function(x) paste0(
   if(is.null(x$outing) || identical(x$outing, "area")) "" else paste0(", ", x$outing, " outing"),
   if(is.null(x$durSource)) "" else paste0(", durations ", basename(x$durSource$file), " ", substr(x$durSource$md5, 1, 8)),
   if(is.null(x$parking)) "" else paste0(", car parks ", x$parking),
-  if(is.null(x$rum)) "" else paste0(", RUM ", x$rum$set, " ", substr(x$rum$md5, 1, 8)))
+  if(is.null(x$rum)) "" else paste0(", RUM ", x$rum$set, " ", substr(x$rum$md5, 1, 8)),
+  if(is.null(x$rumTime)) "" else paste0(", RUM-time ", x$rumTime$set, " ", substr(x$rumTime$md5, 1, 8)))
 
 #the route choice's alpha of a type's runs: the run's (CORR), or the type's own for
 #its explorers (exploreAlpha, two-stage types)
@@ -1390,6 +1497,9 @@ simTask <- function(ctx, type, rep){
               parking = if(is.na(PARKING)) NULL else PARKING,
               rum = if(is.null(sc$spec$rum)) NULL else
                 list(set = sc$spec$rum, file = RUM$file, md5 = RUM$md5, coefs = RUM[[sc$spec$rum]]),
+              rumTime = if(is.null(sc$spec$rumTime)) NULL else
+                list(set = sc$spec$rumTime, file = RUM_TIME$file, md5 = RUM_TIME$md5,
+                     coefs = RUM_TIME$models[[sc$spec$rumTime]], consts = RUM_TIME$consts),
               #phase 2 of a two-stage run: the library, who found no walk, and who
               #took another duration's walk (fallback) or the closest one (pathFallback)
               twoStage = if(isTRUE(sc$spec$twoStage))
@@ -2339,7 +2449,7 @@ stageFigures <- function(){
 #### 9. main ####
 
 checkInputs <- function(){
-  need <- c(ns$vftData("maps/DULN/DULN_nat_majMaxMeanAGGBlur.tif"),
+  need <- c(dulnAllFile(),
             ns$vftData("maps/attr/allAttrs_COG_final.tif"),
             ns$vftData("maps/paths/paths_11_24_final_4.gdb"),
             ns$vftData("maps/lakes.gdb"), PATHS$swisscom)

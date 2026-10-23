@@ -133,6 +133,61 @@ trueAreaDistances <- function(ctx, net){
   D
 }
 
+#### the area choice with time-dependent weights (type fullRumTime) ####
+
+#The user's intent (2026-10-23): with more time an agent weighs attractivity more and
+#proximity less. The engine's utility cannot say this - both its terms are divided by
+#the duration, so the duration only scales the utility, never the trade-off. Here
+#every term has a FIXED scale (no per-agent or per-site min-max), and the time
+#enters as tau = ln(T / 60), T the time in the area in minutes (the engine's
+#duration; the survey's stated time, A4_duration, in the fit):
+#   zD      (area DULN - dulnCenter) / dulnScale
+#   lnA     ln(area in ha)
+#   t       real path time from the start to the area, in 10 minutes
+#   tShare  that time as a share of T
+#   x_tau   x * tau
+#U = X b over the columns b names (data-raw/calibrate_aoi_rum_time.R fits b).
+rumTimeX <- function(duln, areaM2, tMin, Tmin, consts, cols){
+  tau <- log(Tmin / 60)
+  zD  <- (duln - consts$dulnCenter) / consts$dulnScale
+  lnA <- log(pmax(areaM2, 1) / 1e4)
+  t   <- tMin / 10
+  all <- cbind(zD = zD, lnA = lnA, t = t, tShare = tMin / Tmin,
+               zD_tau = zD * tau, lnA_tau = lnA * tau, t_tau = t * tau)
+  all[, cols, drop = FALSE]
+}
+
+#findClosestAOI_cpp()'s probabilities under rumTimeX()'s utility, with aoiProbsR()'s
+#reach rule and fallback on the real path length (`trueDist`, metres, as aoiProbsR)
+aoiProbsTime <- function(res, agentSpeeds, agentDurations, AOI_aois, AOI_dulns, AOI_areas, reach,
+                         trueDist, b, consts, floorH = 0, fallback = FALSE, fallbackCap = Inf){
+  lastMatch <- function(x, table){ k <- match(x, rev(table)); ifelse(is.na(k), NA_integer_, length(table) + 1L - k) }
+  lapply(seq_along(res$prob), function(i){
+    if(!length(res$distances[[i]])) return(res$prob[[i]])
+    speed <- agentSpeeds[i]; dur <- agentDurations[i]
+    k <- lastMatch(res$aoi[[i]], AOI_aois)
+    tReach <- trueDist[[i]] / (speed * 1000)
+    ok <- !is.na(k) & is.finite(tReach) & tReach <= max(reach * (dur / 60), floorH)
+    p <- numeric(length(k))
+    if(any(ok)){
+      X <- rumTimeX(AOI_dulns[k[ok]], AOI_areas[k[ok]], tReach[ok] * 60, dur, consts, names(b))
+      u <- drop(X %*% b)
+      e <- exp(u - max(u))
+      p[ok] <- e / sum(e)
+      return(p)
+    }
+    if(fallback){
+      fin <- is.finite(tReach)
+      if(any(fin) && min(tReach[fin]) <= fallbackCap * (dur / 60)){
+        pick <- fin & tReach <= min(tReach[fin]) + FALLBACK_H
+        .corrStats$fallback <- .corrStats$fallback + 1L
+        return(pick / sum(pick))
+      }
+    }
+    p
+  })
+}
+
 #### the two-stage walk choice, with the corrected reach (type twoStage) ####
 
 #The engine's adjacency lists with every weight the REAL edge length (SHAPE_Leng, no

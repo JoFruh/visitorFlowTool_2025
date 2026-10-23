@@ -121,9 +121,11 @@ ok("...a 50 ha one stays apart: two",                        nLab(cut(app(400)))
 ok("nothing above the threshold: no areas", nLab(cut(asD(X < 0))) == 0)
 
 ## The bridge-width floor (VFT_AOI_CUT_MAX_BRIDGE_M): two 2.4 km discs on a
-## 900 m waist - dip 1 - 450/1200 = 0.63, so the dip alone cuts it.
+## 900 m waist - dip 1 - 450/1200 = 0.63, so the dip alone cuts it. Tested at
+## a 700 m floor (the default until 2026-10-20; now 1250 m, which cuts it).
 waist <- function(w) asD(disc(1700, 1500, 1200) | disc(4300, 1500, 1200) | strip(1700, 4300, w))
-ok("a 900 m waist between two 2.4 km discs: one (the floor)",  nLab(cut(waist(900))) == 1)
+ok("a 900 m waist between two 2.4 km discs: one (a 700 m floor)", nLab(cut(waist(900), bridge = 700)) == 1)
+ok("...two at the default floor (1250 m)",                     nLab(cut(waist(900))) == 2)
 ok("...two with the floor off",                               nLab(cut(waist(900), bridge = Inf)) == 2)
 ok("...a 400 m bridge between them is still cut: two",         nLab(cut(waist(400))) == 2)
 ok("the 150 m dumbbell bridge is under any sane floor: two",   nLab(cut(dumbbell, bridge = 300)) == 2)
