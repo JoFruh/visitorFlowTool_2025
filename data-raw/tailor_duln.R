@@ -96,6 +96,11 @@ TYPES_TD <- data.frame(
   band = 1:7, stringsAsFactors = FALSE)
 #which box (layer crop) each site's network lies in: GlattPark is inside Glatt's
 BOX_OF <- c(glattPark = "glatt", glatt = "glatt", wigger = "wigger")
+#the survey-free contexts (VFT_VAL_EXTRA_CTX) are each their own box
+local({
+  ex <- names(CTX)[vapply(CTX, function(cf) identical(cf$survey, "none"), TRUE)]
+  BOX_OF <<- c(BOX_OF, stats::setNames(ex, ex))
+})
 LAKE_EL <- c("lakeNear", "lakeBand")
 
 #### weights ####

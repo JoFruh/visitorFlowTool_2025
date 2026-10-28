@@ -184,6 +184,21 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// findReturnRoute_cpp
+List findReturnRoute_cpp(SEXP adj_ptr, std::vector<int> src_v, std::vector<int> goal_v, std::vector<std::string> agentTyps, LogicalVector inAoi);
+RcppExport SEXP _visitorFlowTool_findReturnRoute_cpp(SEXP adj_ptrSEXP, SEXP src_vSEXP, SEXP goal_vSEXP, SEXP agentTypsSEXP, SEXP inAoiSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type adj_ptr(adj_ptrSEXP);
+    Rcpp::traits::input_parameter< std::vector<int> >::type src_v(src_vSEXP);
+    Rcpp::traits::input_parameter< std::vector<int> >::type goal_v(goal_vSEXP);
+    Rcpp::traits::input_parameter< std::vector<std::string> >::type agentTyps(agentTypsSEXP);
+    Rcpp::traits::input_parameter< LogicalVector >::type inAoi(inAoiSEXP);
+    rcpp_result_gen = Rcpp::wrap(findReturnRoute_cpp(adj_ptr, src_v, goal_v, agentTyps, inAoi));
+    return rcpp_result_gen;
+END_RCPP
+}
 // nodeDistances_cpp
 NumericMatrix nodeDistances_cpp(SEXP adj_ptr, String weighingMethod, std::string agentTyp, std::vector<int> sources, std::vector<int> targets, double cutoff);
 RcppExport SEXP _visitorFlowTool_nodeDistances_cpp(SEXP adj_ptrSEXP, SEXP weighingMethodSEXP, SEXP agentTypSEXP, SEXP sourcesSEXP, SEXP targetsSEXP, SEXP cutoffSEXP) {
@@ -295,6 +310,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_visitorFlowTool_appendCurrentToPrior_cpp", (DL_FUNC) &_visitorFlowTool_appendCurrentToPrior_cpp, 4},
     {"_visitorFlowTool_generateAdjListAndDistTbl_cpp", (DL_FUNC) &_visitorFlowTool_generateAdjListAndDistTbl_cpp, 2},
     {"_visitorFlowTool_findShortestRoute_cpp", (DL_FUNC) &_visitorFlowTool_findShortestRoute_cpp, 5},
+    {"_visitorFlowTool_findReturnRoute_cpp", (DL_FUNC) &_visitorFlowTool_findReturnRoute_cpp, 5},
     {"_visitorFlowTool_nodeDistances_cpp", (DL_FUNC) &_visitorFlowTool_nodeDistances_cpp, 6},
     {"_visitorFlowTool_findClosestAOI_cpp", (DL_FUNC) &_visitorFlowTool_findClosestAOI_cpp, 11},
     {"_visitorFlowTool_aoi_basins", (DL_FUNC) &_visitorFlowTool_aoi_basins, 4},

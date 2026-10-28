@@ -26,6 +26,57 @@ nodes <- NULL
 #' @return logical, one per agent.
 vftTimeOver <- function(timeExt, timeNotAccounted, timer) timeExt + timeNotAccounted <= timer
 
+#' Minutes an agent takes for a leg of `dist` metres at `speed` km/h, exactly.
+#'
+#' Until 2026-10-23 this was rounded up to the whole minute although the clock runs
+#' in 20-second steps: a 50 m edge cost a 20 km/h biker a minute instead of 9 s, so
+#' inside the areas agents covered only 0.6-0.75 of the ground their speed allows.
+#' The clock's steps are now applied once, when the leg is scheduled
+#' (vftArrivalStep()). A function of its own so the survey validation (data-raw/)
+#' can bring back the old rounding.
+#'
+#' @param dist metres; @param speed km/h. Vectors of one length.
+#' @return minutes.
+vftLegMinutes <- function(dist, speed) dist / (speed * 1000 / 60)
+
+#' When an agent arrives at the end of a leg it sets off on now.
+#'
+#' Each agent carries its exact clock (minutes): a leg starts where the last one
+#' ended - or at the current timestep, if the agent waited - and lasts `legMin`.
+#' Only the arrival is rounded up to the timestep, so rounding never adds up over
+#' the many short legs of a walk.
+#'
+#' @param clock the agents' exact clocks (minutes); @param legMin the legs (minutes).
+#' @param timestep the current timestep; @param ratio timesteps per minute.
+#' @return list(clock = the clocks at arrival, step = the arrival timesteps).
+vftArrivalStep <- function(clock, legMin, timestep, ratio){
+  clock <- pmax(clock, (timestep - 1) / ratio) + legMin
+  list(clock = clock, step = pmax(timestep, ceiling(clock * ratio - 1e-9)))
+}
+
+#' The way home of agents whose time is up: their route from where they are to
+#' their start node, and its length in metres.
+#'
+#' Attractivity-weighted while still inside an area ("_ATTR" on edges with both
+#' ends in an area, `inAoi`: one value per node id + 1, as the adjacency lists
+#' index nodes), slightly weighted ("_attr") once outside - one search, see
+#' findReturnRoute_cpp(). The length is the plain one, for the walking time. Until
+#' 2026-10-23 agents went home by the shortest route. A function of its own so the
+#' survey validation (data-raw/) can bring that back.
+#'
+#' @return list(path, distance), as findShortestRoute_cpp().
+vftRouteHome <- function(adj_ptr, src_v, goal_v, agentTyps, inAoi)
+  findReturnRoute_cpp(adj_ptr = adj_ptr, src_v = src_v, goal_v = goal_v,
+                      agentTyps = agentTyps, inAoi = inAoi)
+
+#' The behaviour of an agent that heads home early from a dead end of its area.
+#'
+#' "shortest": through vftRouteHome() like everyone else whose time is up. Until
+#' 2026-10-23 "nicestShortest": a slightly attractivity-weighted route timed on its
+#' WEIGHTED length (about 0.7 of the real one). A function of its own so the survey
+#' validation (data-raw/) can bring that back.
+vftDeadEndHome <- function() "shortest"
+
 #' @param edgeTable,vertexTable the graph as tables, when the caller already has
 #'   them. launchMultiSim() builds both for the adjacency lists one call up, and
 #'   this function used to build them again for itself - two full materialisations
@@ -102,6 +153,9 @@ launchSim <- function(dayPop, network, AOIList, listOfPointers, iter = 1, tracka
   #pathUsage is built from, keeps the plain values
   for(col in intersect(names(nodeDULN), names(DULN_df))) DULN_df[[col]] <- nodeDULN[[col]]
   vOutsideAOI <- vertexTable$nodeID[vertexTable$AOI == "0"]
+  #the same, as a flag per node id (+ 1: the C++ side indexes by id) for the way home
+  inAoiNode <- logical(max(vertexTable$nodeID) + 1L)
+  inAoiNode[vertexTable$nodeID[vertexTable$AOI != "0"] + 1L] <- TRUE
   #a matrix handed to an Rcpp DataFrame argument goes through as.data.frame()
   #on every call
   vertexCoordsDF <- as.data.frame(vertexCoords)
@@ -148,6 +202,8 @@ launchSim <- function(dayPop, network, AOIList, listOfPointers, iter = 1, tracka
   #initialise all agents to start at the same time
   #TODO : allow possiblity to start at different times
   dayPop$startTime <- 0
+  #each agent's exact clock in minutes (vftArrivalStep())
+  dayPop$clock <- 0
 
   #START DEBUG PLOTTING
   #edges on which agent locations will be plotted
@@ -674,7 +730,7 @@ cannotRecreate <- dayPop$goalV == -1
       dayPop$active[done] <- FALSE
       toDecide[done] <- FALSE
       agentsReachedNextV[done] <- FALSE
-      dayPop$behaviour[stuck & !done] <- "nicestShortest"
+      dayPop$behaviour[stuck & !done] <- vftDeadEndHome()
       dayPop$goalV[stuck & !done] <- dayPop$startV[stuck & !done]
       toDecideRetracing[stuck] <- FALSE
     }
@@ -806,7 +862,7 @@ cannotRecreate <- dayPop$goalV == -1
         # toDecideRetracing[sameCV_NV] <- FALSE #remove it from raytracing decision making
 
         #make the agent go home by fastest route
-        dayPop$behaviour[toDecideRetracing][sameCV_NV] <- "nicestShortest"
+        dayPop$behaviour[toDecideRetracing][sameCV_NV] <- vftDeadEndHome()
         dayPop$goalV[toDecideRetracing][sameCV_NV] <- dayPop$startV[toDecideRetracing][sameCV_NV]
         dayPop$returning[toDecideRetracing][sameCV_NV] <- TRUE
 
@@ -867,12 +923,13 @@ cannotRecreate <- dayPop$goalV == -1
     #when agents of "shortest" behaviour have no shortest route,
     if(sum(!haveShortestRoutes) > 0){
 
-      #determine a shortest route
-      shortestPaths <- findShortestRoute_cpp(adj_ptr = listOfPointers$adj,
-                                             weighingMethod = "distance",
-                                             src_v = dayPop$currentV[toDecideShortest][!haveShortestRoutes],
-                                             goal_v = dayPop$goalV[toDecideShortest][!haveShortestRoutes],
-                                             agentTyps = dayPop$agentTyp[toDecideShortest][!haveShortestRoutes])
+      #determine a shortest route. Only agents heading home get here (the way to
+      #the area was found before the loop), so it is the way home: vftRouteHome()
+      shortestPaths <- vftRouteHome(adj_ptr = listOfPointers$adj,
+                                    src_v = dayPop$currentV[toDecideShortest][!haveShortestRoutes],
+                                    goal_v = dayPop$goalV[toDecideShortest][!haveShortestRoutes],
+                                    agentTyps = dayPop$agentTyp[toDecideShortest][!haveShortestRoutes],
+                                    inAoi = inAoiNode)
 
       #pass every path back to agents
       dayPop$pathToGoal[toDecideShortest][!haveShortestRoutes] <- shortestPaths$path
@@ -926,8 +983,10 @@ cannotRecreate <- dayPop$goalV == -1
 
 
       #translate total distance to timesteps and put in agent$moving (totalDistance[m] / speed [km/h] * (60/1000)[m/min] * 3)
-      addedTime <- ceiling((dayPop$totalDistance[toDecideShortest]) /(dayPop$speed[toDecideShortest]*1000/60))
-      dayPop$moving[toDecideShortest] <- timestep + convertToTimesteps(time = addedTime, unit = "m")#+ ceiling( ((dayPop$totalDistance[toDecideShortest]) / (dayPop$speed[toDecideShortest])/60 ) * 3 )
+      addedTime <- vftLegMinutes(dayPop$totalDistance[toDecideShortest], dayPop$speed[toDecideShortest])
+      arr <- vftArrivalStep(dayPop$clock[toDecideShortest], addedTime, timestep, timeTimestepsRatio)
+      dayPop$clock[toDecideShortest]  <- arr$clock
+      dayPop$moving[toDecideShortest] <- arr$step
 
       #determine time not accounted for (the moving time during shortest), in MINUTES:
       #isTimeOver compares it with timeExt and timer, both minutes. Until 2026-10-16
@@ -1002,8 +1061,10 @@ cannotRecreate <- dayPop$goalV == -1
 
 
         #translate total distance to timesteps and put in agent$moving (totalDistance[m] / speed [km/h] * (60/1000)[m/min] * 3)
-        addedTime <- ceiling((dayPop$totalDistance[toDecideNicestShortest]) /(dayPop$speed[toDecideNicestShortest]*1000/60))
-        dayPop$moving[toDecideNicestShortest] <- timestep + convertToTimesteps(time = addedTime, unit = "m")#+ ceiling( ((dayPop$totalDistance[toDecideNicestShortest]) / (dayPop$speed[toDecideNicestShortest])/60 ) * 3 )
+        addedTime <- vftLegMinutes(dayPop$totalDistance[toDecideNicestShortest], dayPop$speed[toDecideNicestShortest])
+        arr <- vftArrivalStep(dayPop$clock[toDecideNicestShortest], addedTime, timestep, timeTimestepsRatio)
+        dayPop$clock[toDecideNicestShortest]  <- arr$clock
+        dayPop$moving[toDecideNicestShortest] <- arr$step
 
         # #make nextV the goalV too
         dayPop$goalV[toDecideNicestShortest] <- dayPop$nextV[toDecideNicestShortest]
@@ -1184,8 +1245,10 @@ cannotRecreate <- dayPop$goalV == -1
 
       #determine timestep at which agent will reach vertex (current timestep + timesteps required)
       #adapt time to timestep
-      addedTime <- ceiling(dist/(dayPop$speed[toDecideNicest]*1000/60))
-      dayPop$moving[toDecideNicest] <- timestep + convertToTimesteps(time = addedTime, unit = "m")
+      addedTime <- vftLegMinutes(dist, dayPop$speed[toDecideNicest])
+      arr <- vftArrivalStep(dayPop$clock[toDecideNicest], addedTime, timestep, timeTimestepsRatio)
+      dayPop$clock[toDecideNicest]  <- arr$clock
+      dayPop$moving[toDecideNicest] <- arr$step
 
 
       # for(agentNo in 1:nrow(dayPop[toDecide & !toDecideShortest & ! toDecideNicestShortest, ])){

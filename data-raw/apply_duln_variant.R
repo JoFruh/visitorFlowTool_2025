@@ -22,9 +22,12 @@
 #                 stored variant, when BASE holds the areas it was built on)
 # VFT_AV_SCRIPT   the script that defines the variant (default tailor_duln_types.R;
 #                 data-raw/tailor_duln_activities.R for the per-activity variants,
-#                 tailor_duln_strava.R for the Strava ones)
+#                 tailor_duln_strava.R for the Strava ones, tailor_duln_osm.R for the
+#                 OSM-trace ones, tailor_duln_strava_areas.R for Strava over the OSM areas)
 # VFT_AV_TYSUB    the tailored folder's subfolder with fit_types.rds (default types;
-#                 activities for the per-activity fit, strava for the Strava fit)
+#                 activities for the per-activity fit, strava for the Strava fit,
+#                 osm/clean for the OSM fit, strava_areas/clean or strava_areas/width/clean
+#                 for Strava over the OSM areas)
 
 LOCAL <- "C:/Users/frueh/Documents/Local Data"
 BASE  <- Sys.getenv("VFT_AV_BASE", "")
@@ -50,7 +53,7 @@ for(f in c("fit_types.rds", "survey_types.csv"))
 
 #2. the variant, from the base (tailor_duln_types.R's definitions, no stage run)
 Sys.setenv(VFT_VAL_OUT = keep, VFT_TD_OUT = TDIR, VFT_TY_OUT = TYB, VFT_TY_STAGES = "none", VFT_ACT_STAGES = "none", VFT_EL_STAGES = "none",
-           VFT_ST_STAGES = "none")
+           VFT_ST_STAGES = "none", VFT_OSM_STAGES = "none", VFT_SA_STAGES = "none")
 .repo <- Sys.getenv("VFT_VAL_REPO", "C:/Users/frueh/VScode_GitClones/visitorFlowTool_2025")
 source(file.path(.repo, "data-raw", SCRIPT))
 #the contexts of VFT_VAL_CONTEXTS (validate_usage_surveys.R), all three by default

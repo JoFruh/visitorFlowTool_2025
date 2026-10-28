@@ -73,9 +73,11 @@ ST_ELEMENTS <- Sys.getenv("VFT_ST_ELEMENTS", "clean")
 CLEAN <- identical(ST_ELEMENTS, "clean")
 if(!CLEAN && !identical(ST_ELEMENTS, "today")) stop("VFT_ST_ELEMENTS is clean or today")
 #the clean set: tailor_duln_elements.R swaps layersFile, extractFile, ELEMENTS_NEW and
-#xlsxNew (it sources tailor_duln_activities.R)
+#xlsxNew (it sources tailor_duln_activities.R). VFT_ST_CHAIN=none: a caller sourced the
+#chain already (data-raw/tailor_duln_strava_areas.R, through tailor_duln_osm.R)
 Sys.setenv(VFT_ACT_STAGES = "none", VFT_EL_STAGES = "none")
-source(file.path(.repo, "data-raw", if(CLEAN) "tailor_duln_elements.R" else "tailor_duln_activities.R"))
+if(!identical(Sys.getenv("VFT_ST_CHAIN"), "none"))
+  source(file.path(.repo, "data-raw", if(CLEAN) "tailor_duln_elements.R" else "tailor_duln_activities.R"))
 TY_SCRIPT <- ST_SCRIPT
 
 #the heat (tiles .. extract) in ST_BASE, the element set's fits in ST
@@ -137,12 +139,14 @@ readSession <- function(){
 tileUrl <- function(ss, sport, z, x, y) paste0(ss$pre, "sport_", sport, ss$colour, z, "/", x, "/", y, ss$hi, ss$post)
 lon2x <- function(lon, z) floor((lon + 180) / 360 * 2^z)
 lat2y <- function(lat, z){ r <- lat * pi / 180; floor((1 - log(tan(r) + 1 / cos(r)) / pi) / 2 * 2^z) }
-#the tiles over Glatt's network (shapeLarger)
-tileRange <- function(z = ST_Z){
-  bb <- sf::st_bbox(sf::st_transform(readRDS(aoiFile("glatt"))$shapeLarger, 4326))
+#the tiles over a context's network (shapeLarger; Glatt's unless another is given)
+tileRange <- function(z = ST_Z, ctx = "glatt"){
+  bb <- sf::st_bbox(sf::st_transform(readRDS(aoiFile(ctx))$shapeLarger, 4326))
   list(x = lon2x(bb[["xmin"]], z):lon2x(bb[["xmax"]], z), y = lat2y(bb[["ymax"]], z):lat2y(bb[["ymin"]], z), z = z)
 }
 tileFile <- function(sport, z, x, y) file.path(ST_RAW, "tiles", sport, z, x, paste0(y, ".png"))
+#a context's own file name: Glatt's as before, "<name>_<ctx>.<ext>" for another
+ctxName <- function(name, ctx) if(identical(ctx, "glatt")) name else sub("(\\.[a-z]+)$", paste0("_", ctx, "\\1"), name)
 isPng <- function(b) length(b) >= 8 && identical(b[1:8], as.raw(c(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)))
 
 #one request, at most one per second; the status and the bytes
@@ -161,13 +165,13 @@ newHandle <- function(ss){
   h
 }
 
-stageTiles <- function(){
-  tr <- tileRange()
+stageTiles <- function(ctx = "glatt"){
+  tr <- tileRange(ctx = ctx)
   g <- expand.grid(y = tr$y, x = tr$x, sport = SPORTS, stringsAsFactors = FALSE)
   g$file <- tileFile(g$sport, tr$z, g$x, g$y)
   have <- function() file.exists(g$file) | file.exists(sub("\\.png$", ".none", g$file))
   if(all(have()) && !identical(Sys.getenv("VFT_ST_PROBE_ONLY"), "1")){
-    logf("tiles: all %d present, none fetched", nrow(g)); return(invisible(g))
+    logf("tiles %s: all %d present, none fetched", ctx, nrow(g)); return(invisible(g))
   }
   ss <- readSession()
   logf("session: sport_%s, colour %s, tile %d/%d/%d%s; cookies valid until %s", ss$sport, gsub("/", "", ss$colour),
@@ -195,7 +199,7 @@ stageTiles <- function(){
   if(identical(Sys.getenv("VFT_ST_PROBE_ONLY"), "1")) return(invisible(pr))
   #every tile over the network
   todo <- which(!have())
-  logf("tiles: z%d, %d x %d per sport, %d sports = %d tiles; %d to fetch (~%.0f min)", tr$z, length(tr$x), length(tr$y),
+  logf("tiles %s: z%d, %d x %d per sport, %d sports = %d tiles; %d to fetch (~%.0f min)", ctx, tr$z, length(tr$x), length(tr$y),
        length(SPORTS), nrow(g), length(todo), length(todo) / 60)
   t0 <- proc.time()[["elapsed"]]; nEmpty <- 0L
   for(j in seq_along(todo)){
@@ -216,7 +220,7 @@ stageTiles <- function(){
     if(j %% 100 == 0) logf("tiles: %d / %d, %.1f min", j, length(todo), (proc.time()[["elapsed"]] - t0) / 60)
   }
   ok <- have()
-  logf("tiles: done, %d of %d present (%d without heat)", sum(ok), nrow(g), nEmpty)
+  logf("tiles %s: done, %d of %d present (%d without heat)", ctx, sum(ok), nrow(g), nEmpty)
   if(!all(ok)) stop("tiles missing")
   invisible(g)
 }
@@ -226,16 +230,21 @@ stageTiles <- function(){
 #The grayscale tiles (1024 px at z14 @2x, ~1.6 m) are black where no one went and
 #brighter with more activity: the grey level IS the heat. The mosaic keeps the max of
 #each 2 x 2 block (~3.2 m), as an 8-bit GeoTIFF in 3857.
-mosaicFile <- function(sp) file.path(ST_RAW, "mosaic", paste0(sp, "_z", ST_Z, ".tif"))
+#kind "max" the 2 x 2 max (the peak next to a path), "mean" the 2 x 2 mean (keeps the
+#spread across a path's width: data-raw/tailor_duln_strava_areas.R's width measure)
+mosaicFile <- function(sp, ctx = "glatt", kind = "max"){
+  nm <- paste0(sp, "_z", ST_Z, if(identical(kind, "mean")) "_mean", ".tif")
+  if(identical(ctx, "glatt")) file.path(ST_RAW, "mosaic", nm) else file.path(ST_RAW, "mosaic", ctx, nm)
+}
 tileExt <- function(tr){
   W <- 20037508.342789244; s <- 2 * W / 2^tr$z
   terra::ext(-W + min(tr$x) * s, -W + (max(tr$x) + 1) * s, W - (max(tr$y) + 1) * s, W - min(tr$y) * s)
 }
-stageDecode <- function(){
-  tr <- tileRange()
+stageDecode <- function(ctx = "glatt", kind = "max"){
+  tr <- tileRange(ctx = ctx)
   st <- list()
   for(sp in SPORTS){
-    f <- mosaicFile(sp)
+    f <- mosaicFile(sp, ctx, kind)
     if(!file.exists(f)){
       t0 <- proc.time()[["elapsed"]]
       M <- NULL; h <- NA_integer_
@@ -257,14 +266,14 @@ stageDecode <- function(){
           M <- matrix(0L, length(tr$y) * h / 2, length(tr$x) * h / 2)
         }
         o <- seq(1, h, by = 2); e <- o + 1L
-        b <- pmax(a[o, o], a[e, o], a[o, e], a[e, e])
+        b <- if(identical(kind, "mean")) round((a[o, o] + a[e, o] + a[o, e] + a[e, e]) / 4) else pmax(a[o, o], a[e, o], a[o, e], a[e, e])
         M[(iy - 1) * h / 2 + seq_len(h / 2), (ix - 1) * h / 2 + seq_len(h / 2)] <- as.integer(b)
       }
       r <- terra::rast(M, extent = tileExt(tr), crs = "EPSG:3857")
       names(r) <- sp
       dir.create(dirname(f), recursive = TRUE, showWarnings = FALSE)
       terra::writeRaster(r, f, overwrite = TRUE, datatype = "INT1U", gdal = c("COMPRESS=DEFLATE", "TILED=YES"))
-      logf("decode %s: %d x %d px of %.2f m, %.0f s", sp, nrow(M), ncol(M), terra::res(r)[1], proc.time()[["elapsed"]] - t0)
+      logf("decode %s %s (%s): %d x %d px of %.2f m, %.0f s", ctx, sp, kind, nrow(M), ncol(M), terra::res(r)[1], proc.time()[["elapsed"]] - t0)
     }
     v <- terra::values(terra::rast(f), mat = FALSE)
     nz <- v[v > 0]; top <- max(nz)
@@ -272,8 +281,8 @@ stageDecode <- function(){
                            q50 = stats::median(nz), ksUniform = unname(suppressWarnings(stats::ks.test(nz / top, "punif")$statistic)))
   }
   st <- do.call(rbind, st)
-  utils::write.csv(st, basePath("decode.csv"), row.names = FALSE)
-  logf("decode: per sport, the share of pixels with heat, the top grey level, the share of heat pixels at it, and the distance of the heat from uniform:")
+  utils::write.csv(st, basePath(ctxName(if(identical(kind, "mean")) "decode_mean.csv" else "decode.csv", ctx)), row.names = FALSE)
+  logf("decode %s (%s): per sport, the share of pixels with heat, the top grey level, the share of heat pixels at it, and the distance of the heat from uniform:", ctx, kind)
   print(st, digits = 3, row.names = FALSE)
   invisible(st)
 }
@@ -294,14 +303,15 @@ edgePoints <- function(net, n = 200000){
 #    tile seams, against the same within tiles (the pixel pairs half a tile from the
 #    seams): a ratio of at most 1.5 for every sport means one normalisation over the
 #    area (global ranks); otherwise the heat is ranked within each z14 tile.
-stageCheck <- function(){
-  f <- basePath("check.rds")
+stageCheck <- function(ctx = "glatt"){
+  f <- basePath(ctxName("check.rds", ctx))
   if(file.exists(f)) return(invisible(readRDS(f)))
-  net <- readRDS(netFile("glatt"))$net
+  net <- readRDS(netFile(ctx))$net
   pts <- edgePoints(net)
+  nTy <- length(tileRange(ctx = ctx)$y)
   geo <- list(); seam <- list()
   for(sp in SPORTS){
-    r <- terra::rast(mosaicFile(sp)); px <- terra::res(r)[1]
+    r <- terra::rast(mosaicFile(sp, ctx)); px <- terra::res(r)[1]
     sh <- expand.grid(dx = -4:4, dy = -4:4)
     sh$heat <- vapply(seq_len(nrow(sh)), function(i){
       v <- terra::extract(r, cbind(pts[, "X"] + sh$dx[i] * px, pts[, "Y"] + sh$dy[i] * px))[[1]]
@@ -310,7 +320,7 @@ stageCheck <- function(){
     b <- sh[which.max(sh$heat), ]
     geo[[sp]] <- data.frame(sport = sp, px_m = px, bestDx = b$dx, bestDy = b$dy, heatBest = b$heat,
                             heatNoShift = sh$heat[sh$dx == 0 & sh$dy == 0])
-    M <- terra::as.matrix(r, wide = TRUE); ts <- nrow(M) / length(tileRange()$y)
+    M <- terra::as.matrix(r, wide = TRUE); ts <- nrow(M) / nTy
     #|v[, c] - v[, c + 1]| over the columns cc and |v[r, ] - v[r + 1, ]| over the rows rr,
     #where both pixels have heat
     pairDiff <- function(cc, rr){
@@ -327,12 +337,12 @@ stageCheck <- function(){
   geo <- do.call(rbind, geo); seam <- do.call(rbind, seam)
   seam$ratio <- seam$meanSeam / seam$meanInside
   print(geo, digits = 3, row.names = FALSE); print(seam, digits = 3, row.names = FALSE)
-  if(any(abs(geo$bestDx) > 1 | abs(geo$bestDy) > 1)) stop("the heat is off the network by more than a pixel - check the georeferencing")
+  if(any(abs(geo$bestDx) > 1 | abs(geo$bestDy) > 1)) stop(ctx, ": the heat is off the network by more than a pixel - check the georeferencing")
   scope <- if(all(seam$ratio <= 1.5)) "global" else "tile"
-  logf("check: georeferencing within a pixel for every sport; seam/inside ratio %s -> ranks %s",
+  logf("check %s: georeferencing within a pixel for every sport; seam/inside ratio %s -> ranks %s", ctx,
        paste(sprintf("%s %.2f", seam$sport, seam$ratio), collapse = ", "), if(scope == "global") "over the whole area" else "within each z14 tile")
   res <- list(geo = geo, seam = seam, scope = scope)
-  utils::write.csv(merge(geo, seam), basePath("check.csv"), row.names = FALSE)
+  utils::write.csv(merge(geo, seam), basePath(ctxName("check.csv", ctx)), row.names = FALSE)
   saveRDS(res, f)
   invisible(res)
 }
@@ -362,6 +372,19 @@ onStravaGrid <- function(se, base, cells){
   terra::cellFromXY(grid, terra::xyFromCell(base, cells))
 }
 
+#the heat along each edge (edges x sports): the 3 x 3 max (~10 m: GPS tracks scatter
+#round the path), its mean along the line (exact_extract on a 0.5 m buffer, as the elements)
+edgeHeat <- function(ea, ctx = "glatt"){
+  g <- sf::st_transform(sf::st_zm(ea$SHAPE), 3857)
+  R <- terra::rast(lapply(SPORTS, function(sp) terra::rast(mosaicFile(sp, ctx))))
+  Rf <- terra::focal(R, w = 3, fun = "max", na.rm = TRUE, filename = file.path(tempdir(), paste0("strava_focal_", ctx, ".tif")), overwrite = TRUE)
+  names(Rf) <- SPORTS
+  H <- as.matrix(exactextractr::exact_extract(Rf, sf::st_buffer(g, 0.5), "mean", progress = FALSE))
+  colnames(H) <- SPORTS
+  H[!is.finite(H)] <- 0
+  H
+}
+
 stageExtractStrava <- function(){
   f <- basePath("extract_glatt.rds")
   if(file.exists(f)) return(invisible(readRDS(f)))
@@ -369,15 +392,7 @@ stageExtractStrava <- function(){
   scope <- stageCheck()$scope
   net <- readRDS(netFile("glatt"))$net
   ea <- igraph::edge_attr(net)
-  g <- sf::st_transform(sf::st_zm(ea$SHAPE), 3857)
-  #the heat along each edge: the 3 x 3 max (~10 m: GPS tracks scatter round the path),
-  #its mean along the line (exact_extract on a 0.5 m buffer, as the elements)
-  R <- terra::rast(lapply(SPORTS, function(sp) terra::rast(mosaicFile(sp))))
-  Rf <- terra::focal(R, w = 3, fun = "max", na.rm = TRUE, filename = file.path(tempdir(), "strava_focal.tif"), overwrite = TRUE)
-  names(Rf) <- SPORTS
-  H <- as.matrix(exactextractr::exact_extract(Rf, sf::st_buffer(g, 0.5), "mean", progress = FALSE))
-  colnames(H) <- SPORTS
-  H[!is.finite(H)] <- 0
+  H <- edgeHeat(ea)
   logf("extract: heat on %d edges, %.0f s", nrow(H), proc.time()[["elapsed"]] - t0)
   #the cells: tailor_duln.R's stageExtract() mapping (length-weighted mean over the
   #cell's edges), on every base cell that holds an edge

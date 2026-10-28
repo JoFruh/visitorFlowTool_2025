@@ -64,8 +64,32 @@
 #                     area, the walk there and back comes on top. "whole": the duration
 #                     is the whole outing - an agent turns home once its time out plus
 #                     the walk back (taken as long as its walk there) reaches it
-#                     (vftTimeOver() hooked; single-stage types only).
-#   VFT_VAL_DURSRC    an rds of outing durations per agent type (data-raw/
+#                     (vftTimeOver() hooked; single-stage types only). "half": the
+#                     duration is the whole outing and the agent turns home half-way
+#                     through it (timer >= duration / 2), the way back mirroring the
+#                     way out.
+#   VFT_VAL_RETURN    "attr" (default, the engine since 2026-10-23): home by
+#                     findReturnRoute_cpp() - attractivity-weighted ("_ATTR") inside
+#                     the areas, slightly weighted ("_attr") outside, dead-end agents
+#                     too. "shortest": the engine before, home by the shortest route,
+#                     dead-end agents by "nicestShortest" (vftRouteHome() and
+#                     vftDeadEndHome() hooked). Runs before 2026-10-23 carry no
+#                     returnRoute: they went the shortest way.
+#   VFT_VAL_LEGROUND  "exact" (default, the engine since 2026-10-23): legs take their
+#                     exact time on each agent's own clock, only the arrival rounded to
+#                     the 20-second step. "minute": the engine before, every leg rounded
+#                     up to the whole minute (vftLegMinutes(), vftArrivalStep() hooked).
+#                     Runs before carry no legRound ("step": a 2026-10-23 screen, each
+#                     leg rounded to the step).
+#   VFT_VAL_TYPEMIX   an rds with list(mix = share per agent type, source =) (data-raw/
+#                     site_durations.R): after the engine draws its population, every
+#                     agent's type is drawn again from this mix (start nodes do not
+#                     depend on the type). Unset = the engine's mix.
+#   VFT_VAL_OUTLOG    1: each run file also holds `outingLog`, one row per agent - its
+#                     duration, the clock when it reached its area, turned home and got
+#                     home, and the metres walked to and from the area and inside it
+#                     (data-raw/compare_outing_durations.R). Draws nothing random.
+#   VFT_VAL_DURSRC   an rds of outing durations per agent type (data-raw/
 #                     calibrate_aoi_rum.R: the Glatt routes'); every agent's duration
 #                     is drawn again from its type's after the engine's draw, and the
 #                     area choice's standardisation is bounded by DUR_RANGE instead of
@@ -193,7 +217,13 @@ AGENT_TYPES <- c("walkNat", "walkSoc", "dogNat", "dogProx", "ebikeNat", "bikeSpo
 #out (timer, the walk there included) plus the walk back - taken as long as the walk
 #there, timeNotAccounted - reaches its duration.
 OUTING <- Sys.getenv("VFT_VAL_OUTING", "area")
-if(!OUTING %in% c("area", "whole")) stop("VFT_VAL_OUTING must be area or whole")
+if(!OUTING %in% c("area", "whole", "half")) stop("VFT_VAL_OUTING must be area, whole or half")
+#the way home and the rounding of walking times (see the header)
+RETURN_ROUTE <- Sys.getenv("VFT_VAL_RETURN", "attr")
+if(!RETURN_ROUTE %in% c("shortest", "attr")) stop("VFT_VAL_RETURN must be shortest or attr")
+LEG_ROUND <- Sys.getenv("VFT_VAL_LEGROUND", "exact")
+if(!LEG_ROUND %in% c("minute", "exact")) stop("VFT_VAL_LEGROUND must be exact or minute")
+OUTLOG <- identical(Sys.getenv("VFT_VAL_OUTLOG", "0"), "1")
 #Other outing durations: list(durs = one vector of minutes per agent type). With them
 #the drawn durations are no longer the engine's 30-240 classes, so the area choice's
 #bounds are fixed at those (a population's shortest drawn route of a few minutes would
@@ -205,6 +235,15 @@ DURSRC <- local({
     if(!all(AGENT_TYPES %in% names(x$durs)) || !all(vapply(x$durs[AGENT_TYPES], function(d) length(d) > 0 && all(d > 0), TRUE)))
       stop("VFT_VAL_DURSRC: ", f, " needs positive durations for every agent type")
     list(file = normalizePath(f, winslash = "/"), md5 = unname(tools::md5sum(f)), durs = x$durs[AGENT_TYPES])
+  }
+})
+TYPEMIX <- local({
+  f <- Sys.getenv("VFT_VAL_TYPEMIX", "")
+  if(!nzchar(f)) NULL else {
+    x <- readRDS(f)
+    if(!all(names(x$mix) %in% AGENT_TYPES) || !(abs(sum(x$mix) - 1) < 1e-6) || any(x$mix < 0))
+      stop("VFT_VAL_TYPEMIX: ", f, " needs shares over the engine's agent types summing to 1")
+    list(file = normalizePath(f, winslash = "/"), md5 = unname(tools::md5sum(f)), mix = x$mix)
   }
 })
 DUR_RANGE <- c(30, 240)
@@ -351,6 +390,19 @@ CTX <- list(
                    savedSurvey = "allGlatt_survey.tif",
                    oldAoi = "finalPolygons_2_5_Glatt.gdb")
 )
+#Survey-free contexts (data-raw/tailor_duln_osm.R): extra CTX entries from an RDS, a
+#named list like CTX's with survey = "none" and an absolute perimeter. They run the
+#aoi, survey (a stub: the grid and the lake cells) and network stages, and the sims.
+EXTRA_CTX_FILE <- Sys.getenv("VFT_VAL_EXTRA_CTX", "")
+if(nzchar(EXTRA_CTX_FILE)){
+  .x <- readRDS(EXTRA_CTX_FILE)
+  if(any(names(.x) %in% names(CTX))) stop("VFT_VAL_EXTRA_CTX redefines ", paste(intersect(names(.x), names(CTX)), collapse = ", "))
+  if(!all(vapply(.x, function(cf) identical(cf$survey, "none"), TRUE))) stop("VFT_VAL_EXTRA_CTX: every entry needs survey = \"none\"")
+  CTX <- c(CTX, .x)
+  rm(.x)
+}
+#a data-directory path, or an absolute one (the extra contexts' perimeters)
+ctxFile <- function(p) if(grepl("^([A-Za-z]:)?[/\\\\]", p)) p else ns$vftData(p)
 
 TYPES <- list(
   full         = list(label = "Full",          aoiChoice = "engine",   routing = "engine", movement = "engine", parking = TRUE),
@@ -446,16 +498,24 @@ CONTRASTS <- list(c("full", "nearby"), c("nearby", "nearbyRandom"),
 #(time inside the area, the engine's durations), WE the whole outing on the engine's
 #durations (VFT_VAL_OUTING); L2 / L3 the DULN round the lakes doubled / tripled
 #(data-raw/lake_emphasis_duln.R); ACT the DULN per activity, ST3 the stairs x3 for
-#bikers alone (data-raw/tailor_duln_activities.R); E2 / E2C the activities on clean
+#bikers alone (data-raw/tailor_duln_activities.R); ND the engine's durations on the
+#2026-10-23 engine (attractive way home, exact walking times), against re-scaled ones; E2 / E2C the activities on clean
 #elements, unconstrained / signed (data-raw/tailor_duln_elements.R); S5 / SS the DULN
 #fitted to the Strava heatmap, per group / shared (data-raw/tailor_duln_strava.R), XL
-#today's xlsx DULN on the same areas.
+#today's xlsx DULN on the same areas; O3E / OSE / O3EC the DULN fitted to OSM public GPS
+#traces over new Swiss areas, per group / shared / per group signed
+#(data-raw/tailor_duln_osm.R); SA5E / SA5W the Strava fit per group over those areas
+#instead of Glatt, on the peak heat next to a path / the heat summed across its width
+#(data-raw/tailor_duln_strava_areas.R).
 ALIAS_SETTINGS <- c(A05 = "a0.5", A5 = "a5", A10 = "a10", D125 = "time x1.25", D150 = "time x1.5",
                     W125 = "walk x1.25", W150 = "walk x1.5", IA = "old outing", WE = "whole eng.dur",
                     L2 = "lakes x2", L3 = "lakes x3", ACT = "4 activities", ST3 = "stairs x3",
                     E2 = "clean elements", E2C = "clean el. signed", S5 = "Strava per group",
                     SS = "Strava shared", XL = "xlsx DULN", S5E = "Strava per group, clean",
-                    SSE = "Strava shared, clean", S5EC = "Strava per group, clean signed")
+                    SSE = "Strava shared, clean", S5EC = "Strava per group, clean signed",
+                    ND = "engine durations", O3E = "OSM per group", OSE = "OSM shared",
+                    O3EC = "OSM per group signed", SA5E = "Strava per group, OSM areas",
+                    SA5W = "Strava per group, OSM areas, width")
 for(sfx in names(ALIAS_SETTINGS)){
   for(t in c("full", "nearby", "nearbyRandom", "random"))
     TYPES[[paste0(t, sfx)]] <- utils::modifyList(TYPES[[t]], list(label = paste(TYPES[[t]]$label, ALIAS_SETTINGS[[sfx]])))
@@ -470,6 +530,13 @@ CONTRASTS <- c(CONTRASTS, list(c("fullS5", "fullXL"), c("fullSS", "fullXL"), c("
                                c("fullS5E", "fullE2"), c("fullS5EC", "fullE2C"), c("fullSSE", "fullST3"),
                                c("fullS5E", "full"), c("fullS5E", "fullS5"), c("fullS5E", "fullSSE"),
                                c("fullS5EC", "fullS5E"), c("fullE2", "fullXL"), c("fullS5EC", "full")))
+#the OSM-trace DULN against the same references
+CONTRASTS <- c(CONTRASTS, list(c("fullO3E", "fullXL"), c("fullOSE", "fullXL"), c("fullO3EC", "fullXL"),
+                               c("fullO3E", "fullS5E"), c("fullOSE", "fullS5E"), c("fullO3E", "fullE2"),
+                               c("fullO3E", "fullOSE"), c("fullO3EC", "fullO3E")))
+#the Strava fit over the OSM areas against Strava at Glatt, the OSM traces and each other
+CONTRASTS <- c(CONTRASTS, list(c("fullSA5E", "full"), c("fullSA5E", "fullS5E"), c("fullSA5E", "fullO3E"),
+                               c("fullSA5W", "full"), c("fullSA5W", "fullS5E"), c("fullSA5W", "fullSA5E")))
 #the fitted area choices (fullRumFixed / fullRumTime) on the Strava routing (S5E, area
 #choice re-fitted on its area DULN), compare-only like the other aliases
 for(t in c("fullRumFixed", "fullRumTime"))
@@ -488,6 +555,25 @@ CONTRASTS <- c(CONTRASTS, list(c("fullRumFixedS5EA", "fullRumFixed"), c("fullRum
                                c("fullRumTimeS5EA", "fullRumTime"), c("fullRumTimeS5EA", "fullRumFixedS5EA"),
                                c("fullRumTimeS5EA", "fullS5E"), c("fullRumTimeS5EA", "full"),
                                c("fullRumTimeS5EA", "fullRumTimeS5E")))
+#...and on the engine's outing (IA: the engine's durations and turn-home rule, home by
+#the shortest route) or the engine's durations on the 2026-10-23 engine (ND), for the
+#outing-duration screens
+for(t in c("fullRumFixed", "fullRumTime")) for(sfx in c("IA", "ND"))
+  TYPES[[paste0(t, sfx)]] <- utils::modifyList(TYPES[[t]],
+    list(label = paste(TYPES[[t]]$label, ALIAS_SETTINGS[[sfx]])))
+CONTRASTS <- c(CONTRASTS, list(c("fullRumFixed", "fullRumFixedIA"), c("fullRumFixedIA", "fullIA"),
+                               c("fullRumFixed", "fullIA"), c("fullRumFixed", "fullRumFixedND"),
+                               c("fullRumFixedND", "fullND"),
+                               c("fullRumTime", "fullRumTimeIA"), c("fullRumTime", "fullRumTimeND"),
+                               c("fullRumTimeND", "fullRumTimeIA"), c("fullRumTimeIA", "fullIA"),
+                               c("fullRumTimeND", "fullND"), c("fullRumTime", "fullRumFixed")))
+#the fitted area choices on the OSM-trace DULN (area choice re-fitted on its area DULN)
+for(t in c("fullRumFixed", "fullRumTime")) for(sfx in c("O3E", "OSE"))
+  TYPES[[paste0(t, sfx)]] <- utils::modifyList(TYPES[[t]],
+    list(label = paste(TYPES[[t]]$label, ALIAS_SETTINGS[[sfx]])))
+CONTRASTS <- c(CONTRASTS, list(c("fullRumTimeO3E", "fullRumTime"), c("fullRumTimeOSE", "fullRumTime"),
+                               c("fullRumTimeO3E", "fullRumTimeOSE"), c("fullRumTimeO3E", "fullO3E"),
+                               c("fullRumTimeOSE", "fullOSE")))
 #the baseline performance is standardised against: (r - r_base) / (1 - r_base)
 BASELINE <- "fullRandom"
 
@@ -531,7 +617,12 @@ ORIG <- list(historyToPassage_cpp = ns$historyToPassage_cpp,
              vftChoosePaths       = ns$vftChoosePaths,
              vftDbgCat            = ns$vftDbgCat,
              vftAgentTimeAndSpeed = ns$vftAgentTimeAndSpeed,
-             vftTimeOver          = ns$vftTimeOver)
+             vftTimeOver          = ns$vftTimeOver,
+             vftLegMinutes        = ns$vftLegMinutes,
+             vftArrivalStep       = ns$vftArrivalStep,
+             vftRouteHome         = ns$vftRouteHome,
+             vftDeadEndHome       = ns$vftDeadEndHome,
+             generatePopulation   = ns$generatePopulation)
 
 #the corrected engine's hooks (definitions only)
 source(file.path(REPO, "data-raw", "engine_corrections.R"), local = TRUE)
@@ -789,7 +880,7 @@ lakeCellsOf <- function(grid, perim){
 #(R/step1_server.R:800). The Wigger KML is a closed LINE, which the old script
 #turned into a polygon with terra::as.polygons(); closed here by hand.
 readPerimeter <- function(file){
-  x <- sf::st_zm(sf::st_read(ns$vftData(file), quiet = TRUE))
+  x <- sf::st_zm(sf::st_read(ctxFile(file), quiet = TRUE))
   g <- sf::st_geometry(x)
   if(all(sf::st_geometry_type(g) %in% c("LINESTRING", "MULTILINESTRING"))){
     rings <- sf::st_cast(g, "LINESTRING")
@@ -950,6 +1041,12 @@ stageSurvey <- function(ctx){
     t100 <- terra::disagg(base, 5)
     surveyBase <- terra::values(heat, mat = FALSE)
     surveyBase[is.na(surveyBase)] <- 0
+  }else if(identical(cfg$survey, "none")){
+    #no survey: the Swisscom grid as Glatt's, and the lake cells
+    base <- terra::rast(terra::crop(terra::rast(PATHS$swisscom), perimV))
+    t100 <- base
+    lakes <- lakeCellsOf(base, perim)
+    surveyBase <- numeric(terra::ncell(base))
   }else{
     #the old swisscom_5Oct_*_100m crop: the grid of every old comparison
     base <- terra::rast(terra::crop(terra::rast(PATHS$swisscom), perimV))
@@ -988,7 +1085,7 @@ stageSurvey <- function(ctx){
 
   #parity with the published survey raster, inside the cells it kept
   parity <- NA_real_
-  old <- file.path(PATHS$oldDir, cfg$savedSurvey)
+  old <- if(is.null(cfg$savedSurvey)) "" else file.path(PATHS$oldDir, cfg$savedSurvey)
   if(file.exists(old)){
     saved <- terra::resample(terra::rast(old), base, method = "near")
     v <- terra::values(saved, mat = FALSE)
@@ -1018,7 +1115,7 @@ stageNetwork <- function(ctx){
   #Agents start where the respondents live. sf_to_tidygraph3() reads its residents
   #raster from this global when it exists (R/sf_to_tidygraph3.R:261) and wants the
   #layer called Band_1 - the filBleu raster's is "sum".
-  resR <- terra::rast(ns$vftData(cfg$residential))
+  resR <- terra::rast(ctxFile(cfg$residential))
   names(resR) <- "Band_1"
   assign(".vft_residential_full", resR, envir = .GlobalEnv)
   on.exit(if(exists(".vft_residential_full", envir = .GlobalEnv, inherits = FALSE))
@@ -1221,10 +1318,27 @@ simCore <- function(sc, seed, capture = TRUE){
       #historyToPassage_cpp() counts both). Until 2026-10-13 only priorE was taken,
       #so every map missed the in-area walking - TRACK_VERSION 2 has both.
       cap$priorE <- Map(function(a, b) c(a, b), agentTable$priorE, agentTable$priorEAOI)
+      #the outing log keeps the two apart: to and from the area / inside it
+      if(OUTLOG){
+        cap$wayE <- agentTable$priorE
+        cap$inE  <- agentTable$priorEAOI
+      }
       ORIG$historyToPassage_cpp(agentTable = agentTable, edgeTable = edgeTable,
                                 vertexTable = vertexTable)
     })
     on.exit(nsSet("historyToPassage_cpp", ORIG$historyToPassage_cpp), add = TRUE)
+  }
+  #another agent type mix (VFT_VAL_TYPEMIX): the population as the engine draws it,
+  #then every agent's type drawn again from the mix
+  if(!is.null(TYPEMIX)){
+    nsSet("generatePopulation", function(network, parkingIntensity = 1, nAgents = 2000, parkingAttr = NULL){
+      pop <- ORIG$generatePopulation(network, parkingIntensity = parkingIntensity, nAgents = nAgents,
+                                     parkingAttr = parkingAttr)
+      pop$agentTyp <- sample(names(TYPEMIX$mix), nrow(pop), replace = TRUE, prob = unname(TYPEMIX$mix))
+      rnd$typeMix <- TRUE
+      pop
+    })
+    on.exit(nsSet("generatePopulation", ORIG$generatePopulation), add = TRUE)
   }
   #other durations (VFT_VAL_DURSRC): drawn again per type, in the engine's type order,
   #after the engine's own draw; longer outings (VFT_VAL_DURATION): the durations are
@@ -1253,15 +1367,62 @@ simCore <- function(sc, seed, capture = TRUE){
     })
     on.exit(nsSet("vftAgentTimeAndSpeed", ORIG$vftAgentTimeAndSpeed), add = TRUE)
   }
-  #the whole outing (VFT_VAL_OUTING=whole): turn home when the time out plus the walk
-  #back, taken as long as the walk there, reaches the duration
-  if(identical(OUTING, "whole")){
-    if(isTRUE(sc$spec$twoStage)) stop("VFT_VAL_OUTING=whole is for single-stage types only")
+  #when an agent turns home. "whole" (VFT_VAL_OUTING): once the time out plus the walk
+  #back, taken as long as the walk there, reaches the duration; "half": half-way
+  #through the duration. The outing log (VFT_VAL_OUTLOG) watches whichever rule runs:
+  #vftTimeOver() sees every agent once per timestep, before that timestep's legs are
+  #timed, so on its 2nd call timeNotAccounted is each agent's walk there, and the
+  #first call that finds it grown is the timer at which the agent set off home
+  #(timeNotAccounted grows by the way home in that timestep's "shortest" branch).
+  if(!identical(OUTING, "area") || OUTLOG){
+    if(!identical(OUTING, "area") && isTRUE(sc$spec$twoStage))
+      stop("VFT_VAL_OUTING=", OUTING, " is for single-stage types only")
+    rule <- switch(OUTING,
+                   area  = ORIG$vftTimeOver,
+                   whole = function(timeExt, timeNotAccounted, timer) timeExt <= timer + timeNotAccounted,
+                   half  = function(timeExt, timeNotAccounted, timer) timeExt / 2 <= timer)
+    rnd$tCalls <- 0L
     nsSet("vftTimeOver", function(timeExt, timeNotAccounted, timer){
-      rnd$outing <- TRUE
-      timeExt <= timer + timeNotAccounted
+      if(!identical(OUTING, "area")) rnd$outing <- TRUE
+      over <- rule(timeExt, timeNotAccounted, timer)
+      if(OUTLOG){
+        rnd$tCalls <- rnd$tCalls + 1L
+        if(rnd$tCalls == 1L){
+          rnd$firstOver <- rep(NA_real_, length(timeExt))
+          rnd$turnAt    <- rep(NA_real_, length(timeExt))
+        }
+        if(rnd$tCalls == 2L) rnd$approach <- timeNotAccounted
+        rnd$firstOver[over & is.na(rnd$firstOver)] <- timer
+        if(rnd$tCalls > 2L){
+          k <- is.na(rnd$turnAt) & timeNotAccounted > rnd$approach + 1e-9
+          rnd$turnAt[k] <- timer
+        }
+      }
+      over
     })
     on.exit(nsSet("vftTimeOver", ORIG$vftTimeOver), add = TRUE)
+  }
+  #the engine's way home before 2026-10-23 (VFT_VAL_RETURN=shortest): the shortest
+  #route, and "nicestShortest" out of a dead end
+  if(identical(RETURN_ROUTE, "shortest")){
+    nsSet("vftRouteHome", function(adj_ptr, src_v, goal_v, agentTyps, inAoi){
+      rnd$routeHome <- TRUE
+      ns$findShortestRoute_cpp(adj_ptr = adj_ptr, weighingMethod = "distance",
+                               src_v = src_v, goal_v = goal_v, agentTyps = agentTyps)
+    })
+    nsSet("vftDeadEndHome", function() "nicestShortest")
+    on.exit({ nsSet("vftRouteHome", ORIG$vftRouteHome); nsSet("vftDeadEndHome", ORIG$vftDeadEndHome) }, add = TRUE)
+  }
+  #the engine's walking times before 2026-10-23 (VFT_VAL_LEGROUND=minute): every leg
+  #rounded up to the whole minute, the arrival that many timesteps on
+  if(identical(LEG_ROUND, "minute")){
+    nsSet("vftLegMinutes", function(dist, speed){
+      rnd$legRound <- TRUE
+      ceiling(dist / (speed * 1000 / 60))
+    })
+    nsSet("vftArrivalStep", function(clock, legMin, timestep, ratio)
+      list(clock = clock, step = timestep + ceiling(legMin * ratio)))
+    on.exit({ nsSet("vftLegMinutes", ORIG$vftLegMinutes); nsSet("vftArrivalStep", ORIG$vftArrivalStep) }, add = TRUE)
   }
   if((!is.null(sc$spec$rum) || !is.null(sc$spec$rumTime)) && !identical(ENGINE_MODE, "corrected"))
     stop("type ", sc$spec$label, " needs VFT_VAL_ENGINE=corrected")
@@ -1429,7 +1590,11 @@ summariseTracks <- function(priorE, ix){
 settingHooksFired <- function(sc, r){
   if(!is.null(DURATION) && !isTRUE(r$rnd$durScaled)) stop("the duration hook never fired")
   if(!is.null(DURSRC) && !isTRUE(r$rnd$durDrawn)) stop("the duration source hook never fired")
-  if(identical(OUTING, "whole") && !isTRUE(r$rnd$outing)) stop("the whole-outing hook never fired")
+  if(!identical(OUTING, "area") && !isTRUE(r$rnd$outing)) stop("the ", OUTING, "-outing hook never fired")
+  if(identical(RETURN_ROUTE, "shortest") && !isTRUE(r$rnd$routeHome)) stop("the way-home hook never fired")
+  if(identical(LEG_ROUND, "minute") && !isTRUE(r$rnd$legRound)) stop("the minute rounding hook never fired")
+  if(OUTLOG && !(isTRUE(r$rnd$tCalls > 2L))) stop("the outing log never saw the clock")
+  if(!is.null(TYPEMIX) && !isTRUE(r$rnd$typeMix)) stop("the type mix hook never fired")
   if((!is.null(sc$spec$rum) || !is.null(sc$spec$rumTime)) && !isTRUE(r$rnd$rum)) stop("the RUM area choice never fired")
 }
 
@@ -1439,10 +1604,44 @@ settingHooksFired <- function(sc, r){
 settingOf <- function(x) paste0(
   if(is.null(x$duration)) "x1" else paste0("x", x$duration$factor, " ", x$duration$scope),
   if(is.null(x$outing) || identical(x$outing, "area")) "" else paste0(", ", x$outing, " outing"),
+  if(is.null(x$returnRoute)) "" else paste0(", home by ", x$returnRoute),
+  if(is.null(x$legRound)) "" else paste0(", legs to the ", x$legRound),
   if(is.null(x$durSource)) "" else paste0(", durations ", basename(x$durSource$file), " ", substr(x$durSource$md5, 1, 8)),
+  if(is.null(x$typeMix)) "" else paste0(", types ", basename(x$typeMix$file), " ", substr(x$typeMix$md5, 1, 8)),
   if(is.null(x$parking)) "" else paste0(", car parks ", x$parking),
   if(is.null(x$rum)) "" else paste0(", RUM ", x$rum$set, " ", substr(x$rum$md5, 1, 8)),
   if(is.null(x$rumTime)) "" else paste0(", RUM-time ", x$rumTime$set, " ", substr(x$rumTime$md5, 1, 8)))
+
+#One row per agent (VFT_VAL_OUTLOG): where its outing's time went. Clock values in
+#minutes from the start; metres on SHAPE_Leng. approach = the timed walk there
+#(timeNotAccounted before the loop's legs), firstOver = when the rule first said
+#"time up", turnAt = when the agent set off home (NA: it never got a timed way
+#home - a dead-end agent's "nicestShortest" is not timed into timeNotAccounted),
+#end = when it got home (the timestep it arrived, / 3). inArea = turnAt - approach,
+#back = end - turnAt.
+outingLogOf <- function(sc, r, dp){
+  rn <- r$rnd
+  n  <- nrow(dp)
+  if(length(rn$approach) != n || length(r$cap$wayE) != n) stop("the outing log's agents do not line up")
+  ids <- igraph::edge_attr(sc$net, "edgeID")
+  len <- numeric(max(ids)); len[ids] <- igraph::edge_attr(sc$net, "SHAPE_Leng")
+  metres <- function(E) vapply(E, function(e){
+    e <- suppressWarnings(as.integer(e)); e <- e[!is.na(e) & e >= 1L & e <= length(len)]
+    sum(len[e])
+  }, 1)
+  startRes <- sc$residents[match(dp$startV, sc$nodeID)]
+  log <- data.frame(agentTyp = dp$agentTyp, speed = dp$speed, timeExt = dp$timeExt,
+                    approach = rn$approach, firstOver = rn$firstOver, turnAt = rn$turnAt,
+                    end = dp$moving / 3, tnaEnd = dp$timeNotAccounted,
+                    wayM = metres(r$cap$wayE), inM = metres(r$cap$inE),
+                    noGoal = dp$AOIGoal %in% "NO_GOAL" | dp$goalV %in% -1,
+                    parkStart = !(startRes > 0) | is.na(startRes),
+                    unfinished = dp$active %in% TRUE,
+                    stringsAsFactors = FALSE)
+  log$inArea <- log$turnAt - log$approach
+  log$back   <- log$end - log$turnAt
+  log
+}
 
 #the route choice's alpha of a type's runs: the run's (CORR), or the type's own for
 #its explorers (exploreAlpha, two-stage types)
@@ -1493,7 +1692,11 @@ simTask <- function(ctx, type, rep){
               cal = if(identical(sc$spec$aoiChoice, "cal")) CAL_PAR else NULL,
               duration = DURATION,
               outing = if(identical(OUTING, "area")) NULL else OUTING,
+              returnRoute = if(identical(RETURN_ROUTE, "shortest")) NULL else RETURN_ROUTE,
+              legRound = if(identical(LEG_ROUND, "minute")) NULL else LEG_ROUND,
+              outingLog = if(OUTLOG) outingLogOf(sc, r, dp) else NULL,
               durSource = if(is.null(DURSRC)) NULL else DURSRC[c("file", "md5")],
+              typeMix = TYPEMIX,
               parking = if(is.na(PARKING)) NULL else PARKING,
               rum = if(is.null(sc$spec$rum)) NULL else
                 list(set = sc$spec$rum, file = RUM$file, md5 = RUM$md5, coefs = RUM[[sc$spec$rum]]),
@@ -1521,9 +1724,14 @@ simTask <- function(ctx, type, rep){
 #CAL_PAR for this call (and the cached network when its legs' strength differs).
 #`corr` overrides entries of CORR (the corrected engine: reach, alpha, straight...) for
 #this and later calls in the same process.
-simMemory <- function(ctx, type, rep, par = NULL, corr = NULL){
+#`duration` sets the outing-duration factor (VFT_VAL_DURATION, outing scope; NA = none)
+#for this and later calls in the same process. With VFT_VAL_OUTLOG=1 the result also
+#carries the outing log.
+simMemory <- function(ctx, type, rep, par = NULL, corr = NULL, duration = NULL){
   if(!is.null(par)){ p <- CAL_DEFAULT; p[names(par)] <- par; CAL_PAR <<- p }
   if(!is.null(corr)) CORR[names(corr)] <<- corr
+  if(!is.null(duration))
+    DURATION <<- if(is.na(duration)) NULL else list(factor = duration, scope = "outing")
   sc <- scenarioFor(ctx, type)
   r  <- simCore(sc, BASE_SEED + rep)
   if(r$cap$n != 1L) stop("the track capture fired ", r$cap$n, " times, expected once")
@@ -1532,7 +1740,8 @@ simMemory <- function(ctx, type, rep, par = NULL, corr = NULL){
   tr <- summariseTracks(r$cap$priorE, sc$ix)
   list(status = "done", ctx = ctx, type = type, rep = rep, secs = r$secs, nAgents = nrow(dp),
        nNoGoal = sum(dp$AOIGoal %in% "NO_GOAL" | dp$goalV %in% -1), nFallback = .corrStats$fallback,
-       goals = table(dp$AOIGoal), cells = tr$cells, counts = tr$counts, visits = tr$visits)
+       goals = table(dp$AOIGoal), cells = tr$cells, counts = tr$counts, visits = tr$visits,
+       outingLog = if(OUTLOG) outingLogOf(sc, r, dp) else NULL)
 }
 
 #The headline Pearson r of a set of replicates (simMemory() results or run files), as
@@ -2456,11 +2665,15 @@ checkInputs <- function(){
   for(ctx in CONTEXTS){
     cfg <- CTX[[ctx]]
     if(is.null(cfg)) stop("unknown context ", ctx)
-    need <- c(need, ns$vftData(cfg$perimeter), ns$vftData(cfg$residential),
+    need <- c(need, ctxFile(cfg$perimeter), ctxFile(cfg$residential),
               switch(cfg$survey, heatmap = PATHS$glattParkHeat, wigger = PATHS$wiggerLines,
                      filBleu = if(identical(FILBLEU_SOURCE, "full")) PATHS$filBleuAll else
-                       file.path(PATHS$filBleuDir, paste0("Copy_activity_", FILBLEU_LAYERS, ".shp"))))
+                       file.path(PATHS$filBleuDir, paste0("Copy_activity_", FILBLEU_LAYERS, ".shp")),
+                     none = character(0), stop(ctx, ": unknown survey kind ", cfg$survey)))
   }
+  noSurvey <- CONTEXTS[vapply(CONTEXTS, function(cx) identical(CTX[[cx]]$survey, "none"), TRUE)]
+  if(length(noSurvey) && any(c("compare", "figures") %in% STAGES))
+    stop("no survey to compare at ", paste(noSurvey, collapse = ", "), " - leave out the compare and figures stages")
   bad <- setdiff(TYPES_RUN, names(TYPES))
   if(length(bad)) stop("unknown type(s): ", paste(bad, collapse = ", "))
   miss <- need[!file.exists(need)]

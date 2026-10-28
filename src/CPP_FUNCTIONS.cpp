@@ -1841,6 +1841,118 @@ List findShortestRoute_cpp(SEXP adj_ptr,
 
 
 /*
+ * findReturnRoute:
+ * the way home of an agent whose time is up - findShortestRoute_cpp()'s search on
+ * a weighting that changes with place: an edge with both ends inside an area of
+ * interest (inAoi, indexed by node id like the adjacency lists) costs its strongly
+ * attractivity-weighted length ("_ATTR"), every other edge its slightly weighted
+ * one ("_attr"). The agent keeps to the attractive paths while it is still in the
+ * area and heads home more directly once out of it; one search, so the exit from
+ * the area is chosen on the same mixed costs.
+ *
+ * `distance` is the chosen path's length on the plain "distance" weights (the
+ * type's SHAPE_Leng), not its mixed cost: launchSim() turns it into walking time,
+ * as it does for the way there.
+ */
+// [[Rcpp::export]]
+List findReturnRoute_cpp(SEXP adj_ptr,
+                         std::vector<int> src_v,
+                         std::vector<int> goal_v,
+                         std::vector<std::string> agentTyps,
+                         LogicalVector inAoi){
+
+  XPtr<AdjLists> adjX(adj_ptr);
+  const AdjLists& adj = *adjX;
+  int V = adj.V;
+  const std::vector<std::vector<int>>& adjList_IDs = adj.ids;
+  if(inAoi.size() < V + 1) stop("findReturnRoute_cpp: inAoi needs one value per node id (V + 1)");
+
+  typedef std::pair<double, int> pqPair;
+  std::vector<double> dist_o = std::vector<double>(V+1, 100000000.0);
+  std::vector<int> pathSteps_o = std::vector<int>(V+1, 100000000);
+
+  std::vector<std::vector<int>> outputPath = std::vector<std::vector<int>>(src_v.size());
+  std::vector<double> outputDist = std::vector<double>(src_v.size());
+
+  //same source, goal and type: same route (see findShortestRoute_cpp)
+  std::map<std::tuple<int, int, int>, int> solvedBy;
+
+  for(int agentNo = 0; agentNo < src_v.size(); agentNo++){
+    int typeIdx = agentTypeIndex(agentTyps[agentNo]);
+    const std::vector<std::vector<double>>& wLen    = adj.w[0][typeIdx];
+    const std::vector<std::vector<double>>& wSlight = adj.w[1][typeIdx];
+    const std::vector<std::vector<double>>& wStrong = adj.w[2][typeIdx];
+
+    int src = src_v[agentNo];
+    int goal = goal_v[agentNo];
+
+    std::tuple<int, int, int> key = std::make_tuple(src, goal, typeIdx);
+    auto solved = solvedBy.find(key);
+    if(solved != solvedBy.end()){
+      outputPath[agentNo] = outputPath[solved->second];
+      outputDist[agentNo] = outputDist[solved->second];
+      continue;
+    }
+    solvedBy[key] = agentNo;
+
+    if(src == goal){
+      outputPath[agentNo] = std::vector<int>(1, goal);
+      outputDist[agentNo] = 0;
+      continue;
+    }
+
+    std::priority_queue<pqPair, std::vector<pqPair>, std::greater<pqPair>> pq;
+    std::vector<double> dist(dist_o);
+    std::vector<int> pathSteps(pathSteps_o);
+    //the plain length along the best path found so far to each node
+    std::vector<double> len(V+1, 0.0);
+
+    pq.push(std::make_pair(0.0, src));
+    dist[src] = 0.0;
+
+    while(!pq.empty()){
+      double sptd = pq.top().first;
+      int sptv = pq.top().second;
+      pq.pop();
+      if(sptd > dist[sptv]) continue;
+
+      if(sptv == goal){
+        std::vector<int> path;
+        int vrtx = goal;
+        while(vrtx != src){
+          if(vrtx != 100000000){
+            path.insert(path.begin(), vrtx);
+            vrtx = pathSteps[vrtx];
+          }else{
+            Rprintf("ERROR::: wrong nodeID retrieved (1000000)");
+            break;
+          }
+        }
+        outputPath[agentNo] = path;
+        outputDist[agentNo] = len[sptv];
+        break;
+      }
+
+      const std::vector<int>& adjVrts = adjList_IDs[sptv];
+      bool fromIn = inAoi[sptv];
+      for(int vrt = 0; vrt < adjVrts.size(); vrt++){
+        int adjv = adjVrts[vrt];
+        double adjd = (fromIn && inAoi[adjv]) ? wStrong[sptv][vrt] : wSlight[sptv][vrt];
+        if(dist[adjv] > dist[sptv] + adjd){
+          dist[adjv] = dist[sptv] + adjd;
+          len[adjv] = len[sptv] + wLen[sptv][vrt];
+          pathSteps[adjv] = sptv;
+          pq.push(std::make_pair(dist[adjv], adjv));
+        }
+      }
+    }
+  }
+
+  return List::create(Named("path") = outputPath, Named("distance") = outputDist);
+}
+
+
+/*
  * nodeDistances:
  * network distances from every source node to every target node, on one agent
  * type's weights - for phase 2 of a two-stage run (R/two_stage.R), where the

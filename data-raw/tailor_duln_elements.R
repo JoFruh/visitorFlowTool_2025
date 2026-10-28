@@ -177,9 +177,12 @@ stageExtract2 <- function(ctx){
   ea <- igraph::edge_attr(net)
   stopifnot(identical(ea$edgeID, ex$edgeID))
   cls <- pathClassOf(ea$OBJEKTART, ea$BELAGSART)
-  if(anyNA(cls)) stop(ctx, ": edges without a path class, OBJEKTART ", paste(unique(ea$OBJEKTART[is.na(cls)]), collapse = ", "))
+  #edges of OBJEKTART outside pathClassOf (Glatt has none; e.g. 22, 23 at Monte Bre and
+  #Dietschiberg) keep their area elements and get no path-class weight; logged below
+  unk <- is.na(cls)
   P <- sapply(c(PATH_CLASSES, PATH_REF), function(k) as.numeric(cls == k))
-  stopifnot(all(rowSums(P) == 1))
+  P[is.na(P)] <- 0
+  stopifnot(all(rowSums(P) == !unk))
   g <- edgeGeom2056(net)
   Xn <- terra::rast(layersFile(BOX_OF[[ctx]]))[[NEW_RASTER]]
   En <- as.matrix(exactextractr::exact_extract(Xn, sf::st_buffer(g, 0.5), "mean", progress = FALSE))
@@ -196,6 +199,8 @@ stageExtract2 <- function(ctx){
   km <- tapply(ea$SHAPE_Leng, cls, sum) / 1000
   logf("extract2 %s: %d edges, path classes (km) %s; cells reproduce today's extract; %.0f s", ctx, nrow(E2),
        paste(sprintf("%s %.0f", names(km), km), collapse = ", "), proc.time()[["elapsed"]] - t0)
+  if(any(unk)) logf("extract2 %s: %d edges without a path class, OBJEKTART %s, %.2f km", ctx, sum(unk),
+                    paste(sort(unique(ea$OBJEKTART[unk])), collapse = ", "), sum(ea$SHAPE_Leng[unk]) / 1000)
 }
 
 #### stage fit ####
