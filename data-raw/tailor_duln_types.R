@@ -579,8 +579,9 @@ stageVariantsTypes <- function(){
         for(k in TYPES7){
           #shared: the Nature walker layer becomes half the shared fit, and every type
           #takes that same change (the delta rule, as the earlier s0.5 variants);
-          #types: each type's own fitted layer, halved
-          wNew <- if(identical(sp$kind, "shared")) xlsxNew(k) + S_TY * tw$shared - xlsxNew("walkNat") else S_TY * tw$perType[[k]]
+          #types: each type's own fitted layer, halved (sp$s: another strength)
+          sTy <- if(is.null(sp$s)) S_TY else sp$s
+          wNew <- if(identical(sp$kind, "shared")) xlsxNew(k) + sTy * tw$shared - xlsxNew("walkNat") else sTy * tw$perType[[k]]
           #weights set by hand (sp$manual: type -> named weights), after the strength
           m <- sp$manual[[k]]
           if(length(m)){ stopifnot(all(names(m) %in% names(wNew))); wNew[names(m)] <- m }

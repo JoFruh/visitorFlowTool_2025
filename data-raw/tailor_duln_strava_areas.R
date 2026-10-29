@@ -38,10 +38,13 @@
 #   fit       per measure: the pooled fit; weights against S5E (Strava at Glatt), E2 (the
 #             survey), the OSM fit and the xlsx; CV; leave one area out; Glatt's Strava
 #             heat (peak) predicted out of sample
+#   signed    per measure: the same pool held to the expected signs (not by default; after fit)
 # The variants (stairs x3 for bikers) are built by data-raw/apply_duln_variant.R with
 # VFT_AV_SCRIPT=tailor_duln_strava_areas.R, VFT_AV_TD=<the OSM tailored folder> and
 #   SA5E_s0.5   VFT_AV_TYSUB=strava_areas/clean        (peak)
 #   SA5W_s0.5   VFT_AV_TYSUB=strava_areas/width/clean  (width)
+#   SA5Ec_s0.5  VFT_AV_TYSUB=strava_areas/clean/signed        (peak, held to the expected signs)
+#   SA5Wc_s0.5  VFT_AV_TYSUB=strava_areas/width/clean/signed  (width, held to the expected signs)
 #
 #   Rscript data-raw/tailor_duln_strava_areas.R
 #
@@ -90,19 +93,18 @@ edgeHeatWidth <- function(ea, ctx){
   bb <- sf::st_bbox(sf::st_transform(g, 4326))
   k <- 1 / cos(mean(bb[c("ymin", "ymax")]) * pi / 180)
   D <- SA_WIDTH_M * k; px <- terra::res(R)[1]
-  #the pixels with heat near the network (distance to the rasterised edges), then each
-  #one's nearest edge
-  dist <- terra::distance(terra::rasterize(terra::vect(g), R[[1]], touches = TRUE))
-  i <- which(terra::values(sum(R), mat = FALSE) > 0 & terra::values(dist, mat = FALSE) <= D + px)
+  #the pixels with heat, then each one's nearest edge: the nearest of the edges' vertices
+  #every half pixel (a k-d tree; off by at most a quarter pixel), kept within D
+  i <- which(terra::values(sum(R), mat = FALSE) > 0)
   H <- matrix(0, length(g), length(SPORTS), dimnames = list(NULL, SPORTS))
   if(!length(i)) return(H)
-  xy <- terra::xyFromCell(R, i)
-  pts <- sf::st_as_sf(as.data.frame(xy), coords = c("x", "y"), crs = 3857)
-  nn <- sf::st_nearest_feature(pts, g)
-  d <- as.numeric(sf::st_distance(pts, g[nn], by_element = TRUE))
-  ok <- d <= D
+  vx <- sf::st_coordinates(sf::st_segmentize(g, px / 2))
+  kn <- FNN::get.knnx(vx[, c("X", "Y")], terra::xyFromCell(R, i), k = 1)
+  ok <- kn$nn.dist[, 1] <= D
+  #the feature index: L1 for lines, L2 for multilines
+  nn <- vx[kn$nn.index[ok, 1], if("L2" %in% colnames(vx)) "L2" else "L1"]
   v <- as.matrix(terra::extract(R, i[ok]))
-  S <- rowsum(v, nn[ok])
+  S <- rowsum(v, nn)
   H[as.integer(rownames(S)), ] <- S * (px / k)^2
   H / pmax(ea$SHAPE_Leng, 1)
 }
@@ -299,11 +301,73 @@ fitMeasure <- function(measure){
 }
 stageFitAreas <- function() invisible(lapply(stats::setNames(SA_MEASURES, SA_MEASURES), fitMeasure))
 
+#the same pool held to tailor_duln_elements.R's expected signs (SIGN_POS >= 0, SIGN_NEG
+#<= 0; the shared weights and each group's shared + difference) - the user, 2026-10-27:
+#unconstrained, the roads' use pulled road6 to +16 and lakeBand, forestEdge negative.
+#<SA_FIT_DIR>/signed (SA5Ec_s0.5, SA5Wc_s0.5); against the free fit: weights, CV and
+#Glatt's Strava heat out of sample. No leave-one-area-out (the free fit's took 25 min).
+fitMeasureSigned <- function(measure){
+  d <- file.path(SA_FIT_DIR[[measure]], "signed")
+  fp <- function(...) file.path(d, ...)
+  dir.create(d, recursive = TRUE, showWarnings = FALSE)
+  free <- readRDS(file.path(SA_FIT_DIR[[measure]], "fit_types.rds"))$all
+  fd <- fp("fit_types.rds")
+  if(file.exists(fd)) res <- readRDS(fd) else {
+    pl <- saPool(measure)
+    all <- fitTypes(pl$ex, pl$sty, pl$nr, sprintf("Strava groups (%s), %d OSM areas, signed", measure, length(SA_AREAS)),
+                    types = STRAVA5, target = "ranks", bounds = list(pos = SIGN_POS, neg = SIGN_NEG))
+    all$actOf <- ST_OF; all$sameAs <- ST_SAME
+    res <- list(all = all, noGP = all, nrMaps = pl$nr, areas = SA_AREAS, scope = pl$scope, measure = measure)
+    saveRDS(res, fd)
+    file.copy(file.path(TD, "types", "survey_types.csv"), fp("survey_types.csv"), overwrite = TRUE)
+  }
+  sgn <- res$all
+  exG <- readRDS(extractFile("glatt"))
+  els <- ELEMENTS_NEW()
+  tw <- typeWeights(free, exG); tws <- typeWeights(sgn, exG)
+  vs <- data.frame(element = els, expected = ifelse(els %in% SIGN_POS, "+", ifelse(els %in% SIGN_NEG, "-", "")),
+                   free_shared = unname(tw$shared[els]), signed_shared = unname(tws$shared[els]), identified = els %in% sgn$ident)
+  for(k in STRAVA5){
+    vs[[paste0("free_", k)]] <- unname(tw$perType[[ACT_COL[[k]]]][els])
+    vs[[paste0("signed_", k)]] <- unname(tws$perType[[ACT_COL[[k]]]][els])
+  }
+  utils::write.csv(vs, fp("strava_areas_signed_weights.csv"), row.names = FALSE)
+  id <- vs$identified
+  logf("fit %s signed: weights, free vs signed (r %.3f shared; per group %s); the bounded elements (DULN units at strength 1):", measure,
+       stats::cor(vs$free_shared[id], vs$signed_shared[id]),
+       paste(sprintf("%s %.3f", STRAVA5, vapply(STRAVA5, function(k) stats::cor(vs[[paste0("free_", k)]][id], vs[[paste0("signed_", k)]][id]), 1)),
+             collapse = ", "))
+  print(vs[nzchar(vs$expected), c("element", "expected", "free_shared", "signed_shared", paste0("signed_", STRAVA5))], digits = 2, row.names = FALSE)
+  cvt <- rbind(data.frame(group = "shared", cvFree = min(free$cvShared), cvSigned = sgn$cvSharedBox, cvNone = free$cvNone),
+               do.call(rbind, lapply(STRAVA5, function(k)
+                 data.frame(group = k, cvFree = free$dev[[k]]$cv, cvSigned = sgn$dev[[k]]$cvBox, cvNone = free$dev[[k]]$cv0))))
+  utils::write.csv(cvt, fp("strava_areas_signed_cv.csv"), row.names = FALSE)
+  logf("fit %s signed: cross-validated MSE, free vs signed (groups: cvNone = at the free shared weights):", measure)
+  print(cvt, digits = 4, row.names = FALSE)
+  if(file.exists(SA_GLATT)){
+    seG <- readRDS(SA_GLATT)
+    if(length(seG$Hc[[1]]) >= max(exG$cells) && !anyNA(seG$Hc[[1]][exG$cells])){
+      tgG <- groupTarget(seG, exG$cells)
+      zs <- function(w){ w[is.na(w)] <- 0; drop(exG$X[, names(w), drop = FALSE] %*% w) }
+      gs <- do.call(rbind, lapply(STRAVA5, function(k) data.frame(group = k,
+        free = stats::cor(zs(tw$perType[[ACT_COL[[k]]]][els]), tgG[, k], method = "spearman"),
+        signed = stats::cor(zs(tws$perType[[ACT_COL[[k]]]][els]), tgG[, k], method = "spearman"))))
+      utils::write.csv(gs, fp("strava_areas_signed_glatt_out_of_sample.csv"), row.names = FALSE)
+      logf("fit %s signed: Glatt's Strava heat out of sample, Spearman of X w per group:", measure)
+      print(gs, digits = 3, row.names = FALSE)
+    }
+  }
+  invisible(res)
+}
+stageFitSigned <- function() invisible(lapply(stats::setNames(SA_MEASURES, SA_MEASURES), fitMeasureSigned))
+
 #### the variants (built by data-raw/apply_duln_variant.R; `heat` only tells them apart) ####
 
 TY_VARIANTS <- list(
   SA5E_s0.5 = list(kind = "types", typeArea = FALSE, manual = BIKE_STAIRS, postNet = stairsPostNet, heat = "peak"),
-  SA5W_s0.5 = list(kind = "types", typeArea = FALSE, manual = BIKE_STAIRS, postNet = stairsPostNet, heat = "width"))
+  SA5W_s0.5 = list(kind = "types", typeArea = FALSE, manual = BIKE_STAIRS, postNet = stairsPostNet, heat = "width"),
+  SA5Ec_s0.5 = list(kind = "types", typeArea = FALSE, fit = "signed", manual = BIKE_STAIRS, postNet = stairsPostNet, heat = "peak"),
+  SA5Wc_s0.5 = list(kind = "types", typeArea = FALSE, fit = "signed", manual = BIKE_STAIRS, postNet = stairsPostNet, heat = "width"))
 
 #### run ####
 
@@ -315,5 +379,6 @@ if(!IS_SA_WORKER && !identical(SA_STAGES, "none")){
   if("check" %in% SA_STAGES) for(ctx in SA_AREAS) inVal(stageCheck(ctx))
   if("extract" %in% SA_STAGES) stageExtractAreas()
   if("fit" %in% SA_STAGES) stageFitAreas()
+  if("signed" %in% SA_STAGES) stageFitSigned()
   logf("tailor_duln_strava_areas: done in %.1f min, output in %s", (proc.time()[["elapsed"]] - t00) / 60, SA)
 }

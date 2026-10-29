@@ -277,7 +277,11 @@ TY_VARIANTS <- list(
                     postNet = stairsPostNet),
   E2c_A4_s0.5 = list(kind = "types", typeArea = FALSE, fit = "signed",
                      manual = list(bikeSport = c(stairs = -10), ebikeNat = c(stairs = -10)),
-                     postNet = stairsPostNet))
+                     postNet = stairsPostNet),
+  #the same at full strength: the fitted map's spread on Glatt's edges = today's (2026-10-28)
+  E2c_A4_s1 = list(kind = "types", typeArea = FALSE, fit = "signed", s = 1,
+                   manual = list(bikeSport = c(stairs = -10), ebikeNat = c(stairs = -10)),
+                   postNet = stairsPostNet))
 
 #### run ####
 

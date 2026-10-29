@@ -401,6 +401,21 @@ if(nzchar(EXTRA_CTX_FILE)){
   CTX <- c(CTX, .x)
   rm(.x)
 }
+#VFT_VAL_SCALES_M: the views' cell sizes in metres instead (e.g. 100,200,300,400,500), each
+#context keeping those that are whole multiples of its survey grid (GlattPark's 500 m: only
+#500), and always its published scale
+local({
+  m <- envList("VFT_VAL_SCALES_M", character(0))
+  if(!length(m)) return(invisible(NULL))
+  m <- as.numeric(m)
+  if(anyNA(m) || any(m <= 0)) stop("VFT_VAL_SCALES_M must be positive cell sizes in metres")
+  gridM <- c(glattPark = 500, wigger = 100, glatt = 100)
+  for(cx in names(CTX)){
+    g <- if(cx %in% names(gridM)) gridM[[cx]] else 100
+    f <- m[abs(m / g - round(m / g)) < 1e-9] / g
+    CTX[[cx]]$scales <<- sort(unique(c(round(f), CTX[[cx]]$oldScale)))
+  }
+})
 #a data-directory path, or an absolute one (the extra contexts' perimeters)
 ctxFile <- function(p) if(grepl("^([A-Za-z]:)?[/\\\\]", p)) p else ns$vftData(p)
 
@@ -452,6 +467,10 @@ TYPES <- list(
                       rum = "types"),
   nearbyRumG   = list(label = "Nearby RUM-G",     aoiChoice = "distance", routing = "length", movement = "engine", parking = FALSE,
                       rum = "distance"),
+  #...and Full with the pair re-fitted on the GlattPark survey against the folder's own
+  #areas and DULN (data-raw/calibrate_aoi_glattpark.R; VFT_VAL_RUM = its coefs.rds)
+  fullRumGP    = list(label = "Full GlattPark refit", aoiChoice = "engine", routing = "engine", movement = "engine", parking = TRUE,
+                      rum = "pooled"),
   #the area choice whose attractivity / proximity trade-off moves with the time in the
   #area (data-raw/calibrate_aoi_rum_time.R; VFT_VAL_RUM_TIME, corrected engine only):
   #the interaction model, the smallest fix (the way there as a share of the time), and
@@ -462,7 +481,18 @@ TYPES <- list(
   fullRumShare = list(label = "Full RUM-time share", aoiChoice = "engine", routing = "engine", movement = "engine", parking = TRUE,
                       rumTime = "share"),
   fullRumFixed = list(label = "Full RUM-fixed",      aoiChoice = "engine", routing = "engine", movement = "engine", parking = TRUE,
-                      rumTime = "fixed")
+                      rumTime = "fixed"),
+  #the user's one-exponent rule (2026-10-27): attractivity and size weights times
+  #s = (T / 60)^gamma, the travel time divided by it; the file's consts carry gamma
+  fullRumGamma = list(label = "Full RUM-gamma",      aoiChoice = "engine", routing = "engine", movement = "engine", parking = TRUE,
+                      rumTime = "gamma"),
+  #the two-stage simulation under RUM-time (2026-10-28): three times as many explorers
+  #choose their areas by RUM-time, then phase 2 chooses a walk of its type and duration
+  #class by RUM-time's utility on the walk (choosePathsRumTime() in
+  #data-raw/engine_corrections.R). Takes the site durations, type mix and outing rule.
+  twoStageRumTime = list(label = "Two-stage RUM-time x3", aoiChoice = "engine", routing = "engine", movement = "engine",
+                         parking = TRUE, twoStage = TRUE, rumTime = "interaction",
+                         twoStageParams = list(explorers = 3))
 )
 CONTRASTS <- list(c("full", "nearby"), c("nearby", "nearbyRandom"),
                   c("nearbyRandom", "random"), c("full", "random"),
@@ -488,7 +518,11 @@ CONTRASTS <- list(c("full", "nearby"), c("nearby", "nearbyRandom"),
                   c("fullRumTime", "nearby"), c("fullRumTime", "nearbyRandom"),
                   c("fullRumShare", "nearby"), c("fullRumShare", "nearbyRandom"),
                   c("fullRumFixed", "full"), c("fullRumTime", "fullRumFixed"), c("fullRumShare", "fullRumFixed"),
-                  c("fullRumFixed", "nearby"), c("fullRumFixed", "nearbyRandom"))
+                  c("fullRumFixed", "nearby"), c("fullRumFixed", "nearbyRandom"),
+                  c("fullRumGP", "full"), c("fullRumGP", "nearby"), c("fullRumGP", "nearbyRandom"),
+                  c("fullRumGP", "fullRandom"),
+                  c("fullRumGamma", "full"), c("fullRumGamma", "nearby"), c("fullRumGamma", "nearbyRandom"),
+                  c("fullRumGamma", "fullRandom"), c("fullRumGamma", "fullRumGP"), c("fullRumGamma", "fullRumTime"))
 #Compare-only aliases: another setting's runs of a type (e.g. route alpha 0.5) copied
 #under <type><suffix> into a folder that holds the type's runs at the first setting, so
 #the paired bootstrap gives the difference between settings on the same seeds. Never
@@ -505,8 +539,8 @@ CONTRASTS <- list(c("full", "nearby"), c("nearby", "nearbyRandom"),
 #today's xlsx DULN on the same areas; O3E / OSE / O3EC the DULN fitted to OSM public GPS
 #traces over new Swiss areas, per group / shared / per group signed
 #(data-raw/tailor_duln_osm.R); SA5E / SA5W the Strava fit per group over those areas
-#instead of Glatt, on the peak heat next to a path / the heat summed across its width
-#(data-raw/tailor_duln_strava_areas.R).
+#instead of Glatt, on the peak heat next to a path / the heat summed across its width,
+#SA5EC / SA5WC the same held to the expected signs (data-raw/tailor_duln_strava_areas.R).
 ALIAS_SETTINGS <- c(A05 = "a0.5", A5 = "a5", A10 = "a10", D125 = "time x1.25", D150 = "time x1.5",
                     W125 = "walk x1.25", W150 = "walk x1.5", IA = "old outing", WE = "whole eng.dur",
                     L2 = "lakes x2", L3 = "lakes x3", ACT = "4 activities", ST3 = "stairs x3",
@@ -515,7 +549,8 @@ ALIAS_SETTINGS <- c(A05 = "a0.5", A5 = "a5", A10 = "a10", D125 = "time x1.25", D
                     SSE = "Strava shared, clean", S5EC = "Strava per group, clean signed",
                     ND = "engine durations", O3E = "OSM per group", OSE = "OSM shared",
                     O3EC = "OSM per group signed", SA5E = "Strava per group, OSM areas",
-                    SA5W = "Strava per group, OSM areas, width")
+                    SA5W = "Strava per group, OSM areas, width", SA5EC = "Strava per group, OSM areas, signed",
+                    SA5WC = "Strava per group, OSM areas, width, signed")
 for(sfx in names(ALIAS_SETTINGS)){
   for(t in c("full", "nearby", "nearbyRandom", "random"))
     TYPES[[paste0(t, sfx)]] <- utils::modifyList(TYPES[[t]], list(label = paste(TYPES[[t]]$label, ALIAS_SETTINGS[[sfx]])))
@@ -536,7 +571,9 @@ CONTRASTS <- c(CONTRASTS, list(c("fullO3E", "fullXL"), c("fullOSE", "fullXL"), c
                                c("fullO3E", "fullOSE"), c("fullO3EC", "fullO3E")))
 #the Strava fit over the OSM areas against Strava at Glatt, the OSM traces and each other
 CONTRASTS <- c(CONTRASTS, list(c("fullSA5E", "full"), c("fullSA5E", "fullS5E"), c("fullSA5E", "fullO3E"),
-                               c("fullSA5W", "full"), c("fullSA5W", "fullS5E"), c("fullSA5W", "fullSA5E")))
+                               c("fullSA5W", "full"), c("fullSA5W", "fullS5E"), c("fullSA5W", "fullSA5E"),
+                               c("fullSA5EC", "fullSA5E"), c("fullSA5WC", "fullSA5W"), c("fullSA5EC", "full"),
+                               c("fullSA5WC", "full"), c("fullSA5EC", "fullS5E")))
 #the fitted area choices (fullRumFixed / fullRumTime) on the Strava routing (S5E, area
 #choice re-fitted on its area DULN), compare-only like the other aliases
 for(t in c("fullRumFixed", "fullRumTime"))
@@ -574,6 +611,37 @@ for(t in c("fullRumFixed", "fullRumTime")) for(sfx in c("O3E", "OSE"))
 CONTRASTS <- c(CONTRASTS, list(c("fullRumTimeO3E", "fullRumTime"), c("fullRumTimeOSE", "fullRumTime"),
                                c("fullRumTimeO3E", "fullRumTimeOSE"), c("fullRumTimeO3E", "fullO3E"),
                                c("fullRumTimeOSE", "fullOSE")))
+#DULN x area choice (2026-10-27): RUM-time re-fitted on SA5Ec's areas (fullRumTimeSA5EC), the
+#one-gamma rule on today's DULN (fullRumGammaTD), against RUM-time on today's DULN
+#(fullRumTime) and gamma / Full on SA5Ec (fullRumGamma / full), compare-only
+TYPES[["fullRumTimeSA5EC"]] <- utils::modifyList(TYPES$fullRumTime,
+  list(label = paste(TYPES$fullRumTime$label, ALIAS_SETTINGS[["SA5EC"]])))
+TYPES[["fullRumGammaTD"]] <- utils::modifyList(TYPES$fullRumGamma, list(label = paste(TYPES$fullRumGamma$label, "today's DULN")))
+CONTRASTS <- c(CONTRASTS, list(c("fullRumTimeSA5EC", "fullRumTime"), c("fullRumTimeSA5EC", "fullRumGamma"),
+                               c("fullRumTimeSA5EC", "full"), c("fullRumGammaTD", "fullRumTime"),
+                               c("fullRumGammaTD", "fullRumGamma"), c("fullRumGammaTD", "fullRumTimeSA5EC")))
+#...and RUM-time on the Glatt Strava DULN (S5E) against the one fitted away from Glatt (2026-10-28)
+CONTRASTS <- c(CONTRASTS, list(c("fullRumTimeS5E", "fullRumTimeSA5EC")))
+#RUM-time and the two-stage RUM-time on the signed survey DULN (E2c, area choice re-fitted
+#on its areas; 2026-10-28), against RUM-time on today's DULN, compare-only
+for(t in c("fullRumTime", "twoStageRumTime"))
+  TYPES[[paste0(t, "E2C")]] <- utils::modifyList(TYPES[[t]], list(label = paste(TYPES[[t]]$label, ALIAS_SETTINGS[["E2C"]])))
+CONTRASTS <- c(CONTRASTS, list(c("fullRumTimeE2C", "fullRumTime"), c("twoStageRumTimeE2C", "fullRumTimeE2C"),
+                               c("twoStageRumTimeE2C", "fullRumTime"), c("fullRumTimeE2C", "nearbyRandom"),
+                               c("twoStageRumTimeE2C", "nearbyRandom"), c("twoStageRumTime", "fullRumTime")))
+#...and E2c at strength 1 instead of 0.5 (E2C1; area choice re-fitted on its areas)
+TYPES[["fullRumTimeE2C1"]] <- utils::modifyList(TYPES$fullRumTime,
+  list(label = paste(TYPES$fullRumTime$label, ALIAS_SETTINGS[["E2C"]], "s1")))
+CONTRASTS <- c(CONTRASTS, list(c("fullRumTimeE2C1", "fullRumTimeE2C"), c("fullRumTimeE2C1", "fullRumTime"),
+                               c("fullRumTimeE2C1", "nearbyRandom")))
+#...and E2c / E2 fitted on the cells of the step-3 areas at threshold 8 (no cut) instead of
+#the app-save 3.1 areas, the same offset (2026-10-29): signed (E2CT8) and unconstrained (E2T8)
+TYPES[["fullRumTimeE2CT8"]] <- utils::modifyList(TYPES$fullRumTime, list(label = "Full (E2c)"))
+TYPES[["fullRumTimeE2T8"]]  <- utils::modifyList(TYPES$fullRumTime, list(label = "Full (E2c unconstrained)"))
+CONTRASTS <- c(CONTRASTS, list(c("fullRumTimeE2CT8", "fullRumTimeE2T8"), c("fullRumTimeE2CT8", "fullRumTimeE2C"),
+                               c("fullRumTimeE2CT8", "nearby"), c("fullRumTimeE2CT8", "nearbyRandom"),
+                               c("fullRumTimeE2CT8", "fullRandom"), c("fullRumTimeE2T8", "fullRumTimeE2C"),
+                               c("fullRumTimeE2T8", "nearbyRandom")))
 #the baseline performance is standardised against: (r - r_base) / (1 - r_base)
 BASELINE <- "fullRandom"
 
@@ -1347,8 +1415,10 @@ simCore <- function(sc, seed, capture = TRUE){
   if(!is.null(DURATION) || !is.null(DURSRC)){
     if(identical(DURATION$scope, "walk") && (isTRUE(sc$spec$twoStage) || !identical(ENGINE_MODE, "corrected")))
       stop("VFT_VAL_DURSCOPE=walk needs the corrected engine and a single-stage type")
-    if(!is.null(DURSRC) && (isTRUE(sc$spec$twoStage) || !identical(ENGINE_MODE, "corrected")))
-      stop("VFT_VAL_DURSRC needs the corrected engine and a single-stage type")
+    #(the two-stage RUM-time matches walks by duration class, so it takes them too:
+    #both phases draw their durations through this hook)
+    if(!is.null(DURSRC) && ((isTRUE(sc$spec$twoStage) && is.null(sc$spec$rumTime)) || !identical(ENGINE_MODE, "corrected")))
+      stop("VFT_VAL_DURSRC needs the corrected engine and a single-stage or RUM-time two-stage type")
     dfac <- if(is.null(DURATION)) 1 else DURATION$factor
     nsSet("vftAgentTimeAndSpeed", function(dayPop){
       dp <- ORIG$vftAgentTimeAndSpeed(dayPop)
@@ -1375,8 +1445,10 @@ simCore <- function(sc, seed, capture = TRUE){
   #first call that finds it grown is the timer at which the agent set off home
   #(timeNotAccounted grows by the way home in that timestep's "shortest" branch).
   if(!identical(OUTING, "area") || OUTLOG){
-    if(!identical(OUTING, "area") && isTRUE(sc$spec$twoStage))
-      stop("VFT_VAL_OUTING=", OUTING, " is for single-stage types only")
+    #(a RUM-time two-stage run: the rule governs its explorers; phase 2 walks a recorded
+    #walk whole and goes home)
+    if(!identical(OUTING, "area") && isTRUE(sc$spec$twoStage) && is.null(sc$spec$rumTime))
+      stop("VFT_VAL_OUTING=", OUTING, " is for single-stage and RUM-time two-stage types only")
     rule <- switch(OUTING,
                    area  = ORIG$vftTimeOver,
                    whole = function(timeExt, timeNotAccounted, timer) timeExt <= timer + timeNotAccounted,
@@ -1536,6 +1608,14 @@ simCore <- function(sc, seed, capture = TRUE){
       .valCache$sc$lenPtr <- sc$lenPtr
       nsSet("vftChoosePaths", function(agents, lib, adjPtr, params, attrWeight = 1){
         rnd$corrPaths <- TRUE
+        #...under RUM-time, RUM-time's utility on the walks, by duration class
+        if(!is.null(sc$spec$rumTime)){
+          if(attrWeight != 1) stop("the RUM-time walk choice has no heatwave weight")
+          rnd$rumPaths <- TRUE
+          return(choosePathsRumTime(agents, lib, params, lenPtr = sc$lenPtr, b = rumTimeCoefs(sc$spec),
+                                    consts = RUM_TIME$consts, reach = CORR$reach, floorH = CORR$floorH,
+                                    fallbackCap = CORR$fallbackCap))
+        }
         choosePathsCorr(agents, lib, adjPtr, params, attrWeight, lenPtr = sc$lenPtr,
                         reach = CORR$reach, floorH = CORR$floorH, fallbackCap = CORR$fallbackCap)
       })
@@ -1619,10 +1699,14 @@ settingOf <- function(x) paste0(
 #home - a dead-end agent's "nicestShortest" is not timed into timeNotAccounted),
 #end = when it got home (the timestep it arrived, / 3). inArea = turnAt - approach,
 #back = end - turnAt.
+#A two-stage run's agents are phase 2's, which has no clock (the clock above is the
+#explorers'): their minutes are the metres walked at the type's speed, inArea the
+#recorded walk, end the whole outing; approach, firstOver, turnAt and back are NA.
 outingLogOf <- function(sc, r, dp){
   rn <- r$rnd
   n  <- nrow(dp)
-  if(length(rn$approach) != n || length(r$cap$wayE) != n) stop("the outing log's agents do not line up")
+  two <- isTRUE(sc$spec$twoStage)
+  if((!two && length(rn$approach) != n) || length(r$cap$wayE) != n) stop("the outing log's agents do not line up")
   ids <- igraph::edge_attr(sc$net, "edgeID")
   len <- numeric(max(ids)); len[ids] <- igraph::edge_attr(sc$net, "SHAPE_Leng")
   metres <- function(E) vapply(E, function(e){
@@ -1630,6 +1714,18 @@ outingLogOf <- function(sc, r, dp){
     sum(len[e])
   }, 1)
   startRes <- sc$residents[match(dp$startV, sc$nodeID)]
+  if(two){
+    wayM <- metres(r$cap$wayE); inM <- metres(r$cap$inE)
+    perMin <- dp$speed * 1000 / 60
+    noGoal <- dp$AOIGoal %in% "NO_GOAL" | dp$goalV %in% -1
+    return(data.frame(agentTyp = dp$agentTyp, speed = dp$speed, timeExt = dp$timeExt,
+                      approach = NA_real_, firstOver = NA_real_, turnAt = NA_real_,
+                      end = ifelse(noGoal, NA_real_, (wayM + inM) / perMin), tnaEnd = NA_real_,
+                      wayM = wayM, inM = inM, noGoal = noGoal,
+                      parkStart = !(startRes > 0) | is.na(startRes), unfinished = FALSE,
+                      inArea = ifelse(noGoal, NA_real_, inM / perMin), back = NA_real_,
+                      stringsAsFactors = FALSE))
+  }
   log <- data.frame(agentTyp = dp$agentTyp, speed = dp$speed, timeExt = dp$timeExt,
                     approach = rn$approach, firstOver = rn$firstOver, turnAt = rn$turnAt,
                     end = dp$moving / 3, tnaEnd = dp$timeNotAccounted,
@@ -1665,6 +1761,8 @@ simTask <- function(ctx, type, rep){
       stop("the corrected walk never fired")
     if(isTRUE(sc$spec$twoStage) && !isTRUE(r$rnd$corrPaths))
       stop("the corrected walk choice of the two-stage run never fired")
+    if(isTRUE(sc$spec$twoStage) && !is.null(sc$spec$rumTime) && !isTRUE(r$rnd$rumPaths))
+      stop("the RUM-time walk choice of the two-stage run never fired")
   }
   if(isTRUE(sc$spec$twoStage) && is.null(r$out$results$twoStage))
     stop("the two-stage run returned no two-stage summary")
@@ -2220,7 +2318,9 @@ compareContext <- function(ctx){
       key <- strsplit(nm, "|", fixed = TRUE)
       data.frame(context = ctx, type = TYPES[[t]]$label, view = vapply(key, `[`, "", 1),
                  method = vapply(key, `[`, "", 2), rho_survey = rhoS, rho_sim = rhoSim,
-                 r_max = sqrt(pmax(rhoS, 0) * pmax(rhoSim, 0)), row.names = NULL)
+                 r_max = sqrt(pmax(rhoS, 0) * pmax(rhoSim, 0)),
+                 #a perfect, noise-free simulation's r with this survey (the figures' ceiling)
+                 r_ceiling = sqrt(pmax(rhoS, 0)), row.names = NULL)
     }))
   }
 
@@ -2306,15 +2406,16 @@ compareContext <- function(ctx){
         paste0("std_", c("point", "boot_mean", "boot_sd", "ci_lo", "ci_hi"))
       out$r          <- unname(M[[t]][1, rk])
       out$r_baseline <- unname(R0[1, ])
-      #the noise ceiling (r_max: its point estimate) on the same scale - a reference
-      #line in the figures, the scale itself stays capped at 1
+      #the noise ceiling (r_max: its point estimate) on the same scale, and a perfect
+      #simulation's (r_ceiling, the figures' reference line); the scale itself stays capped at 1
       if(!is.null(ceiling)){
         cm <- ceiling[ceiling$type == TYPES[[t]]$label, ]
-        rmax <- vapply(rk, function(k){
-          kp <- keyParts(k); x <- cm$r_max[cm$view == kp$view & cm$method == kp$method]
+        at <- function(col) vapply(rk, function(k){
+          kp <- keyParts(k); x <- cm[[col]][cm$view == kp$view & cm$method == kp$method]
           if(length(x)) x else NA_real_ }, 1)
-        out$r_max       <- rmax
-        out$std_ceiling <- (rmax - out$r_baseline) / (1 - out$r_baseline)
+        out$r_max       <- at("r_max")
+        out$r_ceiling   <- at("r_ceiling")
+        out$std_ceiling <- (out$r_ceiling - out$r_baseline) / (1 - out$r_baseline)
       }
       out
     }))))
@@ -2446,7 +2547,19 @@ stageFigures <- function(){
   suppressPackageStartupMessages(library(ggplot2))
   fig <- function(name) outPath("figures", name)
   typeLevels <- vapply(TYPES, `[[`, "", "label")
-  shown <- c("Full", "Nearby", "Nearby-Random")
+  #the types the figures show (VFT_VAL_FIG_TYPES): a pair folder holds aliases, not "full"
+  figTypes <- envList("VFT_VAL_FIG_TYPES", c("full", "nearby", "nearbyRandom"))
+  if(length(bad <- setdiff(figTypes, names(TYPES)))) stop("VFT_VAL_FIG_TYPES: unknown type(s) ", paste(bad, collapse = ", "))
+  shown <- unname(vapply(figTypes, function(t) TYPES[[t]]$label, ""))
+  #a perfect, noise-free simulation's r with the survey (sqrt of its split-half reliability,
+  #the same for every type) and the survey's half vs half r, per context and view (Pearson)
+  surveyLines <- function(cx){
+    ce <- res[[cx]]$ceiling
+    if(is.null(ce) || !nrow(ce)) return(NULL)
+    ce <- ce[ce$method == "pearson" & !duplicated(ce$view), c("view", "rho_survey")]
+    rho <- pmax(ce$rho_survey, 0)
+    data.frame(context = cx, view = ce$view, r_ceiling = sqrt(rho), r_half = rho / (2 - rho))
+  }
 
   theme_simMaps <- theme(legend.position = "none", axis.text = element_blank(),
                          panel.background = element_rect(fill = "lightgrey"),
@@ -2455,6 +2568,13 @@ stageFigures <- function(){
   mapRaster <- function(m, vals){
     r <- terra::rast(gridFrom(m$grid)); v <- rep(NA_real_, terra::ncell(r)); v[m$idx] <- std01(vals)
     terra::values(r) <- v; names(r) <- "layer"; r
+  }
+  #a long type label wraps rather than running into the next panel; every title of a row
+  #gets the same number of lines, so the maps stay level
+  wrapTitles <- function(x){
+    w <- lapply(x, strwrap, width = 24)
+    n <- max(lengths(w))
+    vapply(w, function(l) paste(c(l, rep(" ", n - length(l))), collapse = "\n"), "")
   }
   mapPanel <- function(r, title){
     ggplot() + ggtitle(title) + tidyterra::geom_spatraster(data = r, aes(fill = layer)) +
@@ -2465,44 +2585,50 @@ stageFigures <- function(){
     legend.title = element_text(size = 10, margin = margin(0, 0, 10, 0)),
     legend.background = element_rect(fill = "transparent")))
 
-  #### Fig 5_6: Wigger and Glatt, survey + three types, 100 m ####
-  rowFor <- function(ctx, letters, label){
+  #### Fig 5_6: Wigger and Glatt, survey + the figure types, 100 m ####
+  #the panels drawn are lettered on from `from`, across both rows
+  rowFor <- function(ctx, from, label){
     m <- res[[ctx]]$maps
-    titles <- c(paste0(letters[1], ") Survey"), paste0(letters[2], ") Full sim."),
-                paste0(letters[3], ") Nearby sim."), paste0(letters[4], ") Nearby-Random sim."))
-    ps <- list(mapPanel(mapRaster(m, m$survey), titles[1]))
-    for(k in seq_along(c("full", "nearby", "nearbyRandom"))){
-      t <- c("full", "nearby", "nearbyRandom")[k]
-      if(!is.null(m$sim[[t]])) ps[[length(ps) + 1]] <- mapPanel(mapRaster(m, m$sim[[t]]), titles[k + 1])
-    }
+    ts <- figTypes[vapply(figTypes, function(t) !is.null(m$sim[[t]]), TRUE)]
+    lt <- letters[from - 1 + seq_len(length(ts) + 1)]
+    tt <- wrapTitles(c(paste0(lt[1], ") Survey"),
+                       if(length(ts)) paste0(lt[-1], ") ", vapply(ts, function(t) TYPES[[t]]$label, ""), " sim.")))
+    ps <- c(list(mapPanel(mapRaster(m, m$survey), tt[1])),
+            lapply(seq_along(ts), function(k) mapPanel(mapRaster(m, m$sim[[ts[k]]]), tt[k + 1])))
     leg <- legendOf(ps[[1]])
     ps  <- lapply(ps, function(p) p + theme_simMaps)
     #the region's name in its own strip above the row, so it never sits on a
     #panel title
-    gridExtra::arrangeGrob(grobs = c(ps, list(leg)), nrow = 1,
+    list(n = length(ps), grob = gridExtra::arrangeGrob(grobs = c(ps, list(leg)), nrow = 1,
                            widths = c(rep(1, length(ps)), 0.3),
                            top = grid::textGrob(label, x = 0.005, hjust = 0,
-                                                gp = grid::gpar(fontsize = 14)))
+                                                gp = grid::gpar(fontsize = 14))))
   }
-  rows <- list()
-  if(!is.null(res[["wigger"]])) rows$w <- rowFor("wigger", c("a", "b", "c", "d"), "Wigger region")
-  if(!is.null(res[["glatt"]]))  rows$g <- rowFor("glatt", c("e", "f", "g", "h"), "Glatt wider region")
+  rows <- list(); nxt <- 1; np <- 0
+  for(r in list(c("wigger", "Wigger region"), c("glatt", "Glatt wider region"))){
+    if(is.null(res[[r[1]]])) next
+    rw <- rowFor(r[1], nxt, r[2])
+    rows[[r[1]]] <- rw$grob; nxt <- nxt + rw$n; np <- max(np, rw$n)
+  }
   if(length(rows)){
     p <- gridExtra::arrangeGrob(grobs = rows, ncol = 1)
-    ggsave(fig("fig_5_6_wigger_glatt.png"), p, width = 20, height = 7 * length(rows),
+    #20 cm for the survey and three types, as before; wider for more
+    ggsave(fig("fig_5_6_wigger_glatt.png"), p, width = 20 * max(np + 0.3, 4.3) / 4.3, height = 7 * length(rows),
            units = "cm", dpi = 300, bg = "white")
   }
 
-  #### Fig 5: GlattPark, survey + Full + scatter ####
-  if(!is.null(res[["glattPark"]]) && !is.null(res[["glattPark"]]$maps$sim$full)){
+  #### Fig 5: GlattPark, survey + the first figure type + scatter ####
+  t1 <- figTypes[1]
+  if(!is.null(res[["glattPark"]]) && !is.null(res[["glattPark"]]$maps$sim[[t1]])){
     m   <- res[["glattPark"]]$maps
-    sim <- sqrt(m$sim$full)
+    sim <- sqrt(m$sim[[t1]])
     gS  <- mapPanel(mapRaster(m, m$survey), "a) Survey")
-    gM  <- mapPanel(mapRaster(m, sim), "b) Simulation")
+    gM  <- mapPanel(mapRaster(m, sim), paste0("b) Simulation (", TYPES[[t1]]$label, ")"))
     leg <- legendOf(gS)
     mt  <- res[["glattPark"]]$metrics
-    rAll <- mt$point[mt$type == "Full" & mt$view == "1_all" & mt$method == "pearson" & mt$test == "map"]
-    rNoC <- mt$point[mt$type == "Full" & mt$view == "1_nocentre" & mt$method == "pearson" & mt$test == "map"]
+    l1  <- TYPES[[t1]]$label
+    rAll <- mt$point[mt$type == l1 & mt$view == "1_all" & mt$method == "pearson" & mt$test == "map"]
+    rNoC <- mt$point[mt$type == l1 & mt$view == "1_nocentre" & mt$method == "pearson" & mt$test == "map"]
     d <- data.frame(survey = std01(m$survey), sim = std01(sim))
     gC <- ggplot(d, aes(survey, sim)) + geom_point(size = 0.6) +
       geom_smooth(method = "lm", formula = y ~ x, se = FALSE, colour = "red3") +
@@ -2526,13 +2652,17 @@ stageFigures <- function(){
       ps <- lapply(order3, function(cx){
         d <- perf[perf$context == cx & sel(perf) & perf$type %in% shown, ]
         if(!nrow(d) || all(is.na(d[[valueCols[1]]]))) return(NULL)
+        d$type <- factor(as.character(d$type), levels = shown)
         d$v <- d[[valueCols[1]]]; d$lo <- d[[valueCols[2]]]; d$hi <- d[[valueCols[3]]]
         p <- ggplot(d, aes(type, v)) + geom_col() +
           geom_errorbar(aes(ymin = lo, ymax = hi), width = 0.25) + theme_bw() +
           labs(x = NULL, y = ylab, title = sprintf("%s (%s m)", CTX[[cx]]$label, d$scale_m[1])) +
-          scale_x_discrete(labels = function(x) sub("-", "-\n", x, fixed = TRUE))
-        #the noise ceiling of Full (the types' ceilings differ only in the 4th decimal)
-        cl <- if("std_ceiling" %in% names(d)) d$std_ceiling[d$type == "Full"][1] else NA
+          theme(plot.title = element_text(size = 11), axis.text.x = element_text(size = 7)) +
+          scale_x_discrete(labels = function(x) vapply(x, function(s) paste(strwrap(s, 12), collapse = "\n"), ""))
+        #a perfect simulation's r, standardised like the bars
+        sl <- surveyLines(cx)
+        rc <- if(is.null(sl)) NA else sl$r_ceiling[sl$view == d$view[1]][1]
+        cl <- (rc - d$r_baseline[1]) / (1 - d$r_baseline[1])
         if(isTRUE(is.finite(cl)))
           p <- p + geom_hline(yintercept = cl, linetype = "dashed", colour = "grey50")
         p
@@ -2583,25 +2713,27 @@ stageFigures <- function(){
     ggsave(fig("fig_decomposition.png"), p, width = 20, height = 14, units = "cm", dpi = 300, bg = "white")
   }
 
-  #### r against scale, all cells vs path cells, with the noise ceiling ####
-  sc <- metrics[metrics$test == "map" & metrics$method == "pearson" & metrics$cellset %in% c("all", "path"), ]
+  #### r against scale, all cells, with a perfect simulation's r and the survey's half vs half ####
+  sc <- metrics[metrics$test == "map" & metrics$method == "pearson" & metrics$cellset %in% "all" &
+                  metrics$type %in% shown, ]
   if(nrow(sc)){
-    #the noise ceiling of Full at each view, placed by the view's own scale
-    ce <- rbindFill(lapply(res, `[[`, "ceiling"))
-    if(!is.null(ce) && nrow(ce)){
-      ce <- merge(ce[ce$type == "Full" & ce$method == "pearson", c("context", "view", "r_max")],
-                  unique(sc[, c("context", "view", "scale_m", "cellset")]), by = c("context", "view"))
-      ce$context <- ctxLabel(ce$context)
+    sl <- rbindFill(lapply(names(res), surveyLines))
+    if(!is.null(sl) && nrow(sl)){
+      sl <- merge(sl, unique(sc[, c("context", "view", "scale_m")]), by = c("context", "view"))
+      sl$context <- ctxLabel(sl$context)
     }
-    sc$type <- factor(sc$type, levels = typeLevels)
+    sc$type <- factor(as.character(sc$type), levels = shown)
     sc$context <- ctxLabel(sc$context)
-    p <- ggplot(sc, aes(scale_m, point, colour = type, linetype = cellset)) + geom_line() + geom_point() +
-      scale_x_log10() + facet_wrap(~ context) + theme_bw() +
-      labs(x = "Cell size (m)", y = "Pearson r (black: noise ceiling)", colour = NULL, linetype = "Cells")
-    if(!is.null(ce) && nrow(ce))
-      p <- p + geom_line(data = ce, aes(scale_m, r_max, linetype = cellset), colour = "black",
-                         inherit.aes = FALSE)
-    ggsave(fig("fig_scales.png"), p, width = 20, height = 9, units = "cm", dpi = 300, bg = "white")
+    p <- ggplot(sc, aes(scale_m, point, colour = type)) + geom_line() + geom_point() +
+      scale_x_log10(breaks = sort(unique(sc$scale_m))) + facet_wrap(~ context) + theme_bw() +
+      labs(x = "Cell size (m)", y = "Pearson r", colour = NULL,
+           caption = "Black: a perfect simulation's r (sqrt of the survey's split-half reliability); dashed: survey half vs half") +
+      theme(legend.position = "bottom", axis.text.x = element_text(angle = 45, hjust = 1)) +
+      guides(colour = guide_legend(nrow = 2))
+    if(!is.null(sl) && nrow(sl))
+      p <- p + geom_line(data = sl, aes(scale_m, r_ceiling), colour = "black", inherit.aes = FALSE) +
+        geom_line(data = sl, aes(scale_m, r_half), colour = "black", linetype = "dashed", inherit.aes = FALSE)
+    ggsave(fig("fig_scales.png"), p, width = 20, height = 11, units = "cm", dpi = 300, bg = "white")
   }
 
   #### replicate stability ####

@@ -146,14 +146,20 @@ trueAreaDistances <- function(ctx, net){
 #   t       real path time from the start to the area, in 10 minutes
 #   tShare  that time as a share of T
 #   x_tau   x * tau
+#   zDs, lnAs, ts   the user's one-exponent rule (2026-10-27): zD * s, lnA * s, t / s with
+#           s = (T / 60)^gamma, gamma = consts$gamma - more time, attractivity and size
+#           count more and proximity less, all by the same factor
 #U = X b over the columns b names (data-raw/calibrate_aoi_rum_time.R fits b).
 rumTimeX <- function(duln, areaM2, tMin, Tmin, consts, cols){
   tau <- log(Tmin / 60)
   zD  <- (duln - consts$dulnCenter) / consts$dulnScale
   lnA <- log(pmax(areaM2, 1) / 1e4)
   t   <- tMin / 10
+  s   <- (Tmin / 60)^(if(is.null(consts$gamma)) 0 else consts$gamma)
   all <- cbind(zD = zD, lnA = lnA, t = t, tShare = tMin / Tmin,
-               zD_tau = zD * tau, lnA_tau = lnA * tau, t_tau = t * tau)
+               zD_tau = zD * tau, lnA_tau = lnA * tau, t_tau = t * tau,
+               zDs = zD * s, lnAs = lnA * s, ts = t / s)
+  if(any(c("zDs", "lnAs", "ts") %in% cols) && is.null(consts$gamma)) stop("rumTimeX: the gamma model needs consts$gamma")
   all[, cols, drop = FALSE]
 }
 
@@ -260,6 +266,78 @@ choosePathsCorr <- function(agents, lib, adjPtr, params, attrWeight = 1, lenPtr,
           k    <- if(length(cand) == 1L) 1L else sample.int(length(cand), 1L)
           pick[i]     <- li[j[cand[k]]]
           distance[i] <- dw[cand[k]]
+          .corrStats$pathFallback <- .corrStats$pathFallback + 1L
+        }
+      }
+    }
+  }
+  list(pick = pick, fallback = fallback, distance = distance)
+}
+
+#The two-stage walk choice under RUM-time (type twoStageRumTime; the user, 2026-10-28):
+#phase 2's agents score a recorded walk as RUM-time scores an area, on the walk's own
+#attractivity and the time to its entrance, with no size term (phase 1's RUM-time
+#choice already set how often each area's walks are in the library):
+#   zD   the walk's mean edge DULN of its type (vftPathDULN(), the agent's type: the
+#        library is per type), minus the paths GDB offset, on RUM-time's fixed DULN
+#        scale (consts: the area DULN over Glatt's areas)
+#   t    the real path time from the start to the entrance, in 10 minutes
+#   tau  ln(T / 60) of the agent's duration
+#U = the coefficient file's b without its lnA terms (rumTimeX()); P ~ exp(U / alpha),
+#params$alpha = 1 the RUM's own scale. A walk is open to agents of its type whose
+#duration lies in the same class as its explorer's (WALK_DUR_CLASSES, the survey's A4
+#classes): survey durations are continuous, so the exact match of vftChoosePaths()
+#would leave one walk per agent. A type without walks in the agent's class takes the
+#nearest class that has some (fallback, ties to the shorter). The reach, floor and
+#capped fallback are choosePathsCorr()'s, on the real path length.
+WALK_DUR_CLASSES <- c(0, 30, 60, 120, 180, 240, Inf)
+choosePathsRumTime <- function(agents, lib, params, lenPtr, b, consts, reach = CORR$reach,
+                               floorH = CORR$floorH, fallbackCap = CORR$fallbackCap,
+                               fallbackH = FALLBACK_H){
+  n        <- nrow(agents)
+  pick     <- rep(NA_integer_, n)
+  fallback <- rep(FALSE, n)
+  distance <- rep(NA_real_, n)
+  b        <- b[!grepl("^lnA", names(b))]
+  Dall     <- lib$DULN - params$dulnOffset
+  clsOf    <- function(T) findInterval(T, WALK_DUR_CLASSES, left.open = TRUE)
+  libCls   <- clsOf(lib$timeExt)
+  for(typ in unique(agents$agentTyp)){
+    ai <- which(agents$agentTyp == typ)
+    li <- which(lib$agentTyp == typ & is.finite(lib$DULN))
+    if(!length(li)) next
+    entries <- unique(lib$entryV[li])
+    starts  <- unique(as.integer(agents$startV[ai]))
+    far <- max(pmax(max(reach, fallbackCap) * agents$timeExt[ai] / 60, floorH + fallbackH) *
+                 agents$speed[ai] * 1000)
+    Dr   <- ns$nodeDistances_cpp(lenPtr, "distance", typ, entries, starts, far)
+    eRow <- match(lib$entryV[li], entries)
+    have <- sort(unique(libCls[li]))
+    for(i in ai){
+      dur <- agents$timeExt[i]
+      own <- clsOf(dur)
+      cls <- if(own %in% have) own else have[which.min(abs(have - own))]
+      fallback[i] <- cls != own
+      j   <- which(libCls[li] == cls)
+      col <- match(as.integer(agents$startV[i]), starts)
+      sp  <- agents$speed[i]
+      dr  <- Dr[cbind(eRow[j], col)]
+      hR  <- dr / (1000 * sp)
+      ok  <- is.finite(hR) & hR <= max(reach * dur / 60, floorH)
+      if(any(ok)){
+        jj <- which(ok)
+        X  <- rumTimeX(Dall[li][j[jj]], 1, hR[jj] * 60, dur, consts, names(b))
+        U  <- drop(X %*% b)
+        k  <- if(length(jj) == 1L) 1L else sample.int(length(jj), 1L, prob = exp((U - max(U)) / params$alpha))
+        pick[i]     <- li[j[jj[k]]]
+        distance[i] <- dr[jj[k]]
+      }else{
+        okF <- is.finite(hR)
+        if(any(okF) && min(hR[okF]) <= fallbackCap * dur / 60){
+          cand <- which(okF & hR <= min(hR[okF]) + fallbackH)
+          k    <- if(length(cand) == 1L) 1L else sample.int(length(cand), 1L)
+          pick[i]     <- li[j[cand[k]]]
+          distance[i] <- dr[cand[k]]
           .corrStats$pathFallback <- .corrStats$pathFallback + 1L
         }
       }
