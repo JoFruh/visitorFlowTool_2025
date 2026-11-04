@@ -42,8 +42,9 @@ vftDbg("UI4")
                        i18n$t("Für die Erholungssimulation müssen wir alle möglichen Zielgebiete definieren, aus denen die simulierten Besucher wählen können.")),
                 vftSub(i18n$t("Bewegen Sie den Schieberegler, um den Umfang der Zielgebiete zu bestimmen. (Dies basiert auf einem 'Attraktivitätsmodell')"), " ",
                        i18n$t("Im nächsten Schritt haben Sie die Möglichkeit, Zielgebiete manuell zu korrigieren (hinzufügen/löschen/ausschneiden).")),
-                #the default is step3_server.R's vftSuggestAoIThreshold()
-                vftTip(i18n$t("Tipp: Der voreingestellte Schwellenwert ist unser Vorschlag (1/3 der Fläche sind Zielgebiete)."))),
+                #the default is VFT_AUTO_AOI_THRESHOLD (R/data_paths.R), the
+                #threshold the automatic route uses - see step3_server.R's obsSuggest
+                vftTip(i18n$t("Tipp: Der voreingestellte Schwellenwert (3.1) ist derselbe wie bei den automatischen Zielgebieten."))),
 
               shiny::fluidRow(
                 shiny::column(4),
@@ -60,7 +61,7 @@ vftDbg("UI4")
                            inputId =shiny::NS(id, "AOISlider"),
                            label = i18n$t("Zielgebiete Schwelle"),
                            choices = as.character(round(seq(from = 0, to = 20, by = 0.1), 1)),
-                           selected = 11))
+                           selected = as.character(VFT_AUTO_AOI_THRESHOLD)))
                 ),
                 shiny::column(4)
               ),

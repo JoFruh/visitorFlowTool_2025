@@ -37,7 +37,12 @@ step4_server <- function(id, minThresh, i18n, currentLang,
                          finalPolygons = shiny::reactive(NULL),
                          DULN = shiny::reactive(NULL),
                          DULN_all = shiny::reactive(NULL),
-                         shape = shiny::reactive(NULL)){
+                         shape = shiny::reactive(NULL),
+                         #list(key, polygons): the plain threshold areas the
+                         #automatic route (R/auto_aoi.R) generated before it cut
+                         #them. Seeds Reset on a first visit after that route -
+                         #see the confirmed-areas branch of .vftStep4Launch().
+                         autoAoI = shiny::reactive(NULL)){
 
   #count this instantiation. A module server should be created once per
   #session; this app re-calls it from an observeEvent on a trigger, so any
@@ -51,7 +56,8 @@ step4_server <- function(id, minThresh, i18n, currentLang,
   #them. Everything after this point reads plain values.
   .rx <- list(minThresh = minThresh, currentLang = currentLang,
               skip = skip, needHelp = needHelp, finalPolygons = finalPolygons,
-              DULN = DULN, DULN_all = DULN_all, shape = shape)
+              DULN = DULN, DULN_all = DULN_all, shape = shape,
+              autoAoI = autoAoI)
 
   shiny::moduleServer(id, function(input, output, session) {
 
@@ -1029,6 +1035,21 @@ step4_server <- function(id, minThresh, i18n, currentLang,
       #force (this session generated them), else to what was confirmed (a
       #restored save, where nothing was generated)
       aoiKey <- list(minThresh = minThresh, skip = skip, shape = shape)
+      #The automatic route from the next-step modal generated them too, without
+      #this module: the plain threshold areas, before the cut it confirmed. Taken
+      #over as if this step had generated them, so Reset - and the state of the
+      #whole step - is what a user who walked 3 -> 4 -> "Automatic Cuts" ->
+      #confirm would find. Only for the inputs still in force: a new outline or a
+      #new threshold since then leaves the key unmatched.
+      auto <- .rx$autoAoI()
+      #(an earlier generation here, for other inputs, does not block it - it
+      #is stale; one for these same inputs is the same plain areas anyway)
+      haveOwn <- !is.null(cache$defaultAoI) && identical(cache$aoiKey, aoiKey)
+      if(!haveOwn && is.list(auto) && !is.null(auto$polygons) &&
+         identical(auto$key, aoiKey)){
+        cache$aoiKey     <- aoiKey
+        cache$defaultAoI <- auto$polygons
+      }
       r$resetPolygons <- if(!is.null(cache$defaultAoI) && identical(cache$aoiKey, aoiKey))
         cache$defaultAoI else r$startingPolygons
       plotMap()

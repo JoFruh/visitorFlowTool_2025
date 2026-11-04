@@ -138,8 +138,13 @@ drawAndGo <- function() {
   ok("  the confirm button shows", waitFor(
     "(function(){ var e = document.getElementById('step1-confirmButton2'); return !!e && e.offsetParent !== null; })()", 30))
   Sys.sleep(0.5); clickEl("#step1-confirmButton2")
-  ok("  the next-step modal", waitFor("!!document.getElementById('vftNextSim') && document.getElementById('vftNextSim').offsetParent !== null", 120))
-  Sys.sleep(0.8); clickEl("#vftNextSim")
+  ok("  the next-step modal", waitFor("['vftNextSimAuto', 'vftNextSim'].some(function(id){ var e = document.getElementById(id); return !!e && e.offsetParent !== null; })", 120))
+  #this app runs the INSTALLED package, whose modal may predate the automatic
+  #route (one button). Where the auto button is there, the manual one drops down
+  #under it only on hover.
+  Sys.sleep(0.8); r0 <- unlist(rectOf("#vftNextSimAuto"))
+  if (length(r0) == 4) { move(r0[1] + r0[3] / 2, r0[2] + r0[4] / 2); Sys.sleep(0.4) }
+  clickEl("#vftNextSim")
   tRing
 }
 warmBar <- "(function(){ var q = document.querySelectorAll('.shiny-progress-notification.vft-queued');

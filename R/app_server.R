@@ -514,7 +514,11 @@ app_server <- function(input, output, session){
                                 i18n        = shiny::reactive(i18n),
                                 currentLang = shiny::reactive(r$currentLang),
                                 needHelp    = shiny::reactive(r$needHelp),
-                                DULN_all    = shiny::reactive(r$DULN_all)
+                                DULN_all    = shiny::reactive(r$DULN_all),
+                                #what the slider opens on when the app already
+                                #holds a threshold - a restored save, or the
+                                #automatic route's (R/auto_aoi.R)
+                                minThresh   = shiny::reactive(r$minThresh)
                                 ))
 
 
@@ -635,7 +639,13 @@ app_server <- function(input, output, session){
                                 #confirmed; they are regenerated only when
                                 #something upstream invalidated them, which
                                 #leaves this NULL again.
-                                finalPolygons = shiny::reactive(r$finalPolygons)))
+                                finalPolygons = shiny::reactive(r$finalPolygons),
+                                #the plain threshold areas the automatic route
+                                #generated before cutting them, so Reset on a
+                                #first visit after it goes where it would have
+                                #gone had the user walked steps 3 and 4. See
+                                #vftAutoAoISim() in R/auto_aoi.R.
+                                autoAoI       = shiny::reactive(r$aoiAutoPlain)))
 
 
 
@@ -698,27 +708,11 @@ app_server <- function(input, output, session){
         #step 4 is being re-confirmed with changed areas of interest, and those
         #scenarios were computed against the old ones: replacing them is right,
         #and vftCommit() below asks first.
-        prior <- shiny::isolate(r$networkList)
-        if(vftIsCanvasList(prior)){
-          vftDbg(paste0("STEP4: merging the Zielgebiete into ", length(prior),
-                        " painted scenario(s) rather than replacing them"))
-          newList <- lapply(prior, function(v){
-            #built as a literal, exactly like the fresh scenario below, rather
-            #than by editing `v` in place: assigning NULL to a list element
-            #REMOVES it, so `v$network <- r$network` on the usual NULL would
-            #leave a scenario with no `network` field at all. Every read of it
-            #answers NULL either way, but a scenario should have the same shape
-            #whichever branch made it. The two rasters are the paint, and they
-            #are the whole reason this branch exists.
-            list(network = r$network, pathUsage = NULL, parking = NULL,
-                 residential = NULL, newAttr = NULL,
-                 paintedRaster = v$paintedRaster, canopyRaster = v$canopyRaster)
-          })
-        }else{
-          newList <- list(list(network = r$network, pathUsage = NULL,
-                               parking = NULL, residential = NULL,
-                               newAttr = NULL))
-        }
+        #
+        #vftScenarioListFor() in R/auto_aoi.R, shared with the automatic route
+        #from the next-step modal, which makes the same write without step 4.
+        newList <- vftScenarioListFor(shiny::isolate(r$networkList),
+                                      shiny::isolate(r$network))
 
         #`network` and `parking` are no longer committed here. r$network is the
         #step-1 provider's key and step 4 was overwriting it with an
@@ -731,24 +725,9 @@ app_server <- function(input, output, session){
                   list(finalPolygons = step4return$finalPolygons(),
                        networkList   = newList),
                   session, step = "step4",
-                  then = function(){
-                    r$step6FirstRun <- TRUE
-                    r$newVersionsFirstRun <- TRUE
-
-                    #vftGoToStep sets r$step, which the snapshot records, so it
-                    #has to come first - a snapshot taken before it would name
-                    #step 4 and resume the user one step behind where they were.
-                    vftGoToStep(r, "step5", session)
-
-                    #The Zielgebiete are in VFT_SNAPSHOT_KEYS, so this is the
-                    #confirmation that puts real geometry in the browser. The
-                    #network and the (empty) scenario list are not: both are
-                    #rebuilt from `finalPolygons` and `minThresh` by the
-                    #provider layer and vftPrepareThen().
-                    vftSnapshotWrite(r, session)
-
-                    r$triggerStep5_nr <- 1
-                  },
+                  #the hand-over to step 5 - shared with the automatic route;
+                  #see vftStep4Handover() in R/auto_aoi.R
+                  then = function() vftStep4Handover(r, session),
                   #No onCancel: step 4's confirm observer re-enables its own two
                   #buttons before handing the result over, and it no longer
                   #destroys the map observers on the way out - enter() does that,

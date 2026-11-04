@@ -27,7 +27,13 @@ VFT_AOI_SUGGEST_SHARE <- 1/3
 VFT_AOI_SUGGEST_FLOOR <- 0.5
 
 #' The slider position that makes VFT_AOI_SUGGEST_SHARE of the area within the
-#' step 1 outline areas of interest - step 3's default.
+#' step 1 outline areas of interest.
+#'
+#' It WAS step 3's default (2026-10-12 to 2026-11-03). The app no longer calls
+#' it: step 3 now opens on VFT_AUTO_AOI_THRESHOLD, the threshold the automatic
+#' route in the next-step modal uses (R/auto_aoi.R), so both routes start from
+#' the same value. Kept because data-raw/validate_usage_surveys.R and
+#' data-raw/fingerprint_aoi_cut.R still call it.
 #'
 #' No vectorising: the share of the outline a threshold paints is the share of
 #' its cells at or above it, so one sort of the cells answers every slider
@@ -73,7 +79,10 @@ vftSuggestAoIThreshold <- function(DULN_all, shape,
 
 step3_server <- function(id, shape, i18n, currentLang,
                          needHelp = shiny::reactive(FALSE),
-                         DULN_all = shiny::reactive(NULL)){
+                         DULN_all = shiny::reactive(NULL),
+                         #the threshold the app already holds (r$minThresh), if
+                         #any - what the slider opens on. See obsSuggest below.
+                         minThresh = shiny::reactive(NULL)){
 
   #count this instantiation. A module server should be created once per
   #session; this app re-calls it from an observeEvent on a trigger, so any
@@ -489,13 +498,19 @@ step3_server <- function(id, shape, i18n, currentLang,
       invisible(NULL)
     })
 
-    #The default threshold: the slider position that makes a third of the
-    #perimeter areas of interest (vftSuggestAoIThreshold(), <0.15 s on a 15 km
-    #disc). An observer rather than part of enter(), because DULN_all is an async
+    #The default threshold: the one the app already holds - a restored save, or
+    #the automatic route's 3.1, which a first visit here must show rather than
+    #replace (confirming a different value would discard the simulation it made)
+    #- else VFT_AUTO_AOI_THRESHOLD, the same value the automatic route uses. It
+    #used to be the slider position that makes a third of the perimeter areas of
+    #interest (vftSuggestAoIThreshold()); the user replaced that 2026-11-03.
+    #
+    #An observer rather than part of enter(), because DULN_all is an async
     #provider and may land after the step is entered. Set once per perimeter AND
     #raster - a return to step 3 over the same area keeps the user's own
     #position, and a stale raster still in place under a new perimeter is not
-    #mistaken for the new one (its extent differs).
+    #mistaken for the new one (its extent differs). The held threshold is read
+    #isolated: it is the starting point, not something to follow.
     cache$suggestedFor <- NULL
     obsSuggest <- shiny::observe({
       attr <- DULN_all()
@@ -505,15 +520,11 @@ step3_server <- function(id, shape, i18n, currentLang,
       if(identical(cache$suggestedFor, key)) return(invisible(NULL))
       cache$suggestedFor <- key
 
-      t0  <- Sys.time()
-      thr <- tryCatch(vftSuggestAoIThreshold(attr, shp), error = function(e){
-        vftDbgCat("WARNING step 3 threshold suggestion failed: ",
-                  conditionMessage(e), "\n")
-        NULL
-      })
-      vftDbgCat(sprintf("step 3 suggested threshold %s in %.2f s\n",
-                        format(thr), as.numeric(difftime(Sys.time(), t0, units = "secs"))))
-      if(is.null(thr)) return(invisible(NULL))
+      held <- suppressWarnings(as.numeric(shiny::isolate(minThresh())))
+      thr  <- if(length(held) == 1L && is.finite(held)) held else VFT_AUTO_AOI_THRESHOLD
+      #onto the slider's 0.1 grid, or indexOf() below finds nothing
+      thr  <- round(thr, 1)
+      vftDbgCat(sprintf("step 3 default threshold %s\n", format(thr)))
       #a NUMBER, although the choices are strings: ion.rangeSlider parses
       #"0".."20" into numbers, and the binding looks `selected` up with
       #values.indexOf() - a string finds nothing, and the slider lands on 0

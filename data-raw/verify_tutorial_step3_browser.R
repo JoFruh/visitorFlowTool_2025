@@ -118,7 +118,7 @@ move(cx, cy); move(pts[[1]][1], pts[[1]][2]); click(pts[[1]][1], pts[[1]][2])
 ok("...the polygon is accepted", waitFor(atHint(4, "step1"), 20))
 Sys.sleep(0.6); clickEl("#step1-confirmButton2")
 ok("...the next-step modal", waitFor(atHint(5, "step1"), 60))
-Sys.sleep(0.8); clickEl("#vftNextSim")
+Sys.sleep(0.8); { r0 <- unlist(rectOf("#vftNextSimAuto")); move(r0[1] + r0[3] / 2, r0[2] + r0[4] / 2); Sys.sleep(0.4); clickEl("#vftNextSim") }  # the manual button drops down on hover
 ok("...the simulation is held for hint 6", waitFor(atHint(6, "step1"), 10))
 Sys.sleep(0.6); clickEl(".vftTutorialNext")
 ok("the ring lands on step 3", waitFor(ringIs("vftNav_step3"), 240))

@@ -286,6 +286,19 @@ VFT_AOI_CUT_DULN_DEPTH   <- Inf
 VFT_AOI_CUT_LAKES        <- TRUE
 VFT_AOI_LAKE_MIN_M2      <- 100000
 
+#' The attractiveness threshold the app starts from, and the one the automatic
+#' route uses.
+#'
+#' "Naherholung simulieren (Automatische Zielgebiete)" in the next-step modal
+#' (vftAutoAoISim() in R/auto_aoi.R) generates the areas of interest at this
+#' threshold and cuts them with "Automatic Cuts", with no step 3 or 4 in
+#' between. Step 3's slider opens on it too when the app holds no threshold yet
+#' (step3_server.R's obsSuggest), so the manual route and the automatic route
+#' start from the same value. 3.1 is the best automatic set in the usage-survey
+#' validation (Full model, auto-cut areas: mean Pearson .715, against .704 at 2,
+#' .648 at 6 and .667 at 8).
+VFT_AUTO_AOI_THRESHOLD   <- 3.1
+
 #' The lake-loop pass (R/lakeLoopAoI.R). Visitors treat "the walk around the
 #' lake" as a destination in itself, so a lake that one generated area mostly
 #' covers, and that a path can circle while staying near the shore, gets an area

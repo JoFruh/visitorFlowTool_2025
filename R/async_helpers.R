@@ -798,7 +798,23 @@ vftProgressPair <- function(..., message = NULL, detail = NULL,
   out <- list(prep = .vftProgressHandle(q$producer, sig1),
               sim  = .vftProgressHandle(q$producer, sig2))
   attr(out, "vftTicket") <- tid
+  #the queue is drained every `millis` only, so the job can resolve while the
+  #worker's last messages - bar 1's close, all of bar 2 - are still in it. A
+  #caller that starts something with bars of its own straight away
+  #(vftAutoAoISim(), which hands over to step 5's launch) calls this first, so
+  #those messages play out now and in order rather than after the next bar has
+  #appeared. Main thread only; nothing here crosses to the worker.
+  attr(out, "vftDrain") <- function()
+    try(q$consumer$consume(throwErrors = FALSE), silent = TRUE)
   out
+}
+
+#' Play out a bar pair's pending messages now - see the `vftDrain` attribute
+#' set by vftProgressPair(). A no-op for anything else.
+vftProgressDrain <- function(progress){
+  f <- attr(progress, "vftDrain")
+  if(is.function(f)) f()
+  invisible(NULL)
 }
 
 #' Where a dispatch came from, for the payload log.

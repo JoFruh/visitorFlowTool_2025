@@ -349,13 +349,30 @@ vftNavHint <- function(on, session = shiny::getDefaultReactiveDomain()){
 #' registers that door's observer, asked of vftNavSteps(). A VFT_NAV=step1,step2
 #' build has no simulation chain and no Hitzeminderung, and the modal must not
 #' offer a button whose click nothing is listening for.
+#'
+#' #### the simulation choice is two buttons ####
+#'
+#' Since 2026-11-03. The big one, `vftNextSimAuto`, goes straight to step 5:
+#' the areas of interest are generated at VFT_AUTO_AOI_THRESHOLD and cut by
+#' "Automatic Cuts" on the way, each behind its own progress bar
+#' (vftAutoAoISim() in R/auto_aoi.R). `sub` is its second line, in a smaller
+#' size. `extra` is the smaller button that drops down under it on hover - the
+#' manual route through steps 3 and 4, as before. It keeps the id `vftNextSim` the single button had, so
+#' the browser checks in data-raw that click it to reach step 3 still do.
+#'
+#' `sub` and `extra$key` are German literals, i.e. CSV keys that degrade to
+#' readable German - not `:token:` rows, which would show the token.
 VFT_NEXT_CHOICES <- list(
   list(id = "vftNextStep2", key = ":nav_step2:",
        fallback = "Sensibilit\u00E4t der Biodiversit\u00E4t",
        when = function(steps) "step2" %in% steps),
-  list(id = "vftNextSim",   key = ":nav_step5:",
+  #the automatic route lands on step 5 and leaves steps 3 and 4 to be returned
+  #to, so it is offered only where the bar can reach all three
+  list(id = "vftNextSimAuto", key = ":nav_step5:",
        fallback = "Naherholung simulieren",
-       when = function(steps) any(VFT_NAV_FOLD %in% steps)),
+       sub   = "(Automatische Zielgebiete)",
+       extra = list(id = "vftNextSim", key = "Manuelle Zielgebiete"),
+       when = function(steps) all(c("step3", "step4", "step5") %in% steps)),
   #dropped, not greyed, while HEAT_MITIGATION is off (R/features.R)
   list(id = "vftNextHitze", key = ":nav_hitze:",
        fallback = "Hitzeminderung",
@@ -394,7 +411,36 @@ VFT_NEXT_CSS <- "
 #shiny-modal .vft-next-btn:hover, #shiny-modal .vft-next-btn:focus {
     background-color:#ffffff; color:#006268;
     outline:3px solid #ffffff; outline-offset:3px; }
-@media (max-width:640px){ #shiny-modal .vft-next-row { flex-direction:column; } }
+#shiny-modal .vft-next-btn { flex-direction:column; }
+#shiny-modal .vft-next-sub { display:block; font-size:0.8em; font-weight:600;
+    margin-top:3px; }
+#shiny-modal .vft-next-col { flex:1 1 210px; max-width:280px; display:flex;
+    flex-direction:column; position:relative; }
+#shiny-modal .vft-next-col > .vft-next-btn { flex:1 1 auto; max-width:none; width:100%; }
+/* the drop-down: out of the flow, under the main button, shown while the
+   pointer is anywhere in the column - its padding-top is the bridge the pointer
+   crosses from the main button without losing the hover. display:none, not
+   visibility, while hidden, so the tutorial's windows (shown() in
+   vft-tutorial.js) count three choices, not four. */
+#shiny-modal .vft-next-drop { display:none; position:absolute; top:100%; left:0;
+    right:0; padding-top:10px; z-index:5; }
+#shiny-modal .vft-next-col:hover .vft-next-drop,
+#shiny-modal .vft-next-col:focus-within .vft-next-drop { display:block; }
+#shiny-modal .vft-next-drop > .vft-next-btn--sub { width:100%; max-width:none;
+    min-height:44px; font-size:16px; padding:8px 14px; flex-direction:row; gap:8px;
+    box-shadow:0 6px 18px rgba(0,0,0,.30); }
+#shiny-modal .vft-next-btn--sub .vft-next-caret { font-size:0.95em; line-height:1; }
+/* room for it inside the teal box */
+#shiny-modal .vft-next-row:has(.vft-next-col) { margin-bottom:22px; }
+/* no hover on a touch screen, and no room beside it in one column: there the
+   manual button is simply always shown, under the main one */
+@media (hover:none){
+    #shiny-modal .vft-next-drop { display:block; position:static; padding-top:8px; }
+    #shiny-modal .vft-next-row:has(.vft-next-col) { margin-bottom:0; } }
+@media (max-width:640px){ #shiny-modal .vft-next-row { flex-direction:column; }
+    #shiny-modal .vft-next-col { max-width:none; }
+    #shiny-modal .vft-next-drop { display:block; position:static; padding-top:8px; }
+    #shiny-modal .vft-next-row:has(.vft-next-col) { margin-bottom:0; } }
 "
 
 #' Raise the "choose your next step" modal.
@@ -455,7 +501,32 @@ vftNextStepModal <- function(session = shiny::getDefaultReactiveDomain(),
   #identical(out, key), because the fallback is a different string.
   lab <- function(ch){
     out <- tryCatch(tr(ch$key), error = function(e) ch$key)
-    if(length(out) != 1L || is.na(out) || grepl("^:.*:$", out)) ch$fallback else as.character(out)
+    fb  <- if(is.null(ch$fallback)) ch$key else ch$fallback
+    if(length(out) != 1L || is.na(out) || grepl("^:.*:$", out)) fb else as.character(out)
+  }
+
+  #one choice: a button - or, for the simulation, a column of two (see
+  #VFT_NEXT_CHOICES): the main button with its smaller second line, and the
+  #manual route under it
+  button <- function(ch){
+    label <- if(is.null(ch$sub)) lab(ch) else
+      shiny::tagList(lab(ch),
+                     shiny::tags$span(class = "vft-next-sub",
+                                      lab(list(key = ch$sub))))
+    main <- shiny::actionButton(inputId = ch$id, label = label,
+                                class = "vft-next-btn")
+    if(is.null(ch$extra)) return(main)
+    #the manual button is a drop-down: hidden until the pointer is over the main
+    #button (or keyboard focus is in the column), so the modal reads as three
+    #choices - see VFT_NEXT_CSS
+    shiny::tags$div(class = "vft-next-col", main,
+      shiny::tags$div(class = "vft-next-drop",
+        shiny::actionButton(inputId = ch$extra$id,
+                            label = shiny::tagList(
+                              shiny::tags$span(class = "vft-next-caret",
+                                               `aria-hidden` = "true", "\u25BE"),
+                              lab(ch$extra)),
+                            class = "vft-next-btn vft-next-btn--sub")))
   }
 
   shiny::showModal(shiny::modalDialog(
@@ -465,11 +536,7 @@ vftNextStepModal <- function(session = shiny::getDefaultReactiveDomain(),
     #been updated shows readable German rather than a bare key. See .vftT().
     shiny::tags$div(class = "vft-next-head",
                     tr("W\u00E4hlen Sie Ihren n\u00E4chsten Schritt")),
-    shiny::tags$div(class = "vft-next-row",
-      lapply(choices, function(ch)
-        shiny::actionButton(inputId = ch$id, label = lab(ch),
-                            class = "vft-next-btn"))
-    )
+    shiny::tags$div(class = "vft-next-row", lapply(choices, button))
   ), session = session)
 
   invisible(NULL)
@@ -1007,7 +1074,25 @@ vftNavBarServer <- function(r, input, session = shiny::getDefaultReactiveDomain(
 
   if("step2" %in% steps)
     fromModal("vftNextStep2", function() goStep("step2"))
-  fromModal("vftNextSim",   goFold)
+  #The simulation choice is two buttons (VFT_NEXT_CHOICES), offered where the
+  #bar reaches steps 3, 4 and 5. Both open the chain first, as goFold does.
+  #
+  #"Manuelle Zielgebiete" goes to STEP 3, not to goFold's furthest reachable
+  #step: after a finished run that would be step 5, which is not what a button
+  #naming the manual areas of interest promises.
+  #
+  #The automatic one stays on this step while vftAutoAoISim() generates and cuts
+  #the areas behind its progress bars, then commits them and moves to step 5.
+  if(all(c("step3", "step4", "step5") %in% steps)){
+    fromModal("vftNextSim", function(){
+      setFolded(FALSE)
+      goStep("step3")
+    })
+    fromModal("vftNextSimAuto", function(){
+      setFolded(FALSE)
+      vftAutoAoISim(r, session)
+    })
+  }
   fromModal("vftNextHitze", goHitze)
 
   shiny::observe({
