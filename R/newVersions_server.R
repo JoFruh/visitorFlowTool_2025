@@ -380,6 +380,35 @@ newVersions_server <- function(id, networkList, i18n, currentLang, isFirstRun,
     #' the navigation to step 3. See the module's return value.
     aoiCreate <- shiny::reactiveVal(0L)
 
+    #' "Make the automatic Zielgebiete, here" - a rising count app_server turns
+    #' into vftAutoAoISim() without the hand-over to step 5; it answers through
+    #' aoiAutoDone(), which this module returns. Asked by the heat mitigation
+    #' search (heatNeedRun()), whose simulations need the areas.
+    aoiAuto   <- shiny::reactiveVal(0L)
+    #the run's continuation, function(ok), waiting for the answer
+    aoiAutoCb <- NULL
+
+    #' The app's answer. `state` = list(finalPolygons, minThresh, networkList) as
+    #' the commit wrote them: this page's snapshots take them over, so the visit
+    #' goes on with Zielgebiete - the network list is this page's own scenarios
+    #' with the path network merged in (vftScenarioListFor() keeps the paint).
+    aoiAutoDone <- function(ok, state = NULL) shiny::withReactiveDomain(session, shiny::isolate({
+      if(isTRUE(ok) && is.list(state) && !is.null(state$finalPolygons)){
+        finalPolygons <<- state$finalPolygons
+        minThresh     <<- state$minThresh
+        if(length(state$networkList)){
+          networkList    <<- state$networkList
+          r$networkList  <- state$networkList
+        }
+        heatOnly <<- FALSE
+        shinyjs::toggleClass(id = "showAOI", class = "vftRailOff", condition = !aoiReady())
+      }
+      cb <- aoiAutoCb
+      aoiAutoCb <<- NULL
+      if(is.function(cb)) cb(isTRUE(ok) && aoiReady())
+      invisible(NULL)
+    }))
+
     #' "Go and make a sensitivity matrix" - the same, for step 2. Named and
     #' shaped exactly like step 5's, because it is the same offer on the same
     #' data seen from the next page.
@@ -1245,6 +1274,8 @@ if(is.null(r$updateNetworkPlot)){
         conflictsOrigNow <- shiny::isolate(if(isTRUE(r$conflictsOrigOn))
           vftScenarioConflicts(originalScenario(), conflictKey()) else NULL)
         if(!is.null(conflictsOrigNow)) map <- addConflictOrigCircles(map, conflictsOrigNow)
+        #and the heat mitigation circles (see "THE HEAT MITIGATION SEARCH")
+        map <- heatNeedOnto(map)
 
         #THE RAIL'S MAP LAYERS ####
         #Whatever the "Kartenebenen" switches have on, drawn into this map for
@@ -2297,7 +2328,7 @@ heatWorking <- function(busy){
 #' happens meanwhile, and `done()` gets it only if it may still be shown - its
 #' scenario not painted since dispatch, its bin still the chosen one, context 4
 #' still up. Otherwise `done(NULL)`.
-computeHeat <- function(card, done = function(entry) invisible(NULL)){
+computeHeat <- function(card, done = function(entry) invisible(NULL), bin = heatCurrentBin()){
   if(isTRUE(heatBusy)) return(invisible(NULL))
 
   pos <- heatCardPos(card)
@@ -2310,7 +2341,9 @@ computeHeat <- function(card, done = function(entry) invisible(NULL)){
     if(is.null(nl) || is.null(pos) || !length(pos) || pos > length(nl))
       list(paintedRaster = NULL, canopyRaster = NULL) else nl[[pos]]
   })
-  bin <- heatCurrentBin()
+  #the chosen time of day, unless the caller names one (the heat mitigation
+  #search computes the maps it is missing)
+  force(bin)
 
   #what the result will be kept against: the paint revision it describes, and
   #whether that is the unpainted scenario Reset returns to
@@ -2548,6 +2581,242 @@ shiny::observeEvent(input$heatIconClick, {
   })
 }, ignoreInit = TRUE)
 
+
+# THE HEAT MITIGATION SEARCH ####
+#
+# "Bereiche mit Hitzeminderungsbedarf erkennen", under the time of day: where
+# usage falls most from the selected scenario's normal simulation to its
+# heatwave simulation(s) - see R/heat_need_helpers.R, and step 5's button of the
+# same name, which stores its result in the same place (sc$heatNeed).
+#
+# Nothing stored: a modal asks which time of day and lists what is missing, and
+# "Starten" runs it all HERE, one stage after the other - the heat maps
+# (computeHeat()), the normal and heatwave simulations (vftRunScenarioSim(), the
+# dispatch step 5 uses), the search - behind a modal the user cannot dismiss:
+# this page owns its networkList while the user is on it, and the scenario must
+# not change under the run. Step 5 sends the user here with `detect` in the
+# target when it lacks a heat map (enter() below), and the run starts at once.
+# Through the Hitzeminderung door there are no Zielgebiete for the simulations:
+# the run then begins with the automatic ones (aoiAuto -> app_server ->
+# vftAutoAoISim() without its hand-over to step 5 -> aoiAutoDone()), and the
+# user stays here.
+#
+# Stored: the button is a show/hide toggle. Painting does not touch the search -
+# it is the guidance the painting follows - but it makes the heatwave runs
+# stale, and so the search: the circles go dashed and a small button beside the
+# toggle asks again. The circles are a picture (interactive = FALSE), so strokes
+# and clicks go through them, and are re-added by the map render, like the
+# conflicts.
+heatNeedOn  <- FALSE
+#the run in flight: an environment, so the cancel button can reach it
+heatNeedJob <- NULL
+#step 5's hand-over: list(n, choice), n rising
+heatNeedAuto <- shiny::reactiveVal(NULL)
+
+heatNeedScenario <- function(pos = shiny::isolate(r$position)) shiny::isolate({
+  nl <- r$networkList
+  if(is.null(nl) || is.null(pos) || !length(pos) || pos > length(nl)) NULL else nl[[pos]]
+})
+heatNeedState <- function() shiny::isolate({
+  sc  <- heatNeedScenario()
+  rec <- sc$heatNeed
+  if(!is.list(rec) || is.null(rec$hotspots)) return(list(has = FALSE, stale = FALSE))
+  list(has = TRUE, rec = rec,
+       stale = isFALSE(vftHeatNeedFresh(sc, heatStoreRev(heatStore, heatCardKey(r$position)))))
+})
+heatNeedSync <- function() shiny::isolate({
+  st <- heatNeedState()
+  shinyjs::toggleClass("heatNeedRow", "vftHnHas",   condition = st$has)
+  shinyjs::toggleClass("heatNeedRow", "vftHnShown", condition = st$has && heatNeedOn)
+  shinyjs::toggleClass("heatNeedRow", "vftHnStale", condition = isTRUE(st$stale))
+  invisible(NULL)
+})
+#the circles onto `map` - the render's widget or a proxy - or off it. On the
+#Hitzeminderung view only, where the button that hides them is.
+heatNeedOnto <- function(map) shiny::isolate({
+  map <- vftHeatNeedClear(map)
+  st  <- heatNeedState()
+  if(heatNeedOn && st$has && nrow(st$rec$hotspots) && isTRUE(input$contextChoice == 4))
+    map <- vftHeatNeedDraw(map, st$rec$hotspots, i18n(), stale = st$stale,
+                           interactive = FALSE, pane = "layer3")
+  map
+})
+#deferUntilFlush = FALSE: also called from a promise callback, where a deferred
+#call would wait for the user's next click (see heatProxy() above)
+heatNeedRedraw <- function()
+  heatNeedOnto(leaflet::leafletProxy("versionMap", deferUntilFlush = FALSE))
+
+#the button follows the card, and a stroke (which makes the search stale)
+obsHeatNeedState <- shiny::observe({
+  r$position
+  r$networkList
+  heatNeedSync()
+})
+
+heatNeedPlanFor <- function(bins) shiny::isolate({
+  card <- heatCardKey(r$position)
+  plan <- vftHeatNeedPlan(heatNeedScenario(), bins,
+                          function(b) !is.null(card) && !is.null(heatStoreGet(heatStore, card, b, heatAoiKey())),
+                          heatStoreRev(heatStore, card))
+  #the Hitzeminderung door has no Zielgebiete: the run makes the automatic ones
+  #first. The heat maps are keyed by the perimeter, not by them, so the rest of
+  #the plan stands.
+  plan$aoi <- !aoiReady()
+  plan
+})
+
+heatNeedAsk <- function() shiny::isolate({
+  if(is.null(heatNeedScenario())) return(invisible(NULL))
+  rec <- heatNeedState()$rec
+  choice <- if(!is.null(rec$bins)){
+    if(length(rec$bins) > 1) "both" else rec$bins
+  }else if(isTRUE(heatCurrentBin() %in% VFT_HEATWAVE_BINS)) heatCurrentBin() else "afternoon"
+  shiny::showModal(vftHeatNeedModal(session$ns, i18n(), choice))
+  invisible(NULL)
+})
+
+output$heatNeedPlan <- shiny::renderUI({
+  bins <- vftHeatNeedBins(input$heatNeedChoice)
+  shiny::req(length(bins))
+  vftHeatNeedPlanUI(heatNeedPlanFor(bins), bins, session$ns, shiny::isolate(i18n()), here = TRUE)
+})
+
+shiny::observeEvent(input$heatNeedBtn, {
+  if(!heatNeedState()$has) return(heatNeedAsk())
+  heatNeedOn <<- !heatNeedOn
+  heatNeedRedraw()
+  heatNeedSync()
+}, ignoreInit = TRUE)
+shiny::observeEvent(input$heatNeedRedo, heatNeedAsk(), ignoreInit = TRUE)
+shiny::observeEvent(input$heatNeedCancel, {
+  if(is.environment(heatNeedJob)) heatNeedJob$cancel <- TRUE
+}, ignoreInit = TRUE)
+
+#' The search on what scenario `pos` holds now; stored even when it finds
+#' nothing, so the next click is the toggle.
+heatNeedDetect <- function(pos, bins) shiny::isolate({
+  sc     <- r$networkList[[pos]]
+  normal <- vftSimEdges(vftScenarioSim(sc, "normal")$pathUsage)
+  heat   <- stats::setNames(lapply(bins, function(b) vftSimEdges(vftScenarioSim(sc, b)$pathUsage)), bins)
+  if(is.null(normal) || any(vapply(heat, is.null, logical(1)))) return(FALSE)
+  h <- vftTime("heatNeed:search", vftHeatNeedHotspots(normal, heat))
+  message(sprintf("heat need: %d circle(s) for %s", nrow(h), paste(bins, collapse = "+")))
+  r$networkList[[pos]]$heatNeed <- list(hotspots = h, bins = bins, key = vftHeatNeedKey(sc, bins))
+  heatNeedOn <<- TRUE
+  if(identical(pos, r$position)) heatNeedRedraw()
+  heatNeedSync()
+  if(!nrow(h))
+    shiny::showNotification(vftTrText(i18n(), "Keine deutlichen Nutzungsrückgänge bei Hitze gefunden"),
+                            type = "message", duration = 8)
+  TRUE
+})
+
+#' Everything the plan says is missing, in order - the heat maps, the normal
+#' run, the heatwave runs - then the search. Each stage's result is written by
+#' this page, onto this page's list; a result whose card has left its position
+#' meanwhile is dropped and the run stops.
+heatNeedRun <- function(bins, plan) shiny::isolate({
+  pos  <- r$position
+  card <- heatCardKey(pos)
+  binName <- function(b) vftTrText(i18n(), HEAT_BIN_KEYS[[b]])
+  steps <- list(); labels <- character(0)
+
+  runSim <- function(hw, nxt, fail){
+    vftRunScenarioSim(session, r, pos, hw = hw, finalPolygons = finalPolygons,
+                      minThresh = minThresh, onFail = fail,
+                      onDone = function(out){
+                        if(!identical(heatCardKey(pos), card)) return(fail())
+                        r$networkList[[pos]] <- vftStoreSimResult(r$networkList[[pos]], out, hw)
+                        usageStashRefresh()
+                        nxt()
+                      })
+  }
+  #no Zielgebiete (the Hitzeminderung door): the automatic ones, made by the app
+  #(vftAutoAoISim() without its hand-over to step 5) - the page stays
+  if(isTRUE(plan$aoi)){
+    labels <- c(labels, vftTrText(i18n(), "Zielgebiete (automatisch)"))
+    steps  <- c(steps, list(function(nxt, fail){
+      aoiAutoCb <<- function(ok) if(ok) nxt() else fail()
+      aoiAuto(shiny::isolate(aoiAuto()) + 1L)
+    }))
+  }
+  for(b in plan$heatMaps){
+    labels <- c(labels, sprintf(vftTrText(i18n(), "Hitzekarte (%s)"), binName(b)))
+    steps  <- c(steps, list(local({ bb <- b; function(nxt, fail){
+      computeHeat(card, bin = bb, done = function(entry){
+        if(is.null(heatStoreGet(heatStore, card, bb, heatAoiKey()))) fail() else nxt()
+      })
+    }})))
+  }
+  if(plan$normal){
+    labels <- c(labels, vftTrText(i18n(), "Normale Simulation"))
+    steps  <- c(steps, list(function(nxt, fail) runSim(NULL, nxt, fail)))
+  }
+  for(b in plan$heatSims){
+    labels <- c(labels, sprintf(vftTrText(i18n(), "Hitzewellen-Simulation (%s)"), binName(b)))
+    steps  <- c(steps, list(local({ bb <- b; function(nxt, fail){
+      e <- heatStoreGet(heatStore, card, bb, heatAoiKey())
+      if(is.null(e)) return(fail())
+      runSim(list(bin = bb, rev = e$rev, base = e$base, card = card,
+                  packed = terra::wrap(e$heat)), nxt, fail)
+    }})))
+  }
+  labels <- c(labels, vftTrText(i18n(), "Unterschiede berechnen"))
+  steps  <- c(steps, list(function(nxt, fail) if(isTRUE(heatNeedDetect(pos, bins))) nxt() else fail()))
+
+  job <- new.env(); job$cancel <- FALSE; job$i <- 0L
+  heatNeedJob <<- job
+  shiny::showModal(vftHeatNeedRunModal(labels, session$ns, i18n()))
+  finish <- function(){
+    heatNeedJob <<- NULL
+    shiny::removeModal()
+    heatNeedSync()
+  }
+  fail <- function(){
+    finish()
+    shiny::showNotification(vftTrText(i18n(), "Die Erkennung wurde abgebrochen"),
+                            type = "warning", duration = 8)
+  }
+  nxt <- function(){
+    vftHeatNeedStage(job$i)
+    if(isTRUE(job$cancel)) return(fail())
+    job$i <- job$i + 1L
+    if(job$i > length(steps)) return(finish())
+    steps[[job$i]](nxt, fail)
+  }
+  nxt()
+})
+
+#' Start a search for `choice` on the selected scenario, if it can start.
+heatNeedStart <- function(choice) shiny::isolate({
+  bins <- vftHeatNeedBins(choice)
+  if(!length(bins) || is.null(heatNeedScenario())) return(invisible(NULL))
+  if(isTRUE(heatBusy) || isTRUE(session$userData$vftSimBusy) || is.environment(heatNeedJob)){
+    shiny::showNotification(vftTrText(i18n(), "Es läuft bereits eine Simulation"),
+                            type = "message", duration = 5)
+    return(invisible(NULL))
+  }
+  #the simulations need the Zielgebiete, which this door does not have: the
+  #plan makes the automatic ones first (plan$aoi), without leaving the page
+  heatNeedRun(bins, heatNeedPlanFor(bins))
+})
+
+shiny::observeEvent(input$heatNeedGo, {
+  choice <- input$heatNeedChoice
+  shiny::removeModal()
+  heatNeedStart(choice)
+}, ignoreInit = TRUE)
+
+#step 5's hand-over, one flush after enter(): the card and the time of day are
+#already set from the target. Not ignoreInit, for step 5's autoLaunch reason:
+#on the FIRST visit enter() runs during construction and has already set this
+#before the observer's first evaluation, which ignoreInit would swallow.
+shiny::observeEvent(heatNeedAuto(), {
+  a <- heatNeedAuto()
+  if(is.null(a$choice)) return(invisible(NULL))
+  heatNeedAuto(NULL)
+  heatNeedStart(a$choice)
+})
 
 # An attempt to paint while heat is on. The browser swallowed the stroke and
 # asked for the explanation, which is given here because the translations are.
@@ -3750,11 +4019,13 @@ vftDbg("add versions")
 
 
 
-                  r$networkList[[r$position]] <- list(network = network,  pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster, canopyRaster = r$networkList[[r$position]]$canopyRaster )
+                  r$networkList[[r$position]] <- list(network = network,  pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster, canopyRaster = r$networkList[[r$position]]$canopyRaster, heatNeed = r$networkList[[r$position]]$heatNeed)
                   # r$networkList[[r$position]]$network <- network
 
                   #remove pathUsage results, as new results must be simulated
                   r$networkList[[r$position]]$pathUsage <- NULL
+                  #...and the heatwave results beside it (vftScenarioSim())
+                  r$networkList[[r$position]]$heatSims <- NULL
 
                   vftDbg("NETWORK AFTER:")
                   vftDbg(network)
@@ -3892,7 +4163,7 @@ vftDbg("add versions")
                   newNetwork <- tidygraph::tbl_graph(nodes = networkNodes, edges = newNetworkEdges, directed = FALSE)
 
                   #re-insert network in networkList
-                  r$networkList[[r$position]] <- list(network = newNetwork, pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster, canopyRaster = r$networkList[[r$position]]$canopyRaster )
+                  r$networkList[[r$position]] <- list(network = newNetwork, pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster, canopyRaster = r$networkList[[r$position]]$canopyRaster, heatNeed = r$networkList[[r$position]]$heatNeed)
                   # r$networkList[[r$position]]$network <- newNetwork
 
                   # tbl <- tbl_graph(edges = networkEdges , nodes = r$networkList[[r$position]]$network %>% tidygraph::activate(nodes) %>% as_tibble())
@@ -4014,6 +4285,8 @@ vftDbg("add versions")
 
                 #remove pathUsage results, as new results must be simulated
                 r$networkList[[r$position]]$pathUsage <- NULL
+                #...and the heatwave results beside it (vftScenarioSim())
+                r$networkList[[r$position]]$heatSims <- NULL
 
               }
 
@@ -4292,6 +4565,8 @@ vftDbg("EDGE CLICK")
 
               #remove pathUsage results, as new results must be simulated
               r$networkList[[r$position]]$pathUsage <- NULL
+              #...and the heatwave results beside it (vftScenarioSim())
+              r$networkList[[r$position]]$heatSims <- NULL
 
               r$shapeWasClicked <- TRUE
             }
@@ -4311,10 +4586,12 @@ obsEvent_deleteEdge <- shiny::observeEvent(input$deleteEdge, {
   network <- r$networkList[[r$position]]$network
   network <- network %>% tidygraph::activate(edges) %>% dplyr::filter(.data$edgeID_2 !=  r$edgID )
 
-  r$networkList[[r$position]] <- list(network = network,  pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster, canopyRaster = r$networkList[[r$position]]$canopyRaster)
+  r$networkList[[r$position]] <- list(network = network,  pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster, canopyRaster = r$networkList[[r$position]]$canopyRaster, heatNeed = r$networkList[[r$position]]$heatNeed)
 
   #remove pathUsage results, as new results must be simulated
   r$networkList[[r$position]]$pathUsage <- NULL
+  #...and the heatwave results beside it (vftScenarioSim())
+  r$networkList[[r$position]]$heatSims <- NULL
 
   # r$networkList[[r$position]]$network <- network
   #redraw edges
@@ -4434,6 +4711,8 @@ obsEvent_submitPath <- shiny::observeEvent(input$submitPath, {
 
   #remove pathUsage results, as new results must be simulated
   r$networkList[[r$position]]$pathUsage <- NULL
+  #...and the heatwave results beside it (vftScenarioSim())
+  r$networkList[[r$position]]$heatSims <- NULL
 
   }, ignoreInit = TRUE)
 
@@ -4536,6 +4815,8 @@ obsEvent_submitNewPath <- shiny::observeEvent(input$submitNewPath, {
 
   #remove pathUsage results, as new results must be simulated
   r$networkList[[r$position]]$pathUsage <- NULL
+  #...and the heatwave results beside it (vftScenarioSim())
+  r$networkList[[r$position]]$heatSims <- NULL
 
 }, ignoreInit = TRUE)
 
@@ -4748,6 +5029,8 @@ obsEvent_chooseParking <- shiny::observeEvent(input$chooseParking, {
 
     #remove pathUsage results, as new results must be simulated
     r$networkList[[r$position]]$pathUsage <- NULL
+    #...and the heatwave results beside it (vftScenarioSim())
+    r$networkList[[r$position]]$heatSims <- NULL
 
 
 }, ignoreInit = TRUE)
@@ -4915,6 +5198,8 @@ if(!is.null(r$residentialPolygons)){
 
   #remove pathUsage results, as new results must be simulated
   r$networkList[[r$position]]$pathUsage <- NULL
+  #...and the heatwave results beside it (vftScenarioSim())
+  r$networkList[[r$position]]$heatSims <- NULL
 
 }, ignoreInit = TRUE)
 
@@ -5042,7 +5327,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
                   tbl <- tidygraph::tbl_graph(edges = r$networkList[[r$position]]$network %>% tidygraph::activate(edges) %>% dplyr::as_tibble(), nodes = newNetworkNodes, directed = FALSE)
 
 
-                  r$networkList[[r$position]] <- list(network = tbl,  pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster, canopyRaster = r$networkList[[r$position]]$canopyRaster )
+                  r$networkList[[r$position]] <- list(network = tbl,  pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster, canopyRaster = r$networkList[[r$position]]$canopyRaster, heatNeed = r$networkList[[r$position]]$heatNeed)
                   # r$networkList[[r$position]]$network <- network
 
 
@@ -5050,6 +5335,8 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
 
                   #remove pathUsage results, as new results must be simulated
                   r$networkList[[r$position]]$pathUsage <- NULL
+                  #...and the heatwave results beside it (vftScenarioSim())
+                  r$networkList[[r$position]]$heatSims <- NULL
 
                   proxy = leaflet::leafletProxy("versionMap")
 
@@ -5184,7 +5471,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
                   #recreate network graph and insert in reactives
                   tbl <- tidygraph::tbl_graph(edges = newNetworkEdges , nodes = r$networkList[[r$position]]$network %>% tidygraph::activate(nodes) %>% dplyr::as_tibble(), directed = FALSE)
 
-                  r$networkList[[r$position]] <- list(network = tbl,  pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster, canopyRaster = r$networkList[[r$position]]$canopyRaster )
+                  r$networkList[[r$position]] <- list(network = tbl,  pathUsage = r$networkList[[r$position]]$pathUsage, parking = r$networkList[[r$position]]$parking, residential = r$networkList[[r$position]]$residential , newAttr = r$networkList[[r$position]]$newAttr, paintedRaster = r$networkList[[r$position]]$paintedRaster, canopyRaster = r$networkList[[r$position]]$canopyRaster, heatNeed = r$networkList[[r$position]]$heatNeed)
                   # r$networkList[[r$position]]$network <- network
 
                   #insert node in dataframe
@@ -5340,6 +5627,8 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
 
                   #remove pathUsage results, as new results must be simulated
                   r$networkList[[r$position]]$pathUsage <- NULL
+                  #...and the heatwave results beside it (vftScenarioSim())
+                  r$networkList[[r$position]]$heatSims <- NULL
 
                 }else{
 
@@ -6486,6 +6775,7 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
       setConflictsOn(FALSE)
       setConflictsOrigOn(FALSE)
       setUsageOn(FALSE)
+      heatNeedOn <<- FALSE
       conflictVisit <<- conflictVisit + 1L
       SMcolors      <<- .rx$SMcolors()
       shp_PA        <<- .rx$shp_PA()
@@ -6699,6 +6989,10 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
           r$heatBin <- tgt$bin
           shiny::updateRadioButtons(session, "heatBin", selected = tgt$bin)
         }
+        #step 5's heat mitigation search lacked a heat map: run it here, from
+        #an observer (this runs inside the navigation)
+        if(isTRUE(tgt$detect %in% VFT_HEAT_NEED_CHOICES))
+          heatNeedAuto(list(n = as.numeric(Sys.time()), choice = tgt$detect))
       }
       #heat maps of cards that no longer exist, and the record of a map on a map
       #instance this visit is about to replace
@@ -6769,6 +7063,10 @@ obsEvent_cnclEdgNode <- observeEvent(input$cnclEdgNode, {
                 #page earlier.
                 smCreate  = shiny::reactive(smCreate()),
                 aoiCreate = shiny::reactive(aoiCreate()),
+                #the automatic Zielgebiete without leaving the page, and the
+                #function app_server answers with (see aoiAutoDone() above)
+                aoiAuto     = shiny::reactive(aoiAuto()),
+                aoiAutoDone = aoiAutoDone,
                 #the same for any other step, as list(step, n): the offers a
                 #click on a disabled control makes (see "A CLICK ON A DISABLED
                 #CONTROL") - step 4 for the network, step 1 for a smaller area

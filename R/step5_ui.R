@@ -32,38 +32,51 @@ STEP5_CSS <- "
 .vft5-actions{ flex:0 0 auto; padding-left:216px; }
 
 /* the scenario list: a 2-column grid of square cards, the teal 'Manage
-   scenarios' tile first. The cards are insertUI'd into #placeholder_step5 (updateVersions()
-   in step5_server.R), each in a wrapper div with a 5px spacer either side, so
-   #placeholder_step5 is display:contents, its wrappers are grid cells, and the
-   spacers go. The card's 120px size is an inline style, hence !important. */
+   scenarios' tile first. The cards are insertUI'd into #placeholder_step5
+   (updateVersions() in step5_server.R), each in a wrapper div.vft5Card that
+   holds the button and, as its sibling, the strip of simulation icons - so
+   #placeholder_step5 is display:contents and its wrappers are grid cells and
+   the strip's positioning box. The card's 120px size is an inline style,
+   hence !important. */
 #topPlaceHolder{ display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:10px; padding:10px 0; }
 #placeholder_step5{ display:contents; }
-#placeholder_step5 > div{ min-width:0; }
-#placeholder_step5 > div > div{ display:none; }
+#placeholder_step5 > div{ position:relative; min-width:0; }
 #placeholder_step5 .btn{ position:relative; display:flex; align-items:center; justify-content:center;
-  width:100% !important; height:auto !important; aspect-ratio:1 / 1; margin:0; padding:6px 8px 18px;
+  width:100% !important; height:auto !important; aspect-ratio:1 / 1; margin:0; padding:6px 8px 34px;
   background:#ffffff; border-style:solid; border-radius:10px; white-space:normal; overflow:hidden;
   line-height:1.2; }
 #placeholder_step5 .btn .action-label{ display:-webkit-box; -webkit-box-orient:vertical;
-  -webkit-line-clamp:4; overflow:hidden; max-width:100%; overflow-wrap:anywhere; text-align:center; }
+  -webkit-line-clamp:3; overflow:hidden; max-width:100%; overflow-wrap:anywhere; text-align:center; }
 /* selected before notSelected: the server adds notSelected to the card it
    leaves without taking selected off, so the later rule has to win */
 #placeholder_step5 .btn.selected{ border-width:3px; border-color:#006268; }
 #placeholder_step5 .btn.notSelected{ border-width:1px; border-color:#b9c1bf; }
-/* has this scenario been simulated: an empty ring or a teal tick, bottom left.
-   These were two PNGs used as the whole card's background. */
-#placeholder_step5 .btn::after{ content:''; position:absolute; left:6px; bottom:6px; width:18px;
-  height:18px; box-sizing:border-box; border-radius:50%; }
-#placeholder_step5 .btn.noSim::after{ border:2px solid #9aa3a1; }
-#placeholder_step5 .btn.withSim::after{ background:#006268 url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E\") center / 12px no-repeat; }
 
-/* a heatwave result: the time of day's sun, bottom right of the card, across
-   from the simulated tick. Grey once the scenario has been repainted since -
-   the result is kept, as the Hitzeminderung page keeps a stale map. */
-#placeholder_step5 .btn .vft5HwBadge{ position:absolute; right:5px; bottom:4px; display:none;
-  width:20px; height:20px; }
-#placeholder_step5 .btn.vftHw .vft5HwBadge{ display:block; }
-#placeholder_step5 .btn.vftHwStale .vft5HwBadge{ filter:grayscale(1); opacity:.6; }
+/* the card's three simulations (step5SimIconsTag() in R/heatwave_helpers.R),
+   side by side across its foot, all the same size: the tick is the normal
+   simulation (an empty ring until it has run), the suns the morning and
+   afternoon heatwave runs - shown only while the heatwave switch is on
+   (.vft5HwOn, heatwaveSync()). Grey and dashed: not run yet, a click launches
+   it. Grey and solid: run on a heat map the scenario has been repainted since.
+   The teal ring is the result on the map. */
+.vft5SimIcons{ position:absolute; left:7px; right:7px; bottom:6px; z-index:2;
+  display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:4px; }
+.vft5SimIcon{ width:100%; aspect-ratio:1 / 1; box-sizing:border-box; padding:0; margin:0;
+  display:flex; align-items:center; justify-content:center; cursor:pointer;
+  border-radius:50%; border:1px solid transparent; background:transparent; }
+.vft5SimIcon svg{ display:block; width:100%; height:100%; }
+.vft5SimIcon.vft5SimHeat{ border-color:#888; background:#ffffff; }
+.vft5SimIcon.vft5SimHeat svg{ width:84%; height:84%; }
+.vft5SimIcon.vft5SimHeat{ visibility:hidden; }
+#topPlaceHolder.vft5HwOn .vft5SimIcon.vft5SimHeat{ visibility:visible; }
+.vft5SimIcon:hover{ filter:brightness(1.08); }
+.vft5SimIcon.vft5SimHeat.vft5SimNone, .vft5SimIcon.vft5SimStale{ filter:grayscale(1); opacity:.45; }
+.vft5SimIcon.vft5SimHeat.vft5SimNone{ border-style:dashed; }
+.vft5SimIcon.vft5SimNone:hover, .vft5SimIcon.vft5SimStale:hover{ opacity:.8; }
+.vft5SimIcon.vft5SimShown{ box-shadow:0 0 0 2.5px #ffffff, 0 0 0 5px #006268; opacity:1; }
+.vft5SimIcon.vft5SimPending{ filter:none; opacity:1; border:2px solid #006268;
+  animation:vft5SimPulse .9s ease-in-out infinite alternate; }
+@keyframes vft5SimPulse{ from{ box-shadow:0 0 0 0 rgba(0,98,104,.5); } to{ box-shadow:0 0 0 4px rgba(0,98,104,0); } }
 
 /* the heatwave switch over the launch button, and what it opens */
 .vft5-hw{ display:flex; flex-direction:column; gap:6px; width:200px; margin:0 0 10px; }
@@ -75,6 +88,25 @@ STEP5_CSS <- "
   border:1px solid #d97700; border-radius:7px; background:#ffffff; color:#8a4b00;
   font-size:12px; font-weight:600; }
 .vft5-hwGo:hover{ background:#fff8ec; }
+/* the heat mitigation search: one button, its label by the row's state */
+.vft5-hwNeedRow{ display:flex; gap:4px; align-items:stretch; }
+.vft5-hwNeed{ flex:1 1 auto; display:flex; align-items:center; gap:6px; padding:5px 8px; text-align:left;
+  border:1px solid #006268; border-radius:7px; background:#ffffff; color:#006268;
+  font-size:12px; font-weight:600; line-height:1.25; }
+.vft5-hwNeed:hover{ background:#eef6f6; }
+.vft5-hwNeed > svg{ flex:0 0 auto; }
+.vft5-hwNeed .vftHnLblShow, .vft5-hwNeed .vftHnLblHide{ display:none; }
+.vftHnHas .vft5-hwNeed .vftHnLblFind{ display:none; }
+.vftHnHas .vft5-hwNeed .vftHnLblShow{ display:inline; }
+.vftHnHas.vftHnShown .vft5-hwNeed{ background:#006268; color:#ffffff; }
+.vftHnHas.vftHnShown .vft5-hwNeed .vftHnLblShow{ display:none; }
+.vftHnHas.vftHnShown .vft5-hwNeed .vftHnLblHide{ display:inline; }
+/* ask again (another time of day, or after painting): there once a search is
+   stored, orange once it no longer describes the card */
+.vft5-hwNeedRedo{ display:none; flex:0 0 30px; align-items:center; justify-content:center; padding:0;
+  border:1px solid #006268; border-radius:7px; background:#ffffff; color:#006268; }
+.vftHnHas .vft5-hwNeedRedo{ display:flex; }
+.vftHnStale .vft5-hwNeedRedo{ border-color:#d97700; background:#fff4e0; color:#8a4b00; }
 
 .leaflet .legend{ text-align:left; font-size:15px; }
 "
@@ -89,7 +121,29 @@ vftDbg("UI6")
         #activate translation for this ui
         vftUseI18n(i18n), #the table itself is emitted once, in app_ui()
         shinyjs::useShinyjs(),
-        shiny::tags$head(shiny::tags$style(shiny::HTML(STEP5_CSS))),
+        shiny::tags$head(shiny::tags$style(shiny::HTML(STEP5_CSS)),
+                         shiny::tags$style(shiny::HTML(VFT_HEAT_NEED_CSS))),
+        #the server's replacement for one card's icon strip, as markup, so the
+        #strip has one generator and it is R's (sendSimIcons() in
+        #step5_server.R). A strip the deferred insertUI() has not put in the
+        #page yet is retried for a moment with the LATEST markup sent for it.
+        shiny::tags$script(shiny::HTML(paste(
+          "if(!window.__vft5SimIcons){ window.__vft5SimIcons = true;",
+          "  var latest = {};",
+          "  var put = function(card, tries){",
+          "    var m = latest[card]; if(!m) return;",
+          "    var el = document.querySelector('.vft5SimIcons[data-card=\"' + card + '\"]');",
+          "    if(!el){ if(tries < 40) setTimeout(function(){ put(card, tries + 1); }, 50); return; }",
+          "    delete latest[card];",
+          "    var box = document.createElement('div'); box.innerHTML = m.html;",
+          "    var neu = box.firstElementChild; el.replaceWith(neu);",
+          "    if(m.pending){ var ic = neu.querySelector('[data-slot=\"' + m.pending + '\"]');",
+          "      if(ic) ic.classList.add('vft5SimPending'); }",
+          "  };",
+          "  Shiny.addCustomMessageHandler('vft5-sim-icons', function(m){",
+          "    var waiting = !!latest[m.card]; latest[m.card] = m; if(!waiting) put(m.card, 0);",
+          "  });",
+          "}"))),
         #the page banner (language select, title, logo, help/info) now lives
         #once in the nav bar - see vftStepNav() in R/app_ui.R. These three
         #inputs stay, just hidden: this step's server still listens for its
@@ -269,7 +323,24 @@ vftDbg("UI6")
                     shiny::tags$button(id = ns("heatwaveGo"), type = "button",
                                        class = "vftB action-button vft5-hwGo",
                                        vftIcon("heat", 16),
-                                       shiny::span(i18n$t("Hitzekarte erstellen")))))
+                                       shiny::span(i18n$t("Hitzekarte erstellen"))))),
+                  #THE HEAT MITIGATION SEARCH. Where usage falls most from the
+                  #normal run to the heatwave run (R/heat_need_helpers.R). One
+                  #button, three labels picked by the row's classes
+                  #(heatNeedSync() in step5_server.R): "erkennen" with nothing
+                  #stored, then a show/hide toggle; the small one beside it asks
+                  #again once the stored search no longer describes the card.
+                  shiny::div(id = ns("heatNeedRow"), class = "vft5-hwNeedRow",
+                    shiny::tags$button(id = ns("heatNeedBtn"), type = "button",
+                                       class = "vftB action-button vft5-hwNeed",
+                                       vftIcon("search", 16),
+                                       shiny::span(class = "vftHnLblFind", i18n$t("Bereiche mit Hitzeminderungsbedarf erkennen")),
+                                       shiny::span(class = "vftHnLblShow", i18n$t("Hitzeminderungsbedarf anzeigen")),
+                                       shiny::span(class = "vftHnLblHide", i18n$t("Hitzeminderungsbedarf ausblenden"))),
+                    shiny::tags$button(id = ns("heatNeedRedo"), type = "button",
+                                       class = "vftB action-button vft5-hwNeedRedo",
+                                       title = i18n$t("Neu erkennen"),
+                                       vftIcon("reset", 14)))
                 ))
               ))),
 

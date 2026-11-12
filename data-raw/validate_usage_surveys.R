@@ -215,9 +215,68 @@ durChoiceDiv <- function() if(!is.null(DURATION) && DURATION$scope == "walk") DU
 AGENT_TYPES <- c("walkNat", "walkSoc", "dogNat", "dogProx", "ebikeNat", "bikeSport", "jogger")
 #What the duration covers (see the header). "whole": an agent turns home when its time
 #out (timer, the walk there included) plus the walk back - taken as long as the walk
-#there, timeNotAccounted - reaches its duration.
+#there, timeNotAccounted - reaches its duration. "home": the duration is the whole
+#outing and the agent turns home once its time out plus the walk home FROM WHERE IT IS
+#NOW, by the route it will take (vftRouteHome), reaches it - so it is home at the
+#duration, give or take one leg. "whole" assumes the way back is as long as the way
+#there; at Wigger it ran ~3x longer (agents wander away from their entrance), which
+#left outings 1.4x their duration.
 OUTING <- Sys.getenv("VFT_VAL_OUTING", "area")
-if(!OUTING %in% c("area", "whole", "half")) stop("VFT_VAL_OUTING must be area, whole or half")
+if(!OUTING %in% c("area", "whole", "half", "home")) stop("VFT_VAL_OUTING must be area, whole, half or home")
+#"home": which agents' time is up. env = launchSim()'s frame (vftTimeOver() is called
+#from there). An agent at a node turns home once its time out, plus its way home from
+#that node by the route it will take (vftRouteHome), plus one typical next leg (the mean
+#length of the edges at the node) reaches its duration: it does not set off on a leg it
+#could not, on average, walk and still be home in time. Without that leg the first test
+#ended outings up to 27 min late - Wigger has 2 km edges. The exact way home is a
+#Dijkstra per agent, so it is only run for agents whose straight-line distance home (a
+#lower bound of any route) plus that leg already reaches the duration.
+.homeLegs <- new.env()
+homeLegOf <- function(env){
+  key <- paste(length(env$edgeLength), sum(env$edgeLength))
+  if(!identical(.homeLegs$key, key)){
+    e <- env$edgeEnds
+    .homeLegs$leg <- tapply(c(env$edgeLength, env$edgeLength), c(e$from, e$to), mean)
+    .homeLegs$key <- key
+  }
+  .homeLegs$leg
+}
+homeTimeOver <- function(timeExt, timer, env){
+  dp   <- env$dayPop
+  over <- rep(FALSE, length(timeExt))
+  live <- dp$active %in% TRUE & !(dp$returning %in% TRUE) & env$agentsReachedNextV %in% TRUE &
+          is.finite(timeExt) & !is.na(dp$currentV) & !is.na(dp$startV)
+  if(!any(live)) return(over)
+  vt <- env$vertexTable; xy <- env$vertexCoords
+  a  <- xy[match(dp$currentV[live], vt$nodeID), , drop = FALSE]
+  b  <- xy[match(dp$startV[live],   vt$nodeID), , drop = FALSE]
+  if(all(abs(xy[, 1]) <= 180)){   #lon/lat: metres on the local scale, 2 % under
+    k <- cos(mean(xy[, 2]) * pi / 180)
+    d <- 0.98 * sqrt(((a[, 1] - b[, 1]) * 111320 * k)^2 + ((a[, 2] - b[, 2]) * 110540)^2)
+  }else d <- sqrt((a[, 1] - b[, 1])^2 + (a[, 2] - b[, 2])^2)
+  timer <- rep_len(timer, length(timeExt))   #(per agent: time - its start time)
+  leg  <- as.numeric(homeLegOf(env)[as.character(dp$currentV)]); leg[!is.finite(leg)] <- 0
+  lb   <- timer[live] + ns$vftLegMinutes(d + leg[live], dp$speed[live])
+  cand <- which(live)[!(lb < timeExt[live])]   #(an unknown bound counts as a candidate)
+  if(!length(cand)) return(over)
+  at   <- dp$currentV[cand] == dp$startV[cand]
+  over[cand[at]] <- TRUE
+  cand <- cand[!at]
+  if(length(cand)){
+    r <- ns$vftRouteHome(adj_ptr = env$listOfPointers$adj, src_v = dp$currentV[cand], goal_v = dp$startV[cand],
+                         agentTyps = dp$agentTyp[cand], inAoi = env$inAoiNode)
+    over[cand] <- !is.finite(r$distance) |
+      timer[cand] + ns$vftLegMinutes(r$distance + leg[cand], dp$speed[cand]) >= timeExt[cand]
+  }
+  if(nzchar(Sys.getenv("VFT_HOME_DEBUG"))){
+    w <- which(live)
+    utils::write.table(data.frame(timer = timer[w], id = dp$id[w], cur = dp$currentV[w], st = dp$startV[w], T = timeExt[w],
+                                  lb = lb, over = over[w], beh = dp$behaviour[w]),
+                       Sys.getenv("VFT_HOME_DEBUG"), append = TRUE, sep = "\t", row.names = FALSE,
+                       col.names = !file.exists(Sys.getenv("VFT_HOME_DEBUG")))
+  }
+  over
+}
 #the way home and the rounding of walking times (see the header)
 RETURN_ROUTE <- Sys.getenv("VFT_VAL_RETURN", "attr")
 if(!RETURN_ROUTE %in% c("shortest", "attr")) stop("VFT_VAL_RETURN must be shortest or attr")
@@ -265,13 +324,15 @@ RUM <- local({
 #The time-dependent area choice (data-raw/calibrate_aoi_rum_time.R; aoiProbsTime() in
 #data-raw/engine_corrections.R): list(models = list(<name> = c(<column> = b, ...)),
 #consts = list(dulnCenter, dulnScale)), optionally areaDuln = list(<ctx> = c(<AOI> = DULN)):
-#the area DULN the choice reads instead of the scenario's.
+#the area DULN the choice reads instead of the scenario's; and areaX = list(<ctx> = matrix,
+#rownames the AOI ids): area descriptors for the coefficients of a model that are not
+#rumTimeX()'s columns (data-raw/calibrate_aoi_rum_desc.R, 2026-11-10).
 RUM_TIME <- local({
   f <- Sys.getenv("VFT_VAL_RUM_TIME", "")
   if(!nzchar(f)) NULL else {
     x <- readRDS(f)
     if(!all(c("models", "consts") %in% names(x))) stop("VFT_VAL_RUM_TIME: ", f, " needs models and consts")
-    c(x[intersect(c("models", "consts", "areaDuln"), names(x))], list(file = normalizePath(f, winslash = "/"), md5 = unname(tools::md5sum(f))))
+    c(x[intersect(c("models", "consts", "areaDuln", "areaX"), names(x))], list(file = normalizePath(f, winslash = "/"), md5 = unname(tools::md5sum(f))))
   }
 })
 rumTimeCoefs <- function(spec){
@@ -328,6 +389,8 @@ PATHS <- list(
   #the full FilBleu export: every route with its activity and motives
   filBleuAll    = file.path(ONEDRIVE, "Local Large Datasets/FilBleu/filBleu_allPaths_clean.shp"),
   glattParkHeat = file.path(ONEDRIVE, "Local Large Datasets/GlattPark/GlattPark_heatMap.tif"),
+  #each GlattPark respondent's visited 500 m cells (the heatmap is their sum): the noise ceiling
+  glattParkGrid = "C:/Users/frueh/Documents/Local Data/Shared visitorFlow Project Data/04_Glattpark_survey/GitterBesuchteNaherholungsorte.csv",
   #reference only: the published survey rasters, old areas and old results.
   #VFT_VAL_OLD_DIR stands in when the H: share is not mounted (any folder holding
   #performance_pearson.RData)
@@ -492,7 +555,26 @@ TYPES <- list(
   #data-raw/engine_corrections.R). Takes the site durations, type mix and outing rule.
   twoStageRumTime = list(label = "Two-stage RUM-time x3", aoiChoice = "engine", routing = "engine", movement = "engine",
                          parking = TRUE, twoStage = TRUE, rumTime = "interaction",
-                         twoStageParams = list(explorers = 3))
+                         twoStageParams = list(explorers = 3)),
+  #2026-11-10, three structural tests on the reference model (RUM-time, E2c DULN):
+  #...the area choice with area descriptors next to the aggregated DULN - the lake band,
+  #protected nature, viewpoints and the forest by its stand-type score (the file's model
+  #"interactionD" and its areaX; data-raw/calibrate_aoi_rum_desc.R)
+  fullRumTimeD = list(label = "Full RUM-time + descriptors", aoiChoice = "engine", routing = "engine", movement = "engine",
+                      parking = TRUE, rumTime = "interactionD"),
+  #...the same with the descriptors' coefficients held >= 0, as E2c holds its nature
+  #elements (the file's model "interactionDc")
+  fullRumTimeDc = list(label = "Full RUM-time + descriptors >= 0", aoiChoice = "engine", routing = "engine", movement = "engine",
+                       parking = TRUE, rumTime = "interactionDc"),
+  #...the two-stage walk choice corrected for how its library was drawn (walkCorr;
+  #choosePathsRumTime() in data-raw/engine_corrections.R): the sampling correction with
+  #the area's size term back (SC), or the path-size term for overlapping walks (PS)
+  twoStageRumTimeSC = list(label = "Two-stage RUM-time x3, sampling corr.", aoiChoice = "engine", routing = "engine",
+                           movement = "engine", parking = TRUE, twoStage = TRUE, rumTime = "interaction",
+                           twoStageParams = list(explorers = 3), walkCorr = "area"),
+  twoStageRumTimePS = list(label = "Two-stage RUM-time x3, path size", aoiChoice = "engine", routing = "engine",
+                           movement = "engine", parking = TRUE, twoStage = TRUE, rumTime = "interaction",
+                           twoStageParams = list(explorers = 3), walkCorr = "pathsize")
 )
 CONTRASTS <- list(c("full", "nearby"), c("nearby", "nearbyRandom"),
                   c("nearbyRandom", "random"), c("full", "random"),
@@ -642,6 +724,69 @@ CONTRASTS <- c(CONTRASTS, list(c("fullRumTimeE2CT8", "fullRumTimeE2T8"), c("full
                                c("fullRumTimeE2CT8", "nearby"), c("fullRumTimeE2CT8", "nearbyRandom"),
                                c("fullRumTimeE2CT8", "fullRandom"), c("fullRumTimeE2T8", "fullRumTimeE2C"),
                                c("fullRumTimeE2T8", "nearbyRandom")))
+#the survey sweep (2026-11-10): RUM-time on a row's DULN with the area choice calibrated on
+#the Glatt routes (CalG) or on the GlattPark survey (CalGP), compare-only
+TYPES[["fullRumTimeCalG"]]  <- utils::modifyList(TYPES$fullRumTime, list(label = "Full (Glatt calibration)"))
+TYPES[["fullRumTimeCalGP"]] <- utils::modifyList(TYPES$fullRumTime, list(label = "Full (GlattPark calibration)"))
+CONTRASTS <- c(CONTRASTS, list(c("fullRumTimeCalG", "fullRumTimeCalGP"), c("fullRumTimeCalG", "nearby"),
+                               c("fullRumTimeCalG", "nearbyRandom"), c("fullRumTimeCalG", "fullRandom"),
+                               c("fullRumTimeCalGP", "nearby"), c("fullRumTimeCalGP", "nearbyRandom"),
+                               c("fullRumTimeCalGP", "fullRandom")))
+#the three structural tests of 2026-11-10 against the reference pair (RUM-time and its
+#two-stage, both on E2c), which sit in the same folder under their own names
+CONTRASTS <- c(CONTRASTS, list(c("fullRumTimeD", "fullRumTime"), c("fullRumTimeDc", "fullRumTime"),
+                               c("fullRumTimeD", "fullRumTimeDc"), c("fullRumTimeD", "nearbyRandom"),
+                               c("fullRumTimeDc", "nearbyRandom"), c("twoStageRumTimeSC", "twoStageRumTime"),
+                               c("twoStageRumTimePS", "twoStageRumTime"), c("twoStageRumTimeSC", "fullRumTime"),
+                               c("twoStageRumTimePS", "fullRumTime"), c("twoStageRumTimeSC", "twoStageRumTimePS"),
+                               c("twoStageRumTimeSC", "fullRumTimeD")))
+#...and every one of them against the three baselines
+for(m in c("fullRumTime", "fullRumTimeD", "twoStageRumTime", "twoStageRumTimeSC", "twoStageRumTimePS"))
+  for(b in c("nearby", "nearbyRandom", "fullRandom")) CONTRASTS[[length(CONTRASTS) + 1]] <- c(m, b)
+#2026-11-10, the same models tailored and calibrated on GlattPark instead of Glatt: the DULN
+#fitted on GlattPark's survey (E2cGP_s0.5, one group; tailor_duln_elements.R stage sitefit)
+#and RUM-time re-fitted on GlattPark's visits (calibrate_aoi_glattpark.R, stage time).
+#Compare-only aliases (suffix GP) beside the Glatt-tailored runs under their own names
+for(t in c("fullRumTime", "twoStageRumTime", "twoStageRumTimePS", "nearby"))
+  TYPES[[paste0(t, "GP")]] <- utils::modifyList(TYPES[[t]], list(label = paste(TYPES[[t]]$label, "(GlattPark-tailored)")))
+for(m in c("fullRumTimeGP", "twoStageRumTimeGP", "twoStageRumTimePSGP")){
+  for(b in c("nearbyGP", "nearby", "nearbyRandom", "fullRandom")) CONTRASTS[[length(CONTRASTS) + 1]] <- c(m, b)
+  CONTRASTS[[length(CONTRASTS) + 1]] <- c(m, sub("GP$", "", m))
+}
+CONTRASTS <- c(CONTRASTS, list(c("twoStageRumTimePSGP", "fullRumTimeGP"), c("twoStageRumTimePSGP", "twoStageRumTimeGP"),
+                               c("nearbyGP", "nearby"), c("nearbyGP", "nearbyRandom"), c("nearbyGP", "fullRandom")))
+#2026-11-12 (act_pool): phase 2's recorded walks pooled by the 4 ACTIVITIES (walking, dog walking, jogging, biking)
+#instead of the 7 agent types: the duration class as before (ACT), or on the walk's length in reference-speed minutes (ACTL)
+TYPES[["twoStageRumTimePSACT"]]  <- utils::modifyList(TYPES$twoStageRumTimePS, list(label = "Two-stage RUM-time x3, path size, walks pooled by activity", walkPool = "activity"))
+TYPES[["twoStageRumTimePSACTL"]] <- utils::modifyList(TYPES$twoStageRumTimePS, list(label = "Two-stage RUM-time x3, path size, walks pooled by activity (length classes)", walkPool = "activityLen"))
+for(m in c("twoStageRumTimePSACT", "twoStageRumTimePSACTL"))
+  CONTRASTS <- c(CONTRASTS, list(c(m, "twoStageRumTimePS"), c(m, "nearbyRandom"), c(m, "fullRandom")))
+CONTRASTS <- c(CONTRASTS, list(c("twoStageRumTimePSACTL", "twoStageRumTimePSACT")))
+#2026-11-11 screen: two-stage RUM-time + path size with its explorers' route alpha changed
+#(exploreAlpha, the runs' VFT_VAL_ALPHA 5 otherwise; P ~ exp(value / alpha), so a higher alpha
+#is a more random junction choice; phase 2 has no route alpha) or with more explorers (x10)
+for(a in c(2, 10)) TYPES[[paste0("twoStageRumTimePSA", a)]] <- utils::modifyList(TYPES$twoStageRumTimePS,
+  list(label = paste0(TYPES$twoStageRumTimePS$label, ", explorers at alpha ", a), exploreAlpha = a))
+TYPES[["twoStageRumTimePSX10"]] <- utils::modifyList(TYPES$twoStageRumTimePS,
+  list(label = "Two-stage RUM-time x10, path size", twoStageParams = list(explorers = 10)))
+#...and phase 2's own randomness: the walk choice P ~ exp((U + ln PS) / s) among the
+#reachable walks of the agent's type and duration class (choosePathsRumTime(), params$alpha;
+#s = 1 is the RUM's estimated scale): s 0.5 sharper (more often the best walk), 2 and 4 softer
+for(s in c(0.5, 2, 4)) TYPES[[paste0("twoStageRumTimePSS", sub(".", "", s, fixed = TRUE))]] <-
+  utils::modifyList(TYPES$twoStageRumTimePS, list(label = paste0(TYPES$twoStageRumTimePS$label, ", walk choice scale ", s),
+                                                  twoStageParams = list(explorers = 3, alpha = s)))
+for(m in c("twoStageRumTimePSA2", "twoStageRumTimePSA10", "twoStageRumTimePSX10",
+           "twoStageRumTimePSS05", "twoStageRumTimePSS2", "twoStageRumTimePSS4"))
+  CONTRASTS <- c(CONTRASTS, list(c(m, "twoStageRumTimePS"), c(m, "nearbyRandom")))
+#Compare-only aliases (suffix H): the same type run with VFT_VAL_OUTING=home (home at its duration)
+for(t in c("fullRumTime", "twoStageRumTimePS", "nearby", "nearbyRandom")){
+  TYPES[[paste0(t, "H")]] <- utils::modifyList(TYPES[[t]], list(label = paste(TYPES[[t]]$label, "(home at T)")))
+  CONTRASTS[[length(CONTRASTS) + 1]] <- c(paste0(t, "H"), t)
+}
+for(m in c("fullRumTimeH", "twoStageRumTimePSH"))
+  for(b in c("nearbyH", "nearbyRandomH", "nearby", "nearbyRandom", "fullRandom")) CONTRASTS[[length(CONTRASTS) + 1]] <- c(m, b)
+CONTRASTS <- c(CONTRASTS, list(c("twoStageRumTimePSH", "fullRumTimeH"), c("nearbyH", "nearbyRandomH")))
+CONTRASTS <- CONTRASTS[!duplicated(vapply(CONTRASTS, paste, "", collapse = "|"))]
 #the baseline performance is standardised against: (r - r_base) / (1 - r_base)
 BASELINE <- "fullRandom"
 
@@ -1452,11 +1597,13 @@ simCore <- function(sc, seed, capture = TRUE){
     rule <- switch(OUTING,
                    area  = ORIG$vftTimeOver,
                    whole = function(timeExt, timeNotAccounted, timer) timeExt <= timer + timeNotAccounted,
-                   half  = function(timeExt, timeNotAccounted, timer) timeExt / 2 <= timer)
+                   half  = function(timeExt, timeNotAccounted, timer) timeExt / 2 <= timer,
+                   home  = NULL)
     rnd$tCalls <- 0L
     nsSet("vftTimeOver", function(timeExt, timeNotAccounted, timer){
       if(!identical(OUTING, "area")) rnd$outing <- TRUE
-      over <- rule(timeExt, timeNotAccounted, timer)
+      over <- if(identical(OUTING, "home")) homeTimeOver(timeExt, timer, parent.frame())
+              else rule(timeExt, timeNotAccounted, timer)
       if(OUTLOG){
         rnd$tCalls <- rnd$tCalls + 1L
         if(rnd$tCalls == 1L){
@@ -1571,9 +1718,15 @@ simCore <- function(sc, seed, capture = TRUE){
             AOI_dulns <- unname(aD[as.character(AOI_aois)])
             if(anyNA(AOI_dulns)) stop("VFT_VAL_RUM_TIME's areaDuln misses areas of ", sc$ctx)
           }
+          #the area descriptors of a model that has some (areaX): this context's matrix
+          bRT <- rumTimeCoefs(sc$spec)
+          aX  <- RUM_TIME$areaX[[sc$ctx]]
+          if(length(setdiff(names(bRT), c(RUM_TIME_COLS, colnames(aX)))))
+            stop("VFT_VAL_RUM_TIME: model ", sc$spec$rumTime, " needs descriptors the file's areaX lacks for ", sc$ctx)
+          if(any(names(bRT) %in% colnames(aX))) rnd$areaX <- TRUE
           res$prob <- aoiProbsTime(res, agentSpeeds, agentDurations, AOI_aois, AOI_dulns, AOI_areas,
-                                   CORR$reach, td, rumTimeCoefs(sc$spec), RUM_TIME$consts, floorH = CORR$floorH,
-                                   fallback = TRUE, fallbackCap = CORR$fallbackCap)
+                                   CORR$reach, td, bRT, RUM_TIME$consts, floorH = CORR$floorH,
+                                   fallback = TRUE, fallbackCap = CORR$fallbackCap, areaX = aX)
           return(res)
         }
         b <- if(is.null(sc$spec$rum)) list(bAttr = 3.23695, bDist = -6.65703) else rumCoefs(sc$spec, agentTyps)
@@ -1612,9 +1765,31 @@ simCore <- function(sc, seed, capture = TRUE){
         if(!is.null(sc$spec$rumTime)){
           if(attrWeight != 1) stop("the RUM-time walk choice has no heatwave weight")
           rnd$rumPaths <- TRUE
+          #the walk choice's correction (walkCorr): the areas' m2 by AOI id, the edges'
+          #metres by edge id
+          wc <- if(is.null(sc$spec$walkCorr)) "none" else sc$spec$walkCorr
+          aoiArea <- edgeLen <- NULL
+          if(identical(wc, "area")){
+            if(anyDuplicated(sc$polys$AOI)) stop("walkCorr = area: an AOI id appears twice in the areas")
+            aoiArea <- stats::setNames(as.numeric(sc$polys$area), as.character(sc$polys$AOI))
+          }
+          if(identical(wc, "pathsize")){
+            ids <- igraph::edge_attr(sc$net, "edgeID")
+            edgeLen <- numeric(max(ids)); edgeLen[ids] <- igraph::edge_attr(sc$net, "SHAPE_Leng")
+          }
+          if(!identical(wc, "none")) rnd$walkCorr <- wc
+          #the walk library pooled by activity (walkPool, act_pool) instead of by agent type
+          wp <- if(is.null(sc$spec$walkPool)) "type" else sc$spec$walkPool
+          shiftT <- NULL
+          if(!identical(wp, "type")){
+            rnd$walkPool <- wp
+            len <- igraph::edge_attr(sc$net, "SHAPE_Leng")
+            shiftT <- vapply(ns$VFT_DULN_TYPE_COLS, function(cn){ v <- igraph::edge_attr(sc$net, cn); sum(v * len) / sum(len) }, 1)
+          }
           return(choosePathsRumTime(agents, lib, params, lenPtr = sc$lenPtr, b = rumTimeCoefs(sc$spec),
                                     consts = RUM_TIME$consts, reach = CORR$reach, floorH = CORR$floorH,
-                                    fallbackCap = CORR$fallbackCap))
+                                    fallbackCap = CORR$fallbackCap, corr = wc, aoiArea = aoiArea, edgeLen = edgeLen,
+                                    pool = wp, shift = shiftT))
         }
         choosePathsCorr(agents, lib, adjPtr, params, attrWeight, lenPtr = sc$lenPtr,
                         reach = CORR$reach, floorH = CORR$floorH, fallbackCap = CORR$fallbackCap)
@@ -1763,6 +1938,12 @@ simTask <- function(ctx, type, rep){
       stop("the corrected walk choice of the two-stage run never fired")
     if(isTRUE(sc$spec$twoStage) && !is.null(sc$spec$rumTime) && !isTRUE(r$rnd$rumPaths))
       stop("the RUM-time walk choice of the two-stage run never fired")
+    if(!is.null(sc$spec$walkPool) && !identical(r$rnd$walkPool, sc$spec$walkPool))
+      stop("the walk library's pooling (", sc$spec$walkPool, ") never fired")
+    if(!is.null(sc$spec$walkCorr) && !identical(r$rnd$walkCorr, sc$spec$walkCorr))
+      stop("the walk choice's correction (", sc$spec$walkCorr, ") never fired")
+    if(isTRUE(grepl("^interactionD", sc$spec$rumTime)) && !isTRUE(r$rnd$areaX))
+      stop("the area descriptors never entered the area choice")
   }
   if(isTRUE(sc$spec$twoStage) && is.null(r$out$results$twoStage))
     stop("the two-stage run returned no two-stage summary")
@@ -1801,6 +1982,7 @@ simTask <- function(ctx, type, rep){
               rumTime = if(is.null(sc$spec$rumTime)) NULL else
                 list(set = sc$spec$rumTime, file = RUM_TIME$file, md5 = RUM_TIME$md5,
                      coefs = RUM_TIME$models[[sc$spec$rumTime]], consts = RUM_TIME$consts),
+              walkCorr = sc$spec$walkCorr, walkPool = sc$spec$walkPool,
               #phase 2 of a two-stage run: the library, who found no walk, and who
               #took another duration's walk (fallback) or the closest one (pathFallback)
               twoStage = if(isTRUE(sc$spec$twoStage))
@@ -2039,6 +2221,27 @@ surveyView <- function(G, v, surBase){
   num <- as.vector(v$A %*% (surBase * ok))
   den <- as.vector(v$A %*% ok)
   ifelse(den > 0, num / den, 0)
+}
+
+#GlattPark's survey is a heatmap, but the count of respondents who visited each 500 m cell
+#(PATHS$glattParkGrid: a column per respondent). That gives the noise ceiling its half
+#splits: a respondent x base-cell matrix, used only there. NULL unless its column sums
+#reproduce the heatmap (r > .999).
+heatRespondents <- function(ctx, cfg, G, sv){
+  if(!identical(cfg$survey, "heatmap") || !file.exists(PATHS$glattParkGrid)) return(NULL)
+  u  <- utils::read.csv2(PATHS$glattParkGrid)
+  rc <- grep("^X[0-9]+E?$", colnames(u), value = TRUE)
+  xy <- sf::st_coordinates(sf::st_centroid(sf::st_as_sfc(u$WKT, crs = 2056)))
+  cell <- terra::cellFromXY(G$base, xy)
+  V <- !is.na(as.matrix(u[, rc, drop = FALSE])) & !is.na(cell)
+  ij <- which(V, arr.ind = TRUE)
+  L <- Matrix::sparseMatrix(i = ij[, 2], j = cell[ij[, 1]], x = 1, dims = c(length(rc), terra::ncell(G$base)))
+  tot <- as.vector(Matrix::colSums(L))
+  r <- suppressWarnings(stats::cor(tot, sv$surveyBase))
+  logf("compare %s: noise ceiling from %d respondents' visited cells; their sum vs the heatmap r %.5f, %d of %d cells equal",
+       ctx, length(rc), r, sum(abs(tot - sv$surveyBase) < 1e-9), length(tot))
+  if(!isTRUE(r > 0.999)){ logf("compare %s: the respondents' cells do not reproduce the heatmap - no ceiling", ctx); return(NULL) }
+  list(L = L, idx = seq_len(nrow(L)))
 }
 
 #The old recipe with terra, literally, on one pair of final maps.
@@ -2288,15 +2491,16 @@ compareContext <- function(ctx){
   M <- lapply(stats::setNames(types, types), function(t) do.call(rbind, lapply(draws, `[[`, t)))
   keys <- colnames(M[[1]])
 
-  #### the noise ceiling (Wigger, Glatt) ####
+  #### the noise ceiling (Wigger, Glatt: the lines; GlattPark: the respondents' cells) ####
   ceiling <- NULL
-  if(hasL){
+  cl <- if(hasL) list(L = sv$L, idx = respIdx) else heatRespondents(ctx, cfg, G, sv)
+  if(!is.null(cl)){
     set.seed(BASE_SEED + 5L)
-    ids  <- unique(sv$resp)
+    nId  <- max(cl$idx)
     half <- replicate(N_SPLITS, {
-      A  <- sample(length(ids), floor(length(ids) / 2))
-      wA <- as.numeric(respIdx %in% A)
-      sA <- as.vector(Matrix::crossprod(sv$L, wA)); sB <- as.vector(Matrix::crossprod(sv$L, 1 - wA))
+      A  <- sample(nId, floor(nId / 2))
+      wA <- as.numeric(cl$idx %in% A)
+      sA <- as.vector(Matrix::crossprod(cl$L, wA)); sB <- as.vector(Matrix::crossprod(cl$L, 1 - wA))
       unlist(lapply(names(views), function(vn)
         corBoth(surveyView(G, views[[vn]], sA), surveyView(G, views[[vn]], sB))))
     })
@@ -2325,7 +2529,10 @@ compareContext <- function(ctx){
   }
 
   #### spatial agreement beyond r ####
-  vSet <- unique(c("1_all", paste0(cfg$oldScale, "_all")))
+  #(every cell size of VFT_VAL_SCALES_M when it is set; 100 m and the published one otherwise)
+  vSet <- if(length(envList("VFT_VAL_SCALES_M", character(0)))) grep("^[0-9]+_all$", names(views), value = TRUE) else
+    unique(c("1_all", paste0(cfg$oldScale, "_all")))
+  vSet <- intersect(vSet, names(views))
   nRespAll <- if(hasL) nResp else NA_real_
   spatial <- do.call(rbind, lapply(types, function(t){
     x100  <- Matrix::rowSums(S[[t]])

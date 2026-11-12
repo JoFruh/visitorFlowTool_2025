@@ -234,6 +234,7 @@ step1_server <- function(id, i18n,
     #updateZoomText(); nothing else in step 1 cares, because the limit costs
     #only that one feature - every other step works at any size.
     r1$areaTooLarge <- FALSE
+    r1$shapeTooLarge <- FALSE
 
     r1$network <- NULL
 
@@ -804,6 +805,12 @@ step1_server <- function(id, i18n,
       r1$isNewShape <- TRUE
 
 
+      #past the server's ceiling the outline is not viable, exactly like a
+      #drawn ring that went over it: grey, and no confirm button (see the
+      #button observer below, which reads r1$shapeTooLarge)
+      tooBig <- isTRUE(aoiTooLargeForServer(r1$finalShape))
+      r1$shapeTooLarge <- tooBig
+
       bb <- sf::st_bbox(r1$finalShape)
       #update plot
       proxy <- leaflet::leafletProxy("areaSelectMap")|>
@@ -812,9 +819,9 @@ step1_server <- function(id, i18n,
         leaflet::addGeoJSON(geojson = geojsonsf::sf_geojson( r1$finalShape),
                    stroke = TRUE,
                    weight = 5,
-                   color = "black",
+                   color = if(tooBig) "#888888" else "black",
                    fill = TRUE,
-                   fillColor = "green",
+                   fillColor = if(tooBig) "#aaaaaa" else "green",
                    opacity = 1,
                    group = "eraseable",
                    options = leaflet::pathOptions(pane = "layer2"))
@@ -845,7 +852,7 @@ step1_server <- function(id, i18n,
       shinyjs::hide(id ="confirmButton1" )
       shinyjs::hide(id ="attrButton" )
 
-      if( button1Visible() ){
+      if( button1Visible() && !isTRUE(r1$shapeTooLarge) ){
         shinyjs::show(id = "confirmButton1")
         shinyjs::show(id ="attrButton" )
 
@@ -1188,6 +1195,7 @@ step1_server <- function(id, i18n,
     #shapefile / coordinates branch (confirm button 1)
     finaliseShapefile <- function(){
 
+      if(isTRUE(r1$shapeTooLarge)) return(invisible(NULL))
       if(reconfirmUnchanged()) return(invisible(NULL))
 
       #generate a final shapefile using shapefile or coordinates

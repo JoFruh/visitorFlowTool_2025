@@ -221,6 +221,24 @@ input.paintLevelCheckbox{ position:absolute; top:0; left:0; width:100%; height:1
 .vftHeatHasMap .vftHeatLblShow{ display:inline; }
 .vftHeatHasMap .vftHeatLblCalc{ display:none; }
 .vftHeatLblHide{ display:none; }
+/* THE HEAT MITIGATION SEARCH under the time of day: 'erkennen' with nothing
+   stored, then a show/hide toggle (held down while the circles are up); the
+   small button asks again once the stored search is stale. */
+.vftHnRow{ display:flex; gap:4px; margin-top:6px; }
+.vftHnBtn{ flex:1 1 auto; display:flex; align-items:center; gap:6px; min-height:34px; padding:4px 10px;
+  border:1px solid #006268; border-radius:8px; background:#ffffff; color:#006268;
+  font-size:12px; font-weight:600; line-height:1.2; text-align:left; }
+.vftHnBtn > svg{ flex:0 0 auto; }
+.vftHnBtn .vftHnLblShow, .vftHnBtn .vftHnLblHide{ display:none; }
+.vftHnHas .vftHnBtn .vftHnLblFind{ display:none; }
+.vftHnHas .vftHnBtn .vftHnLblShow{ display:inline; }
+.vftHnHas.vftHnShown .vftHnBtn{ background:#006268; color:#ffffff; }
+.vftHnHas.vftHnShown .vftHnBtn .vftHnLblShow{ display:none; }
+.vftHnHas.vftHnShown .vftHnBtn .vftHnLblHide{ display:inline; }
+.vftHnRedo{ display:none; flex:0 0 34px; align-items:center; justify-content:center; padding:0;
+  border:1px solid #006268; border-radius:8px; background:#ffffff; color:#006268; }
+.vftHnHas .vftHnRedo{ display:flex; }
+.vftHnStale .vftHnRedo{ border-color:#d97700; background:#fff4e0; color:#8a4b00; }
 .paintToolActive .vftHeatLblHide{ display:inline; }
 .paintToolActive .vftHeatLblCalc, .paintToolActive .vftHeatLblShow{ display:none; }
 /* WORK IN PROGRESS: the heat model runs in a daemon for seconds, so the button
@@ -303,7 +321,8 @@ vftDbg("UI6")
         #activate translation for this ui
         vftUseI18n(i18n), #the table itself is emitted once, in app_ui()
         shinyjs::useShinyjs(),
-        shiny::tags$head(shiny::tags$style(shiny::HTML(NV_CSS))),
+        shiny::tags$head(shiny::tags$style(shiny::HTML(NV_CSS)),
+                         shiny::tags$style(shiny::HTML(VFT_HEAT_NEED_CSS))),
               #the page banner (language select, title, logo, help/info) now
               #lives once in the nav bar - see vftStepNav() in R/app_ui.R.
               #These three inputs stay, just hidden: this step's server still
@@ -624,7 +643,27 @@ vftDbg("UI6")
                     shiny::tagList(shiny::HTML(heatBinIconSVG(b)), shiny::span(i18n$t(HEAT_BIN_KEYS[[b]])))),
                   choiceValues = HEAT_BINS,
                   selected = HEAT_BIN_DEFAULT),
-                class = "vftSeg")
+                class = "vftSeg"),
+              #WHERE HEAT COSTS RECREATION. The heat mitigation search
+              #(R/heat_need_helpers.R): with nothing stored for the selected
+              #scenario, "erkennen" asks which time of day and runs whatever is
+              #missing - heat maps, simulations - then circles the places where
+              #usage falls most in the heat. Stored, it is a show/hide toggle,
+              #and the small button beside it asks again once the search no
+              #longer describes the scenario (painted since). Classes on the row
+              #pick the label - heatNeedSync() in newVersions_server.R.
+              shiny::div(id = ns("heatNeedRow"), class = "vftHnRow",
+                shiny::tags$button(
+                  id = ns("heatNeedBtn"), type = "button",
+                  class = "vftB action-button vftHnBtn",
+                  vftIcon("search", 16),
+                  shiny::span(class = "vftHnLblFind", i18n$t("Bereiche mit Hitzeminderungsbedarf erkennen")),
+                  shiny::span(class = "vftHnLblShow", i18n$t("Hitzeminderungsbedarf anzeigen")),
+                  shiny::span(class = "vftHnLblHide", i18n$t("Hitzeminderungsbedarf ausblenden"))),
+                shiny::tags$button(id = ns("heatNeedRedo"), type = "button",
+                                   class = "vftB action-button vftHnRedo",
+                                   title = i18n$t("Neu erkennen"),
+                                   vftIcon("reset", 14)))
             )
           ),
           #filled by planimport.js while a plan is being placed; the paint

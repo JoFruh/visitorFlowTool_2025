@@ -917,7 +917,10 @@ app_server <- function(input, output, session){
       if(!isTRUE(hc$n > 0)) return(invisible(NULL))
       vftDbg(paste0("From step 5, go to Hitzeminderung for ", hc$name, " / ", hc$bin))
       r$selectedVersion <- hc$name
-      vftGoHitze(r, session, check = FALSE, target = list(card = hc$name, bin = hc$bin))
+      #`detect`: the heat mitigation search, to be run there (a heat map
+      #was missing). See "the heat mitigation search" in step5_server.R.
+      vftGoHitze(r, session, check = FALSE, target = list(card = hc$name, bin = hc$bin,
+                                                          detect = hc$detect))
     }, ignoreInit = TRUE)
 
     step5return
@@ -1025,6 +1028,38 @@ app_server <- function(input, output, session){
     shiny::observeEvent(newVersionsReturn$aoiCreate(), {
       vftDbg("From new versions, go to step 3 to determine the areas of interest")
       vftGoToStep(r, "step3", session)
+    }, ignoreInit = TRUE)
+
+    #The heat mitigation search on the Hitzeminderung page needs simulations, and
+    #they need Zielgebiete - which that door does not have. Rather than send the
+    #user to step 3, the page asks for the automatic ones (the next-step modal's
+    #"Automatische Zielgebiete", R/auto_aoi.R) and stays: the same generation, cut
+    #and commit, but no hand-over to step 5. The commit keeps the painted
+    #scenarios (vftScenarioListFor()), and the page is handed the new state to
+    #carry on with its run.
+    #The page's own arrival work (land cover baseline, underground mask) counts
+    #as a job in flight, and vftAutoAoISim() refuses while one is - so a user who
+    #clicks soon after arriving was told to wait and the run stopped. Here the
+    #request waits for those to finish instead (polled, up to 5 minutes).
+    shiny::observeEvent(newVersionsReturn$aoiAuto(), {
+      vftDbg("From new versions: automatic areas of interest, staying on the page")
+      go <- function() vftAutoAoISim(r, session,
+                    then = function() shiny::isolate({
+                      vftSnapshotWrite(r, session)
+                      newVersionsReturn$aoiAutoDone(TRUE, list(
+                        finalPolygons = r$finalPolygons, minThresh = r$minThresh,
+                        networkList = r$networkList))
+                    }),
+                    onFail = function() newVersionsReturn$aoiAutoDone(FALSE))
+      t0 <- Sys.time()
+      waitIdle <- function() shiny::withReactiveDomain(session, shiny::isolate({
+        if(isTRUE(session$isClosed())) return(invisible(NULL))
+        busy <- .vftAutoAoIRunning(session) || isTRUE(vftSessionBusy(session))
+        if(!busy) return(go())
+        if(difftime(Sys.time(), t0, units = "secs") > 300) return(go())  #refuses, and says why
+        later::later(waitIdle, 0.5)
+      }))
+      waitIdle()
     }, ignoreInit = TRUE)
 
     #...and the offers a click on one of its disabled controls makes, for the

@@ -150,6 +150,7 @@ trueAreaDistances <- function(ctx, net){
 #           s = (T / 60)^gamma, gamma = consts$gamma - more time, attractivity and size
 #           count more and proximity less, all by the same factor
 #U = X b over the columns b names (data-raw/calibrate_aoi_rum_time.R fits b).
+RUM_TIME_COLS <- c("zD", "lnA", "t", "tShare", "zD_tau", "lnA_tau", "t_tau", "zDs", "lnAs", "ts")
 rumTimeX <- function(duln, areaM2, tMin, Tmin, consts, cols){
   tau <- log(Tmin / 60)
   zD  <- (duln - consts$dulnCenter) / consts$dulnScale
@@ -164,10 +165,23 @@ rumTimeX <- function(duln, areaM2, tMin, Tmin, consts, cols){
 }
 
 #findClosestAOI_cpp()'s probabilities under rumTimeX()'s utility, with aoiProbsR()'s
-#reach rule and fallback on the real path length (`trueDist`, metres, as aoiProbsR)
+#reach rule and fallback on the real path length (`trueDist`, metres, as aoiProbsR).
+#`areaX` (2026-11-10): a matrix of area descriptors, one row per area (rownames = the
+#AOI ids), for the coefficients of b that rumTimeX() does not know - what an area is
+#(lake band, forest and its type score, ...; data-raw/area_descriptors.R), next to the
+#aggregated DULN. NULL = none: b must then name rumTimeX()'s columns only.
 aoiProbsTime <- function(res, agentSpeeds, agentDurations, AOI_aois, AOI_dulns, AOI_areas, reach,
-                         trueDist, b, consts, floorH = 0, fallback = FALSE, fallbackCap = Inf){
+                         trueDist, b, consts, floorH = 0, fallback = FALSE, fallbackCap = Inf,
+                         areaX = NULL){
   lastMatch <- function(x, table){ k <- match(x, rev(table)); ifelse(is.na(k), NA_integer_, length(table) + 1L - k) }
+  bx <- b[names(b) %in% colnames(areaX)]
+  b  <- b[!names(b) %in% names(bx)]
+  if(length(bx)){
+    rowX <- match(as.character(AOI_aois), rownames(areaX))
+    if(anyNA(rowX)) stop("aoiProbsTime: areaX misses area(s) ", paste(unique(AOI_aois[is.na(rowX)]), collapse = ", "))
+    #one value per entry of AOI_aois: the descriptors' part of the utility
+    uX <- drop(areaX[rowX, names(bx), drop = FALSE] %*% bx)
+  }
   lapply(seq_along(res$prob), function(i){
     if(!length(res$distances[[i]])) return(res$prob[[i]])
     speed <- agentSpeeds[i]; dur <- agentDurations[i]
@@ -178,6 +192,7 @@ aoiProbsTime <- function(res, agentSpeeds, agentDurations, AOI_aois, AOI_dulns, 
     if(any(ok)){
       X <- rumTimeX(AOI_dulns[k[ok]], AOI_areas[k[ok]], tReach[ok] * 60, dur, consts, names(b))
       u <- drop(X %*% b)
+      if(length(bx)) u <- u + uX[k[ok]]
       e <- exp(u - max(u))
       p[ok] <- e / sum(e)
       return(p)
@@ -290,21 +305,94 @@ choosePathsCorr <- function(agents, lib, adjPtr, params, attrWeight = 1, lenPtr,
 #would leave one walk per agent. A type without walks in the agent's class takes the
 #nearest class that has some (fallback, ties to the shorter). The reach, floor and
 #capped fallback are choosePathsCorr()'s, on the real path length.
+#
+#`corr` (2026-11-10): the library is not a neutral list of alternatives. Phase 1's
+#explorers chose their areas by RUM-time, so an area's walks are in the library in
+#proportion to its phase-1 choice probability, and phase 2's exp(U) then weighs the
+#same attractivity again: P(walk) ~ n(area) * exp(U), the preference counted twice
+#(top-5 % share .51 against the survey's .32 at Glatt, 2026-10-28). Two standard
+#remedies from discrete choice with sampled or overlapping alternatives, no parameter
+#tuned in either:
+#   "area"      the sampling correction (McFadden 1978): an alternative drawn with
+#               probability q enters with U - ln q. q is the share of the class's walks
+#               that lie in the walk's area, n(area) / n; and the size term the area
+#               choice has (b's lnA terms, on the area's hectares) comes back, since
+#               the walk count no longer stands in for size. Summed over an area's
+#               walks: P(area) ~ exp(bA lnA + bt t) * mean over its walks of exp(bD zD) -
+#               RUM-time's own area choice, on the walks' attractivity.
+#   "pathsize"  the path-size term (Ben-Akiva & Bierlaire 1999): U + ln PS,
+#               PS = sum over the walk's edges of (length / walk length) / N(edge),
+#               N(edge) the number of the class's walks that use the edge. Walks that
+#               share most of their edges with many others count as one alternative
+#               between them; no size term (the distinct walks of an area are its size).
+#`aoiArea`: named m2 per AOI id (corr = "area"); `edgeLen`: metres by edge id
+#(corr = "pathsize"). corr = "none" is the 2026-10-28 choice, bit for bit.
 WALK_DUR_CLASSES <- c(0, 30, 60, 120, 180, 240, Inf)
 choosePathsRumTime <- function(agents, lib, params, lenPtr, b, consts, reach = CORR$reach,
                                floorH = CORR$floorH, fallbackCap = CORR$fallbackCap,
-                               fallbackH = FALLBACK_H){
+                               fallbackH = FALLBACK_H, corr = "none", aoiArea = NULL, edgeLen = NULL,
+                               pool = "type", shift = NULL){
   n        <- nrow(agents)
   pick     <- rep(NA_integer_, n)
   fallback <- rep(FALSE, n)
   distance <- rep(NA_real_, n)
+  corr     <- match.arg(corr, c("none", "area", "pathsize"))
+  #`pool` (2026-11-12, act_pool): which recorded walks an agent may take. "type" (the 2026-10-28 rule):
+  #its own agent type's. "activity": any type of its activity (walking = walkNat + walkSoc, dog walking =
+  #dogNat + dogProx, biking = ebikeNat + bikeSport, jogging), the duration class still the explorer's T.
+  #"activityLen": the same, the class on the walk's LENGTH in the activity's reference-speed minutes
+  #(T x speed / the activity's fastest type's speed; types of an activity walk at different speeds, so equal
+  #T is not equal length). A recorded walk's DULN is its own type's column; the columns of an activity differ
+  #by a constant (the type's level), so `shift` (the columns' mean, by type) re-expresses a walk on the
+  #choosing agent's column - a constant that cancels within one type's softmax but not across pooled types.
+  pool     <- match.arg(pool, c("type", "activity", "activityLen"))
+  POOL_OF  <- c(walkNat = "walk", walkSoc = "walk", dogNat = "dog", dogProx = "dog", ebikeNat = "bike",
+                bikeSport = "bike", jogger = "jog")
+  POOL_REF <- c(walk = 5, dog = 3, bike = 20, jog = 7)
+  poolOf   <- function(t) if(pool == "type") as.character(t) else unname(POOL_OF[as.character(t)])
+  if(pool != "type"){
+    if(anyNA(poolOf(lib$agentTyp)) || anyNA(poolOf(agents$agentTyp))) stop("choosePathsRumTime: a type without an activity")
+    if(is.null(shift) || anyNA(shift[unique(c(as.character(lib$agentTyp), as.character(agents$agentTyp)))]))
+      stop("choosePathsRumTime: pool needs shift (the DULN columns' means by type)")
+  }
+  bA       <- b[grepl("^lnA", names(b))]
   b        <- b[!grepl("^lnA", names(b))]
   Dall     <- lib$DULN - params$dulnOffset
   clsOf    <- function(T) findInterval(T, WALK_DUR_CLASSES, left.open = TRUE)
-  libCls   <- clsOf(lib$timeExt)
+  libCls   <- clsOf(if(pool == "activityLen") lib$timeExt * lib$speed / unname(POOL_REF[poolOf(lib$agentTyp)]) else lib$timeExt)
+  #the correction's term per library walk, added to U (0 = none)
+  adj <- numeric(nrow(lib)); libA <- rep(1, nrow(lib))
+  key <- paste(poolOf(lib$agentTyp), libCls)
+  use <- is.finite(lib$DULN)
+  if(corr == "area"){
+    if(is.null(aoiArea)) stop("choosePathsRumTime: corr = 'area' needs aoiArea")
+    libA <- unname(aoiArea[as.character(lib$AOI)])
+    if(anyNA(libA[use])) stop("choosePathsRumTime: aoiArea misses area(s) of the library")
+    kA <- paste(key, lib$AOI)
+    nA <- table(kA[use]); nC <- table(key[use])
+    adj[use] <- -log(as.numeric(nA[kA[use]]) / as.numeric(nC[key[use]]))
+  }
+  if(corr == "pathsize"){
+    if(is.null(edgeLen)) stop("choosePathsRumTime: corr = 'pathsize' needs edgeLen")
+    for(kk in unique(key[use])){
+      w  <- which(use & key == kk)
+      ed <- lapply(lib$edges[w], function(e){
+        e <- unique(suppressWarnings(as.integer(e)))
+        e[!is.na(e) & e >= 1L & e <= length(edgeLen)]
+      })
+      wk <- rep.int(seq_along(w), lengths(ed)); ee <- unlist(ed, use.names = FALSE)
+      if(!length(ee)) next
+      Ne <- tabulate(ee, nbins = length(edgeLen))
+      le <- edgeLen[ee]
+      #rowsum() orders its groups: the walks with edges, ascending
+      has <- sort(unique(wk))
+      ps  <- as.vector(rowsum(le / Ne[ee], wk)) / as.vector(rowsum(le, wk))
+      adj[w[has]] <- log(ps)
+    }
+  }
   for(typ in unique(agents$agentTyp)){
     ai <- which(agents$agentTyp == typ)
-    li <- which(lib$agentTyp == typ & is.finite(lib$DULN))
+    li <- which(poolOf(lib$agentTyp) == poolOf(typ) & is.finite(lib$DULN))
     if(!length(li)) next
     entries <- unique(lib$entryV[li])
     starts  <- unique(as.integer(agents$startV[ai]))
@@ -313,9 +401,11 @@ choosePathsRumTime <- function(agents, lib, params, lenPtr, b, consts, reach = C
     Dr   <- ns$nodeDistances_cpp(lenPtr, "distance", typ, entries, starts, far)
     eRow <- match(lib$entryV[li], entries)
     have <- sort(unique(libCls[li]))
+    #the pooled walks' DULN on this type's column (a constant per recorded type)
+    Dl   <- Dall[li] + (if(pool == "type") 0 else unname(shift[as.character(typ)]) - unname(shift[as.character(lib$agentTyp[li])]))
     for(i in ai){
       dur <- agents$timeExt[i]
-      own <- clsOf(dur)
+      own <- clsOf(if(pool == "activityLen") dur * agents$speed[i] / unname(POOL_REF[poolOf(typ)]) else dur)
       cls <- if(own %in% have) own else have[which.min(abs(have - own))]
       fallback[i] <- cls != own
       j   <- which(libCls[li] == cls)
@@ -326,8 +416,13 @@ choosePathsRumTime <- function(agents, lib, params, lenPtr, b, consts, reach = C
       ok  <- is.finite(hR) & hR <= max(reach * dur / 60, floorH)
       if(any(ok)){
         jj <- which(ok)
-        X  <- rumTimeX(Dall[li][j[jj]], 1, hR[jj] * 60, dur, consts, names(b))
+        X  <- rumTimeX(Dl[j[jj]], 1, hR[jj] * 60, dur, consts, names(b))
         U  <- drop(X %*% b)
+        if(corr != "none"){
+          U <- U + adj[li][j[jj]]
+          if(corr == "area" && length(bA))
+            U <- U + drop(rumTimeX(Dl[j[jj]], libA[li][j[jj]], hR[jj] * 60, dur, consts, names(bA)) %*% bA)
+        }
         k  <- if(length(jj) == 1L) 1L else sample.int(length(jj), 1L, prob = exp((U - max(U)) / params$alpha))
         pick[i]     <- li[j[jj[k]]]
         distance[i] <- dr[jj[k]]

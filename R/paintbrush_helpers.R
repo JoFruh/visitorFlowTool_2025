@@ -366,7 +366,7 @@ paintWindowCellsOf <- function(shp, res = PAINT_RES){
 #' geometry, a CRS that will not transform - is reported as NOT too large. A
 #' false TRUE switches a working feature off behind a misleading label; a false
 #' FALSE lands on the blank-canvas path, which already prints its own diagnosis.
-paintAreaTooLarge <- function(aoi, buffer_m = 250, max_cells = 40e6,
+paintAreaTooLarge <- function(aoi, buffer_m = 250, max_cells = 30e6,
                               res = PAINT_RES){
   if(is.null(aoi)) return(FALSE)
   if(inherits(aoi, c("sf", "data.frame")) && nrow(aoi) == 0) return(FALSE)
@@ -386,7 +386,7 @@ paintAreaTooLarge <- function(aoi, buffer_m = 250, max_cells = 40e6,
 
 #' How many times paintAreaTooLarge()'s ceiling an area of interest may reach
 #' before it is too large for the server itself, not just for heat mitigation.
-AOI_SERVER_FACTOR <- 3
+AOI_SERVER_FACTOR <- 1
 
 #' Is this area too large for the server's stability?
 #'

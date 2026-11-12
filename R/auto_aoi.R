@@ -118,10 +118,29 @@ vftStep4Handover <- function(r, session = shiny::getDefaultReactiveDomain()){
 #' perimeter that changed while the job ran (its result is dropped - the new
 #' outline's own confirm has already said what comes next).
 #'
+#' The Hitzeminderung page's heat mitigation search uses the same run without
+#' leaving the page (it lacks the Zielgebiete its simulations need, see
+#' "THE HEAT MITIGATION SEARCH" in newVersions_server.R): `then` replaces the
+#' hand-over to step 5, and `onFail` hears about every way the run can end
+#' without a commit - including "no areas above the threshold", which then
+#' stays where it is instead of going to step 3.
+#'
 #' @param r the app-level reactiveValues
 #' @param session the APP session
-vftAutoAoISim <- function(r, session = shiny::getDefaultReactiveDomain()){
-  if(is.null(session)) return(invisible(NULL))
+#' @param then run after the commit, instead of vftStep4Handover(). NULL = step 5.
+#' @param onFail run once when nothing was committed: refused, perimeter
+#'   changed, no areas, error, cancelled commit. With it given, "no areas"
+#'   does not navigate.
+vftAutoAoISim <- function(r, session = shiny::getDefaultReactiveDomain(),
+                          then = NULL, onFail = NULL){
+  failed <- FALSE
+  fail <- function(){
+    if(failed) return(invisible(NULL))
+    failed <<- TRUE
+    if(is.function(onFail)) onFail()
+    invisible(NULL)
+  }
+  if(is.null(session)){ fail(); return(invisible(NULL)) }
   tr <- .vftT(session)
   note <- function(key, type = "message", duration = 6)
     try(shiny::showNotification(tr(key), type = type, duration = duration,
@@ -131,10 +150,11 @@ vftAutoAoISim <- function(r, session = shiny::getDefaultReactiveDomain()){
   if(.vftAutoAoIRunning(session) || shiny::isolate(vftSessionBusy(session))){
     vftDbg("AUTO AOI: refused - a job is in flight")
     note("Bitte warten - eine Berechnung läuft noch.", duration = 4)
+    fail()
     return(invisible(NULL))
   }
   shape0 <- shiny::isolate(r$shape)
-  if(is.null(shape0)) return(invisible(NULL))
+  if(is.null(shape0)){ fail(); return(invisible(NULL)) }
 
   .vftAutoAoIRunning(session, TRUE)
   done <- function() .vftAutoAoIRunning(session, FALSE)
@@ -143,11 +163,11 @@ vftAutoAoISim <- function(r, session = shiny::getDefaultReactiveDomain()){
 
   run <- function(){
     #the perimeter changed while the crops were being made
-    if(!identical(shiny::isolate(r$shape), shape0)){ done(); return(invisible(NULL)) }
+    if(!identical(shiny::isolate(r$shape), shape0)){ done(); fail(); return(invisible(NULL)) }
 
     DULN     <- shiny::isolate(r$DULN)
     DULN_all <- shiny::isolate(r$DULN_all)
-    if(is.null(DULN) || is.null(DULN_all)){ done(); return(invisible(NULL)) }
+    if(is.null(DULN) || is.null(DULN_all)){ done(); fail(); return(invisible(NULL)) }
 
     vftDbg(paste0("AUTO AOI: generating at threshold ", thr, ", then cutting"))
 
@@ -196,16 +216,18 @@ vftAutoAoISim <- function(r, session = shiny::getDefaultReactiveDomain()){
 
         if(!identical(r$shape, shape0)){
           vftDbg("AUTO AOI: result dropped - the perimeter changed meanwhile")
+          fail()
           return(invisible(NULL))
         }
 
         cut <- out$cut
         n   <- if(inherits(cut, "sf")) nrow(cut) else 0L
         if(n == 0L){
-          vftDbg("AUTO AOI: no areas of interest at this threshold - to step 3")
+          vftDbg("AUTO AOI: no areas of interest at this threshold")
           note("Keine Zielgebiete über der Schwelle gefunden – bitte manuell festlegen.",
                type = "warning", duration = 10)
-          vftGoToStep(r, "step3", session)
+          #a caller with its own ending stays where it is
+          if(is.function(onFail)) fail() else vftGoToStep(r, "step3", session)
           return(invisible(NULL))
         }
 
@@ -231,13 +253,15 @@ vftAutoAoISim <- function(r, session = shiny::getDefaultReactiveDomain()){
                     r$aoiAutoPlain <- list(key = list(minThresh = thr, skip = FALSE,
                                                       shape = shape0),
                                            polygons = plain)
-                    vftStep4Handover(r, session)
-                  })
+                    if(is.function(then)) then() else vftStep4Handover(r, session)
+                  },
+                  onCancel = fail)
       }))
     }) %...!% (function(e){
       done()
       shiny::withReactiveDomain(session,
         vftAsyncError(progress, "Automatic areas of interest")(e))
+      fail()
     })
     invisible(NULL)
   }
@@ -246,8 +270,8 @@ vftAutoAoISim <- function(r, session = shiny::getDefaultReactiveDomain()){
   #yet, each behind the provider's own bar; at once if it has
   #(a failed crop reports itself - vftAsyncError() in the provider layer - so
   #onFail only lets the button be pressed again)
-  ok <- vftEnsureThen(c("DULN", "DULN_all"), then = run, onFail = done,
-                      session = session)
-  if(!isTRUE(ok)) done()
+  ok <- vftEnsureThen(c("DULN", "DULN_all"), then = run,
+                      onFail = function(){ done(); fail() }, session = session)
+  if(!isTRUE(ok)){ done(); fail() }
   invisible(NULL)
 }

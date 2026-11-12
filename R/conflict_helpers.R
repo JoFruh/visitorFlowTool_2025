@@ -128,14 +128,34 @@ vftConflictHotspots <- function(sm, edges, usageCol = "passage",
   if(!length(hot)) return(none)
 
   #metres for the clustering, whatever the matrix is stored in
-  lonlat <- isTRUE(terra::is.lonlat(sm))
-  xy  <- terra::xyFromCell(sm, hot)
-  pts <- sf::st_as_sf(data.frame(x = xy[, 1], y = xy[, 2],
-                                 s = (smV[hot] / max(smPos)) * (useV[hot] / max(usePos))),
-                      coords = c("x", "y"), crs = terra::crs(sm))
+  xy <- terra::xyFromCell(sm, hot)
+  cc <- vftCellCircles(xy, terra::crs(sm), isTRUE(terra::is.lonlat(sm)), terra::res(sm),
+                       (smV[hot] / max(smPos)) * (useV[hot] / max(usePos)),
+                       clusterDist = clusterDist, maxCircles = maxCircles)
+  data.frame(cc$circles[, c("lng", "lat", "radius_m", "score", "nCells")], level = level)
+}
+
+#' Clusters of grid cells, as circles.
+#'
+#' Cells closer than `clusterDist` metres to each other form one cluster (their
+#' half-distance buffers touch), each cluster becomes one circle - the minimum
+#' bounding circle of its cell centres, widened by half a cell diagonal so the
+#' cells themselves sit inside it - and the `maxCircles` clusters with the
+#' largest summed `s` are kept. Shared by the conflict search above and the heat
+#' mitigation search (R/heat_need_helpers.R).
+#'
+#' @param xy cell centres, a two-column matrix in `crs`.
+#' @param lonlat whether `crs` is geographic (the clustering is done in 2056).
+#' @param res the cell size, in `crs` units.
+#' @param s one score per cell.
+#' @return list(circles = data.frame(lng, lat, radius_m, score, nCells, cluster),
+#'   member = the cluster id of every cell, keep = the kept cluster ids in the
+#'   circles' order). Circles strongest first.
+vftCellCircles <- function(xy, crs, lonlat, res, s, clusterDist = 250, maxCircles = 5){
+  pts <- sf::st_as_sf(data.frame(x = xy[, 1], y = xy[, 2], s = s),
+                      coords = c("x", "y"), crs = crs)
   if(lonlat) pts <- sf::st_transform(pts, 2056)
 
-  res <- terra::res(sm)
   halfDiag <- if(lonlat){
     lat <- mean(xy[, 2])
     sqrt((res[1] * 111320 * cos(lat * pi / 180))^2 + (res[2] * 110574)^2) / 2
@@ -153,6 +173,10 @@ vftConflictHotspots <- function(sm, edges, usageCol = "passage",
   score  <- tapply(pts$s, member, sum)
   keep   <- as.integer(names(sort(score, decreasing = TRUE)))[seq_len(min(maxCircles, length(score)))]
   pxy    <- sf::st_coordinates(pts)
+  if(!length(keep))
+    return(list(circles = data.frame(lng = numeric(0), lat = numeric(0), radius_m = numeric(0),
+                                     score = numeric(0), nCells = integer(0), cluster = integer(0)),
+                member = member, keep = keep))
 
   centres <- matrix(NA_real_, length(keep), 2)
   radius  <- numeric(length(keep))
@@ -170,9 +194,10 @@ vftConflictHotspots <- function(sm, edges, usageCol = "passage",
   ll <- sf::st_coordinates(sf::st_transform(
     sf::st_as_sf(data.frame(x = centres[, 1], y = centres[, 2]),
                  coords = c("x", "y"), crs = sf::st_crs(pts)), 4326))
-  data.frame(lng = ll[, "X"], lat = ll[, "Y"],
-             radius_m = radius + halfDiag,
-             score = as.numeric(score[as.character(keep)]),
-             nCells = as.integer(table(member)[as.character(keep)]),
-             level = level)
+  list(circles = data.frame(lng = ll[, "X"], lat = ll[, "Y"],
+                            radius_m = radius + halfDiag,
+                            score = as.numeric(score[as.character(keep)]),
+                            nCells = as.integer(table(member)[as.character(keep)]),
+                            cluster = keep),
+       member = member, keep = keep)
 }

@@ -373,8 +373,9 @@ VFT_INVALIDATE_HOOKS <- list(
     nl <- shiny::isolate(r$networkList)
     if(is.null(nl) || !length(nl)) return(invisible(NULL))
     r$networkList <- lapply(nl, function(v){
-      #with the result, what it was (vftScenarioHeatwave() would ignore it anyway)
-      if(is.list(v)){ v$pathUsage <- NULL; v$heatwave <- NULL }
+      #with the result, what it was (vftScenarioHeatwave() would ignore it anyway),
+      #and the heatwave slots beside it (vftScenarioSim())
+      if(is.list(v)){ v$pathUsage <- NULL; v$heatwave <- NULL; v$heatSims <- NULL }
       v
     })
     invisible(NULL)

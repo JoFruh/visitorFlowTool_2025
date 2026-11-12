@@ -480,11 +480,15 @@ xlsxOld <- function(k){ w <- xlsxWeights(); stats::setNames(w[[k]], w$element) }
 #pattern is scaled to today's Nature walker spread on Glatt's edges (as tailor_duln.R
 #scales a fit); every type's difference rides on the same scale, so the measured
 #differences keep their size. Unidentified elements keep the type's xlsx weight.
+#the site a fit was made on (ft$trainCtx; Glatt unless a site fit says otherwise): its
+#edges set the DULN-unit scale
+trainCtxOf <- function(ft) if(is.null(ft$trainCtx)) "glatt" else ft$trainCtx
 typeWeights <- function(ft, ex){
   fit <- readRDS(tdPath("fit.rds"))
   els <- ELEMENTS_NEW()
+  tc <- trainCtxOf(ft)
   #the walking xlsx weights on the element set in use (fit.rds's wOldNew on today's)
-  sc <- scaleFit(list(ident = ft$ident, beta = ft$betaShared), "glatt", list(glatt = ex),
+  sc <- scaleFit(list(ident = ft$ident, beta = ft$betaShared), tc, stats::setNames(list(ex), tc),
                  fit$wOld, xlsxNew("walkNat")[els], els)
   a <- sc$a
   shared <- sc$w
@@ -536,7 +540,8 @@ stageVariantsTypes <- function(){
     aoi <- readRDS(aoiFile(ctx)); base <- readRDS(netFile(ctx))
     fitUse <- if(ctx == "glattPark") ft$noGP else ft$all
     #weights from Glatt's cells (GlattPark: without its own ground); scaled on Glatt's edges
-    tw <- typeWeights(fitUse, readRDS(extractFile("glatt")))
+    #(a site fit: that site's cells and edges)
+    tw <- typeWeights(fitUse, readRDS(extractFile(trainCtxOf(fitUse))))
     tm <- cogTemplate(ctx)
     lakes <- ns$.vftReadLakesWithin(sf::st_transform(aoi$shapeLarger, 2056))
     lakeV <- if(nrow(lakes)) terra::vect(sf::st_transform(lakes, 4326)) else NULL
@@ -627,7 +632,7 @@ stageVariantsTypes <- function(){
   if(length(log)) utils::write.csv(do.call(rbind, log), tyPath("variants.csv"), row.names = FALSE)
   #the weights, every type, as a table
   wt <- do.call(rbind, lapply(c("all", "noGP"), function(fu){
-    tw <- typeWeights(ft[[fu]], readRDS(extractFile("glatt")))
+    tw <- typeWeights(ft[[fu]], readRDS(extractFile(trainCtxOf(ft[[fu]]))))
     do.call(rbind, lapply(TYPES7, function(k) data.frame(fit = fu, type = k, label = TYPE_LABEL[[k]],
       element = names(xlsxNew(k)), xlsx = unname(xlsxNew(k)), fitted_s1 = unname(tw$perType[[k]][names(xlsxNew(k))]),
       shared_s1 = unname(tw$shared[names(xlsxNew(k))]), identified = names(xlsxNew(k)) %in% ft[[fu]]$ident)))

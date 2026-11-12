@@ -185,6 +185,105 @@ vftScenarioHeatwave <- function(sc){
   if(is.null(hw) || is.null(hw$bin)) NULL else hw
 }
 
+#### a card's three simulations: normal, morning and afternoon heatwave ####
+#
+# A step 5 card keeps one result per SLOT, side by side:
+#   * "normal"  - sc$pathUsage / sc$dayPop / sc$conflicts, where it always was,
+#     so every reader outside step 5 (newVersions' usage overlay and conflicts,
+#     the discard warning, the save file) sees the normal run and nothing else;
+#   * a bin of VFT_HEATWAVE_BINS - sc$heatSims[[bin]] = list(pathUsage, dayPop,
+#     conflicts, heatwave = <the run's record>).
+# The newVersions edit handlers that drop sc$pathUsage drop sc$heatSims with it.
+
+VFT_SIM_SLOTS <- c("normal", VFT_HEATWAVE_BINS)
+
+#' One slot's result: list(pathUsage, dayPop, conflicts, heatwave), or NULL when
+#' the slot holds none. `heatwave` is NULL for the normal slot.
+vftScenarioSim <- function(sc, slot = "normal"){
+  if(!is.list(sc)) return(NULL)
+  if(identical(slot, "normal")){
+    if(is.null(sc$pathUsage)) return(NULL)
+    return(list(pathUsage = sc$pathUsage, dayPop = sc$dayPop,
+                conflicts = sc$conflicts, heatwave = NULL))
+  }
+  s <- if(is.list(sc$heatSims)) sc$heatSims[[slot]]
+  if(!is.list(s) || is.null(s$pathUsage)) NULL else s
+}
+
+#' Which slots hold a result: a named logical over VFT_SIM_SLOTS.
+vftScenarioSlots <- function(sc){
+  vapply(VFT_SIM_SLOTS, function(s) !is.null(vftScenarioSim(sc, s)), logical(1))
+}
+
+#' Write one slot's result (or NULL to empty it) into the scenario, and return it.
+vftScenarioSetSim <- function(sc, slot, sim){
+  if(identical(slot, "normal")){
+    sc$pathUsage <- sim$pathUsage
+    sc$dayPop    <- sim$dayPop
+    sc$conflicts <- sim$conflicts
+    sc$heatwave  <- NULL
+    return(sc)
+  }
+  hs <- if(is.list(sc$heatSims)) sc$heatSims else list()
+  hs[[slot]] <- sim
+  sc$heatSims <- if(length(hs)) hs else NULL
+  sc
+}
+
+#' A scenario from before the slots: a heatwave result stood in the normal slot,
+#' labelled by sc$heatwave. Moved into its own slot; anything else is untouched.
+vftScenarioMigrate <- function(sc){
+  if(!is.list(sc)) return(sc)
+  hw <- sc$heatwave
+  if(!is.null(sc$pathUsage) && is.list(hw) && isTRUE(hw$bin %in% VFT_HEATWAVE_BINS)){
+    sc <- vftScenarioSetSim(sc, hw$bin, list(pathUsage = sc$pathUsage, dayPop = sc$dayPop,
+                                             conflicts = sc$conflicts, heatwave = hw))
+    sc <- vftScenarioSetSim(sc, "normal", NULL)
+  }
+  sc$heatwave <- NULL
+  sc
+}
+
+#' The normal slot's tick: a teal disc with a white check, or an empty ring.
+vftSimTickSVG <- function(done){
+  if(!done) return('<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.5" fill="none" stroke="#9aa3a1" stroke-width="2.5"/></svg>')
+  paste0('<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="#006268"/>',
+         '<path d="M17.5 8 10.2 15.5 6.5 11.8" fill="none" stroke="#fff" stroke-width="2.6" ',
+         'stroke-linecap="round" stroke-linejoin="round"/></svg>')
+}
+
+#' The strip of three simulation icons at the foot of a step 5 card.
+#'
+#' `slots` is vftScenarioSlots() of the card, `stale` a named logical over the
+#' heatwave bins (the card has been repainted since that run's heat map),
+#' `shown` the slot on the map when this card is the selected one, else NULL.
+#' All clicks go to ONE input, `ns("simIconClick")`, carrying card and slot - see
+#' heatIconsTag() for why not one input per card.
+step5SimIconsTag <- function(card, slots, stale = NULL, shown = NULL, i18n = NULL, ns = identity){
+  input <- ns("simIconClick")
+  titles <- c(normal = vftTrText(i18n, "Normale Simulation"),
+              stats::setNames(vapply(VFT_HEATWAVE_BINS, function(b) vftHeatwaveTag(i18n, b),
+                                     character(1)), VFT_HEATWAVE_BINS))
+  shiny::tags$div(
+    class = "vft5SimIcons", `data-card` = card,
+    lapply(VFT_SIM_SLOTS, function(s){
+      has <- isTRUE(slots[[s]])
+      shiny::tags$button(
+        type  = "button",
+        class = paste(c("vft5SimIcon",
+                        if(s != "normal") "vft5SimHeat",
+                        if(!has) "vft5SimNone",
+                        if(has && s != "normal" && isTRUE(stale[[s]])) "vft5SimStale",
+                        if(identical(s, shown)) "vft5SimShown"), collapse = " "),
+        title = titles[[s]],
+        `data-slot` = s,
+        onclick = sprintf(paste0("event.stopPropagation(); Shiny.setInputValue('%s', ",
+                                 "{card: '%s', slot: '%s', n: Date.now()}, {priority: 'event'});"),
+                          input, card, s),
+        shiny::HTML(if(s == "normal") vftSimTickSVG(has) else heatBinIconSVG(s)))
+    }))
+}
+
 #' "Hitzewelle (Nachmittag)", in the Translator's language. Plain text.
 vftHeatwaveTag <- function(i18n, bin){
   sprintf(vftTrText(i18n, "Hitzewelle (%s)"), vftTrText(i18n, HEAT_BIN_KEYS[[bin]]))

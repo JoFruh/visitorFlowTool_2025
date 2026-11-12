@@ -30,6 +30,9 @@
 #   layers   the new rasters on today's layer grid -> layers2_<box>.tif (all layers)
 #   extract  the edges' elements + the new ones, the cells' means (as tailor_duln.R)
 #   fit      both fits, all Glatt cells and without GlattPark's ground; tables
+#   sitefit  the same fit on another survey's own cells, one group (VFT_EL_SITES, default
+#            glattPark, wigger) -> elements/site_<ctx>/{signed,free}; variants E2cGP_s0.5,
+#            E2cW_s0.5 with VFT_AV_TYSUB=elements/site_<ctx>/signed. Not in the default.
 #   typed, score, figures   tailor_duln_activities.R's, into elements/
 # The variants (E2_A4_s0.5 unconstrained, E2c_A4_s0.5 signed) are built on a
 # validation folder's areas by data-raw/apply_duln_variant.R with
@@ -269,9 +272,77 @@ stageFitEl <- function(){
   print(wt[wt$fit == "all" & wt$type == "bikeSport", c("element", "xlsxEq", "act4", "new", "signed")], digits = 2, row.names = FALSE)
 }
 
+#### stage sitefit: the same fit on ANOTHER survey's own cells (Wigger, GlattPark) ####
+
+#The survey sweep (2026-11-10): the DULN tailored on one survey at a time. Wigger's lines
+#and GlattPark's heatmap carry no activity, so the fit is one group - one weight set for
+#all seven types (the shared fit; a single group has no difference from itself). The
+#cells are the site's own stored extract (the app-save 3.1 areas), the offset the
+#extract's Nearby-Random map (the vintage of the Glatt fit's offset). The DULN-unit scale
+#is set on the site's own edges (trainCtx; tailor_duln_types.R's typeWeights()).
+siteFitFile <- function(ctx, signed) elPath(paste0("site_", ctx), if(signed) "signed" else "free", "fit_types.rds")
+stageFitSite <- function(ctx){
+  ex <- readRDS(extractFile(ctx))
+  sv <- readRDS(surveyFile(ctx))
+  if(!isTRUE(all.equal(as.numeric(sv$surveyBase[ex$cells]), as.numeric(ex$y))))
+    stop(ctx, ": the extract's survey is not the folder's survey on the fit cells")
+  logf("sitefit %s: %d cells (%d with survey usage, %.0f cell visits); the extract's survey is the folder's",
+       ctx, length(ex$cells), sum(ex$y > 0), sum(ex$y))
+  n <- length(ex$simFull$nearbyRandom)
+  yFull <- numeric(n); yFull[ex$cells] <- ex$y
+  sty <- list(base = list(all = yFull)); nr <- list(all = ex$simFull$nearbyRandom)
+  out <- list()
+  for(signed in c(FALSE, TRUE)){
+    f <- siteFitFile(ctx, signed)
+    if(!file.exists(f)){
+      b <- if(signed) list(pos = SIGN_POS, neg = SIGN_NEG) else NULL
+      ft <- fitTypes(ex, sty, nr, paste0(ctx, " survey, clean elements", if(signed) ", signed" else ""), types = "all", bounds = b)
+      ft$dev$all$delta[] <- 0
+      ft$actOf <- stats::setNames(rep("all", length(TYPES7)), TYPES7)
+      ft$trainCtx <- ctx
+      saveRDS(list(all = ft, noGP = ft, nrMaps = nr, trainCtx = ctx), f)
+      file.copy(file.path(elFitDir(TRUE), "survey_types.csv"), file.path(dirname(f), "survey_types.csv"), overwrite = TRUE)
+    }
+    out[[if(signed) "signed" else "free"]] <- readRDS(f)$all
+  }
+  out
+}
+#the walkers' weights (DULN units at s0.5) of the Glatt fit and the site fits, side by side
+stageSiteTable <- function(fits){
+  els <- ELEMENTS_NEW()
+  g <- readRDS(file.path(elFitDir(TRUE), "fit_types.rds"))$all
+  wOf <- function(ft, ctx) (S_TY * typeWeights(ft, readRDS(extractFile(ctx)))$perType$walkNat)[els]
+  wt <- data.frame(element = els, xlsxEq = unname(xlsxNew("walkNat")[els]), glatt_signed = unname(wOf(g, "glatt")),
+                   glatt_identified = els %in% g$ident)
+  sm <- list()
+  for(ctx in names(fits)){
+    for(s in c("signed", "free")) wt[[paste(ctx, s, sep = "_")]] <- unname(wOf(fits[[ctx]][[s]], ctx))
+    wt[[paste0(ctx, "_identified")]] <- els %in% fits[[ctx]]$signed$ident
+    fu <- fits[[ctx]]$free; fs <- fits[[ctx]]$signed
+    sm[[ctx]] <- data.frame(site = ctx, cells = length(readRDS(extractFile(ctx))$cells), identified = length(fs$ident),
+                            lambda = fs$lambdaShared, cv_free = min(fu$cvShared), cv_signed = fs$cvSharedBox,
+                            cv_largest_lambda = fu$cvShared[length(fu$cvShared)])
+  }
+  utils::write.csv(wt, elPath("site_weights.csv"), row.names = FALSE)
+  utils::write.csv(do.call(rbind, sm), elPath("site_fits.csv"), row.names = FALSE)
+  options(width = 220)
+  logf("site fits (CV deviance, lower is better; the largest lambda is nearly no elements):")
+  print(do.call(rbind, sm), digits = 4, row.names = FALSE)
+  logf("weights of the Nature walkers (s0.5), signed fits:")
+  print(wt[, c("element", "xlsxEq", "glatt_signed", paste0(names(fits), "_signed"), paste0(names(fits), "_identified"))],
+        digits = 2, row.names = FALSE)
+}
+
 #### the variants ####
 
 TY_VARIANTS <- list(
+  #the survey sweep's site fits (stage sitefit): the same spec as E2c_A4_s0.5
+  E2cGP_s0.5 = list(kind = "types", typeArea = FALSE, fit = "signed",
+                    manual = list(bikeSport = c(stairs = -10), ebikeNat = c(stairs = -10)),
+                    postNet = stairsPostNet),
+  E2cW_s0.5 = list(kind = "types", typeArea = FALSE, fit = "signed",
+                   manual = list(bikeSport = c(stairs = -10), ebikeNat = c(stairs = -10)),
+                   postNet = stairsPostNet),
   E2_A4_s0.5 = list(kind = "types", typeArea = FALSE,
                     manual = list(bikeSport = c(stairs = -10), ebikeNat = c(stairs = -10)),
                     postNet = stairsPostNet),
@@ -290,6 +361,10 @@ if(!IS_EL_WORKER){
   if("layers" %in% EL_STAGES) for(box in unique(BOX_OF)) stageLayers2(box)
   if("extract" %in% EL_STAGES) for(ctx in CONTEXTS) stageExtract2(ctx)
   if("fit" %in% EL_STAGES) stageFitEl()
+  if("sitefit" %in% EL_STAGES){
+    sites <- envList("VFT_EL_SITES", c("glattPark", "wigger"))
+    stageSiteTable(lapply(stats::setNames(sites, sites), stageFitSite))
+  }
   if("typed" %in% EL_STAGES) stageTypedAct()
   if("score" %in% EL_STAGES) stageScoreAct()
   if("figures" %in% EL_STAGES) stageFiguresAct()

@@ -165,3 +165,115 @@ vftSimulateScenario <- function(network, finalPolygons, minThresh, parking = NUL
 
   list(network = outNetwork, parking = outParking, results = results)
 }
+
+#### one simulation of one scenario, from a page ####
+#
+# The dispatch both pages share: step 5's launch (its launchSimulation() wraps
+# this with the cards' icons and the map), and the Hitzeminderung page's heat
+# mitigation search, which runs the simulations it is missing itself. The page
+# owns its networkList while the user is on it (see vftMirror() in R/modules.R),
+# so the result goes back through `onDone(out)` and the PAGE writes it, with
+# vftStoreSimResult().
+#
+# ONE BAR FOR ALL THE DATA: the bar is made here, before the network's load,
+# lent to the provider for its first VFT_SIM_NETWORK_SHARE (vftProviderLendBar()
+# in R/providers.R), and then driven on by the preparation. The ABM's bar is
+# the only other one (vftProgressPair()).
+#
+# `session$userData$vftSimBusy` is TRUE from here to the end of the job, so that
+# neither page starts a simulation while the other has one going: both write
+# into a networkList, and only one of those copies survives the mirror.
+
+#' Run one simulation of scenario `pos` of `r$networkList`, off the main thread.
+#'
+#' @param hw NULL for a normal run, else the heatwave run's map and labels:
+#'   list(bin, rev, base, card, packed = terra::wrap(<heat map>)).
+#' @param enable control ids to re-enable when the job cannot start or fails.
+#' @param onDone function(out) on the main thread with vftSimulateScenario()'s
+#'   answer. @param onFail function() when it never ran or died.
+vftRunScenarioSim <- function(session, r, pos, hw = NULL, finalPolygons, minThresh,
+                              residentDivision = 50, enable = NULL,
+                              onDone = function(out) invisible(NULL),
+                              onFail = function() invisible(NULL)){
+  busy <- function(on) session$userData$vftSimBusy <- isTRUE(on)
+  busy(TRUE)
+
+  tr  <- .vftT(session)
+  bar <- shiny::Progress$new(session = session)
+  bar$set(value = 0, message = .vftTrTxt("Daten werden vorbereitet", tr),
+          detail = .vftTrTxt("Wegnetz wird vorbereitet...", tr))
+  vftProviderLendBar(session, "network", bar, share = VFT_SIM_NETWORK_SHARE,
+                     message = "Daten werden vorbereitet",
+                     detail  = "Wegnetz wird vorbereitet...")
+  giveUp <- function(){
+    busy(FALSE)
+    vftProviderLendBar(session, "network", NULL)
+    try(bar$close(), silent = TRUE)
+    onFail()
+  }
+
+  vftScenarioNetworkThen(r, pos, enable = enable, onFail = giveUp, session = session,
+                         then = function(scenario){
+    vftProviderLendBar(session, "network", NULL)
+
+    #from the SCENARIO, as it is now
+    network <- scenario$network
+    parking <- scenario$parking
+
+    #TWO BARS OVER ONE QUEUE POSITION: the data, carried on from where the
+    #network's load left the bar made above, then the ABM. See vftProgressPair()
+    #in R/async_helpers.R.
+    progress <- vftProgressPair(message  = "Daten werden vorbereitet",
+                                detail   = vftMsg("Dies sollte weniger als %d Sekunden dauern", 30),
+                                message2 = "Simulation läuft",
+                                bar      = bar,
+                                from     = tryCatch(bar$getValue(), error = function(e) 0))
+    progPrep <- progress$prep
+    progSim  <- progress$sim
+    #locals, so that vftFuture() finds and ships them with the rest. The heat
+    #map is packed: a SpatRaster does not survive the trip into the worker.
+    heatPacked <- hw$packed
+    heatParams <- VFT_HEATWAVE
+    finalPolygons <- finalPolygons
+    minThresh     <- minThresh
+    residentDivision <- residentDivision
+
+    vftFuture({
+      vftSimulateScenario(network, finalPolygons, minThresh,
+                          parking          = parking,
+                          residentDivision = residentDivision,
+                          progPrep         = progPrep,
+                          progSim          = progSim,
+                          heat             = heatPacked,
+                          heatParams       = heatParams)
+    }, seed = TRUE, progress = progress) %...>% (function(out){
+      busy(FALSE)
+      onDone(out)
+    }) %...!% (function(e){
+      busy(FALSE)
+      #closes BOTH bars of the pair - see vftAsyncError() in R/async_helpers.R
+      vftAsyncError(progress, "Agent-Based Model", enable)(e)
+      onFail()
+    })
+    invisible(NULL)
+  })
+  invisible(NULL)
+}
+
+#' Write a finished simulation onto its scenario: the prepared network and
+#' parking table when this run prepared them, then the result into its slot -
+#' the normal one, or the heatwave bin's (the other slots keep theirs). No
+#' conflicts: a search describes the simulation it ran on, not this one. A
+#' heatwave run records which map it ran on and with which parameters - plain
+#' values, so the save file keeps them. See vftScenarioSim() in
+#' R/heatwave_helpers.R.
+vftStoreSimResult <- function(sc, out, hw = NULL, heatParams = VFT_HEATWAVE){
+  if(!is.null(out$network)) sc$network <- out$network
+  if(!is.null(out$parking)) sc$parking <- out$parking
+  slot <- if(!is.null(hw)) hw$bin else "normal"
+  vftScenarioSetSim(sc, slot, list(
+    pathUsage = out$results$pathUsage, dayPop = out$results$dayPop, conflicts = NULL,
+    heatwave = if(!is.null(hw))
+      list(bin = hw$bin, rev = hw$rev, base = hw$base, card = hw$card,
+           params = heatParams, summary = out$results$heatwave)))
+}

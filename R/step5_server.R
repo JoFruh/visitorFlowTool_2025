@@ -147,8 +147,11 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
     # The switch over the launch button. On, the next run is a heatwave run on the
     # SELECTED card's heat map for the chosen time of day (R/heatwave_helpers.R),
     # and only maps that exist and still apply can be chosen: they are computed on
-    # the Hitzeminderung page, never here. A heatwave result replaces the card's
-    # normal one and is labelled on the card and in the legend.
+    # the Hitzeminderung page, never here. A heatwave result goes into its own
+    # SLOT on the card (sc$heatSims[[bin]], R/heatwave_helpers.R), beside the
+    # normal one: each card shows three icons - the tick (normal), the morning
+    # and the afternoon sun - and a click on one shows that result, or launches
+    # it when the card has none yet. The suns show only while the switch is on.
 
     #' "Go and make a heat map" - list(n, name, bin): a rising count, the card to
     #' open on and its time of day. app_server turns it into the navigation to
@@ -172,11 +175,51 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
     hwStale <- function(hw, card){
       !is.null(hw) && !identical(heatStoreRev(heatStore, card), hw$rev)
     }
+
+    #### the slot on the map ####
+    #`shownSlot` is which of the selected card's results the map shows:
+    #"normal" or a heatwave bin. Every reader of "the card's result" goes through
+    #shownSim(), never sc$pathUsage directly.
+    shownSlot <- "normal"
+    #the icon a launch is running for, pulsing until the run ends
+    pendingIcon <- NULL
+    shownSim <- function(pos = selectedNetwork_position) shiny::isolate({
+      if(is.null(pos) || pos > length(r$networkList)) return(NULL)
+      vftScenarioSim(r$networkList[[pos]], shownSlot)
+    })
+    #the heatwave record of the result on the map, or NULL for a normal one
+    shownHeatwave <- function() shownSim()$heatwave
+
+    #' Re-send every card's icon strip: which slots hold a result, which heat
+    #' results are stale, which one is on the map, which is pending. Called at
+    #' the end of every map draw and after every result write - a handful of
+    #' cards, so all of them.
+    sendSimIcons <- function() shiny::isolate({
+      vu <- r$versionsUI
+      if(!length(vu)) return(invisible(NULL))
+      for(i in seq_along(vu)){
+        card <- vu[[i]]$inputId_select
+        session$sendCustomMessage("vft5-sim-icons",
+                                  list(card = card, html = as.character(simIconsFor(i)),
+                                       pending = if(identical(pendingIcon$card, card)) pendingIcon$slot))
+      }
+      invisible(NULL)
+    })
+    simIconsFor <- function(i) shiny::isolate({
+      vu   <- r$versionsUI
+      card <- vu[[i]]$inputId_select
+      sc   <- if(i <= length(r$networkList)) r$networkList[[i]]
+      stale <- vapply(VFT_HEATWAVE_BINS, function(b)
+                 hwStale(vftScenarioSim(sc, b)$heatwave, card), logical(1))
+      step5SimIconsTag(card, vftScenarioSlots(sc), stale = stale,
+                       shown = if(i == selectedNetwork_position) shownSlot,
+                       i18n = i18n(), ns = session$ns)
+    })
+
     #the exported image's usage title: `default` for a normal result, the
     #heatwave one, in the Translator's language, for a heatwave result
     hwUsageTitle <- function(default) shiny::isolate({
-      hw <- if(selectedNetwork_position <= length(r$networkList))
-              vftScenarioHeatwave(r$networkList[[selectedNetwork_position]])
+      hw <- shownHeatwave()
       if(is.null(hw)) return(default)
       sprintf(vftTrText(i18n(), "Wegnutzung bei Hitzewelle (%s):"),
               vftTrText(i18n(), HEAT_BIN_KEYS[[hw$bin]]))
@@ -191,6 +234,8 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
     heatwaveSync <- function() shiny::isolate({
       on <- hwOn()
       shinyjs::toggle("heatwaveOpts", condition = on)
+      #the cards' suns show with the switch (step5_ui.R)
+      shinyjs::toggleClass(selector = "#topPlaceHolder", class = "vft5HwOn", condition = on)
       if(!on) return(invisible(NULL))
       valid <- hwValidBins()
       for(b in VFT_HEATWAVE_BINS){
@@ -210,10 +255,12 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
     #' The heat map the next launch runs on: NULL for a normal run, FALSE when
     #' the switch is on but no valid map exists (the user is told; nothing runs),
     #' else what the job needs - the map packed to cross into the worker.
-    heatwaveRequest <- function() shiny::isolate({
-      if(!hwOn()) return(NULL)
+    #`bin` defaults to the radio's; `force` asks for a heatwave run whatever the
+    #switch says (a click on a card's sun - which is only visible with it on).
+    heatwaveRequest <- function(bin = NULL, force = FALSE) shiny::isolate({
+      if(!force && !hwOn()) return(NULL)
       card  <- hwCard()
-      bin   <- input$heatwaveBin
+      if(is.null(bin)) bin <- input$heatwaveBin
       entry <- if(!is.null(card) && isTRUE(bin %in% VFT_HEATWAVE_BINS))
                  heatStoreGet(heatStore, card, bin, hwAoiKey())
       if(is.null(entry)){
@@ -236,8 +283,31 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
         return(invisible(NULL))
       }
       heatwaveSync()
+      #switched off: the heat mitigation circles go with the button
+      if(!hwOn() && heatNeedOn){
+        heatNeedOn <<- FALSE
+        heatNeedOnto(leaflet::leafletProxy("mapAreaLeaflet"))
+        heatNeedSync()
+      }
+      #switched off: the suns go, and so does a heatwave result on the map
+      if(!hwOn() && !identical(shownSlot, "normal")){
+        shownSlot <<- "normal"
+        plotPathUsage()
+      }
     }, ignoreInit = TRUE)
-    obsHeatwaveBin <- shiny::observeEvent(input$heatwaveBin, heatwaveSync(), ignoreInit = TRUE)
+    obsHeatwaveBin <- shiny::observeEvent(input$heatwaveBin, {
+      heatwaveSync()
+      #a heatwave result on the map follows the radio, when the card has one
+      #for the new time of day
+      bin <- input$heatwaveBin
+      if(hwOn() && !identical(shownSlot, "normal") && !identical(shownSlot, bin) &&
+         isTRUE(bin %in% VFT_HEATWAVE_BINS) &&
+         selectedNetwork_position <= length(r$networkList) &&
+         !is.null(vftScenarioSim(r$networkList[[selectedNetwork_position]], bin))){
+        shownSlot <<- bin
+        plotPathUsage()
+      }
+    }, ignoreInit = TRUE)
     obsHeatwaveGo  <- shiny::observeEvent(input$heatwaveGo, {
       pos <- selectedNetwork_position
       vu  <- r$versionsUI
@@ -264,9 +334,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
     #' Can the conflict button run? It needs both halves of the question: a
     #' sensitivity matrix and a simulation in the SELECTED scenario.
     conflictReady <- function(){
-      !is.null(SM_pres) &&
-        selectedNetwork_position <= length(r$networkList) &&
-        !is.null(r$networkList[[selectedNetwork_position]]$pathUsage)
+      !is.null(SM_pres) && !is.null(shownSim())
     }
 
     #' Unlike applySMState() this one both enables and disables: the button is
@@ -477,8 +545,10 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
       content = function(file){
         # print("COPYING FILE")
         #save current version paths as file
-        pathUsage <- r$networkList[[selectedNetwork_position]]$pathUsage
-        dayPop <- r$networkList[[selectedNetwork_position]]$dayPop
+        #the result on the map: the normal one or a heatwave slot's
+        sim <- shownSim()
+        pathUsage <- sim$pathUsage
+        dayPop <- sim$dayPop
 
 
         # first print blank usageMap (with white color)
@@ -522,7 +592,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
 
         # fileConn<-file(tempTXT_info)
         #a heatwave result says so, with its time of day and parameters
-        hwInfo <- vftScenarioHeatwave(r$networkList[[selectedNetwork_position]])
+        hwInfo <- sim$heatwave
         writeLines(c("outline is the precised contours of the study.
         paths are the simulated path usages with various passage information.
         Aois are the determined Areas of Interest for recreation.",
@@ -654,33 +724,23 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
       vftDbgCat(paste0("TEST9a card ", position, " ",
                        if(hasSim) "withSim" else "noSim"))
 
-      #a third state, in the markup for the same reason: is the result a heatwave
-      #run, and is its heat map still the card's? The badge is always there, so a
-      #later run can fill or empty it (see the result write in launchSimulation()).
-      hw <- if(position <= length(r$networkList)) vftScenarioHeatwave(r$networkList[[position]])
-
+      #The third state, the card's three simulation icons (normal, morning and
+      #afternoon heatwave), in the markup for the same reason. A SIBLING of the
+      #button, not a child - they are buttons themselves - inside the wrapper,
+      #which the stylesheet makes the positioning box. sendSimIcons() replaces
+      #the strip whenever a result or the selection changes.
       shiny::insertUI(
         selector = '#placeholder_step5',
         ## wrap element in a div with id for ease of removal
-        ui = shiny::tags$div(id = paste0("step5", id_ui_name),
-                      shiny::div(style = "height: 5px"),
-
-                      htmltools::tagAppendChild(
-                        shiny::actionButton(inputId = shiny::NS(id, inputId_select),
-                                            label = name,
-                                            width = "120px",
-                                            style = "height: 120px; position: relative; text-align: center; ",
-                                            class = paste(c(if(isTRUE(selected)) "selected" else "notSelected",
-                                                            if(hasSim) "withSim" else "noSim",
-                                                            if(!is.null(hw)) "vftHw",
-                                                            if(hwStale(hw, inputId_select)) "vftHwStale"),
-                                                          collapse = " ")),
-                        shiny::span(id = shiny::NS(id, paste0(inputId_select, "-hw")),
-                                    class = "vft5HwBadge",
-                                    title = if(!is.null(hw)) vftHeatwaveTag(i18n(), hw$bin),
-                                    if(!is.null(hw)) shiny::HTML(heatBinIconSVG(hw$bin)))),
-
-                      shiny::div(style = "height: 5px")
+        ui = shiny::tags$div(id = paste0("step5", id_ui_name), class = "vft5Card",
+                      shiny::actionButton(inputId = shiny::NS(id, inputId_select),
+                                          label = name,
+                                          width = "120px",
+                                          style = "height: 120px; position: relative; text-align: center; ",
+                                          class = paste(c(if(isTRUE(selected)) "selected" else "notSelected",
+                                                          if(hasSim) "withSim" else "noSim"),
+                                                        collapse = " ")),
+                      simIconsFor(position)
         )
 
       )
@@ -735,13 +795,25 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
           return(invisible(NULL))
         }
 
-        vftDbg("SELECTED")
-        vftDbg(r$versionsUI)
+        #the card body: the slot on the map is kept if this card has it
+        selectCard(inputId_select)
+
+
+
+      }, ignoreInit = TRUE)
+        )
+
+    }
+
+    #' Select a card and draw it. `slot` is the result to show; NULL (a click on
+    #' the card body) keeps the slot on the map when this card has it, else the
+    #' first it has of normal, afternoon, morning - the suns only while the
+    #' heatwave switch is on - and "normal" when it has none.
+    selectCard <- function(inputId_select, slot = NULL){
+        vftDbg(paste0("SELECTED ", inputId_select, " slot ", if(is.null(slot)) "-" else slot))
         #select button (outline in green?)
         shinyjs::removeClass(inputId_select, "notSelected")
         shinyjs::addClass(inputId_select, "selected")
-
-        vftDbg(paste0("lastSelectedImage: ", r$lastSelectedImage))
 
         #grey the card that WAS selected - unless that is this one. Re-clicking
         #the selected card used to add "notSelected" to the same button two lines
@@ -756,21 +828,17 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
         #make this button the lastSelected button
         r$lastSelectedImage <- inputId_select
 
-        #change selected network
-        #use number of version_x
-
-
         # SELECT NETWORK ####
         #Determine position in list of current inputIdSelect
         x <- NULL
-        for(vn in 1:length(r$versionsUI)){
+        for(vn in seq_along(r$versionsUI)){
           if(r$versionsUI[[vn]]$inputId_select == inputId_select){
             x <- vn
           }
         }
 
         #select same position in networkList
-        if(x <= length(r$networkList)){
+        if(!is.null(x) && x <= length(r$networkList)){
 
           r$selectedNetwork_r( list(r$networkList[[x]]$network) )
           #keep track position to easily insert results in networkList
@@ -782,22 +850,26 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
           #move every position after it; see vftVersionPosition() in R/modules.R.
           r$selectedVersion <- r$versionsUI[[x]]$name
 
+          shownSlot <<- if(!is.null(slot)) slot else pickSlot(r$networkList[[x]])
+
         }else{
           vftDbg("ERROR: less networks than version buttons")
 
         }
 
         # PLOT SELECTED SIMULATIONS
+        plotPathUsage()
+    }
 
-       plotPathUsage()
-
-       #plot with Leaflet instead
-
-
-
-      }, ignoreInit = TRUE)
-        )
-
+    #' The slot a card shows when nothing names one: the slot on the map if the
+    #' card has it, else normal, afternoon, morning - the suns only while the
+    #' switch is on.
+    pickSlot <- function(sc){
+      has <- vftScenarioSlots(sc)
+      if(!hwOn()) has[VFT_HEATWAVE_BINS] <- FALSE
+      if(isTRUE(has[[shownSlot]])) return(shownSlot)
+      for(s in c("normal", "afternoon", "morning")) if(isTRUE(has[[s]])) return(s)
+      "normal"
     }
     vftDbgCat("TEST11")
 
@@ -917,8 +989,7 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
       #a heatwave result says so, with its time of day. Plain text (vftTrText),
       #where the plain legend's tag is translated in the browser: the language
       #observer redraws the map, legends included.
-      hwShown <- if(selectedNetwork_position <= length(r$networkList))
-                   vftScenarioHeatwave(r$networkList[[selectedNetwork_position]])
+      hwShown <- shownHeatwave()
       usageTitle <- if(is.null(hwShown)) i18n()$t("Wegnutzung:") else
         sprintf(vftTrText(i18n(), "Wegnutzung bei Hitzewelle (%s):"),
                 vftTrText(i18n(), HEAT_BIN_KEYS[[hwShown$bin]]))
@@ -948,14 +1019,16 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
       bboxUsage <- NULL
       map <- NULL
       # PLOT SELECTED PATHUSAGE (IF PRESENT) ####
-      if(shiny::isolate(!is.null(r$networkList[[selectedNetwork_position]]$pathUsage )) ){
+      #the selected card's result in the slot on the map (shownSlot)
+      sim <- shownSim()
+      if(!is.null(sim)){
 
         #use proxy if map already present
 
 
           #make current result that of selected version
-          shiny::isolate(r$result$pathUsage <- r$networkList[[selectedNetwork_position]]$pathUsage)
-          shiny::isolate(r$result$dayPop <- r$networkList[[selectedNetwork_position]]$dayPop)
+          shiny::isolate(r$result$pathUsage <- sim$pathUsage)
+          shiny::isolate(r$result$dayPop <- sim$dayPop)
           #selected version changed: invalidate the cached tables so they rebuild below
           shiny::isolate(r$passageTable <- NULL)
           shiny::isolate(r$startingPointsSf <- NULL)
@@ -1129,6 +1202,10 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
                                                      radius = 3)
           }
 
+          #the heat mitigation circles, when they are switched on - drawn with
+          #the rest so the clearShapes() above does not take them for good
+          map <- heatNeedOnto(map)
+
           if(!is.null(r$mapPresent)){
           if(r$mapPresent == FALSE | r$refreshMap == TRUE){
             # output$mapArea <- shiny::renderUI({
@@ -1256,6 +1333,11 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
         })
         shinyjs::show(id = "mapPlaceholder")
 
+          #nothing in this slot: the previous slot's or card's result must not
+          #be redrawn by a later toggle
+          r$result <- NULL
+          r$passageTable <- NULL
+          r$startingPointsSf <- NULL
           r$mapPresent <- FALSE
       }
 
@@ -1278,6 +1360,10 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
       #...and the heatwave choices follow the card: every change of selection,
       #simulation or visit draws through here
       heatwaveSync()
+      #...and so do the cards' icons: which slot is on the map, on which card
+      sendSimIcons()
+      #...and the heat mitigation button, which speaks for the selected card
+      heatNeedSync()
     # })
     }
 
@@ -1662,86 +1748,51 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
       #runs, and the result belongs to this one.
       #`hw` is heatwaveRequest()'s answer: NULL for a normal run, else the heat
       #map and what the result will be labelled with.
-      launchSimulation <- function(hw = NULL){
-        if(simRunning) return(invisible(NULL))
+      #`onDone(pos)` / `onFail()` are for a caller that chains runs (the heat
+      #mitigation search below); the launch button and the icons pass neither.
+      #The dispatch itself is vftRunScenarioSim() in R/simulate_scenario.R,
+      #shared with the Hitzeminderung page.
+      launchSimulation <- function(hw = NULL, onDone = NULL, onFail = NULL){
+        if(simRunning || isTRUE(session$userData$vftSimBusy)){
+          if(is.function(onFail)) onFail()
+          return(invisible(NULL))
+        }
         pos <- selectedNetwork_position
 
         #disable launch sim button
         shinyjs::disable("launchSim")
         simRunning <<- TRUE
 
-        vftDbgCat("TEST16")
-
         vftDbg(paste0("LAUNCH SIMULATION of scenario ", pos))
 
-        tr <- .vftT(session)
-        bar <- shiny::Progress$new(session = session)
-        bar$set(value = 0, message = .vftTrTxt("Daten werden vorbereitet", tr),
-                detail = .vftTrTxt("Wegnetz wird vorbereitet...", tr))
-        vftProviderLendBar(session, "network", bar, share = VFT_SIM_NETWORK_SHARE,
-                           message = "Daten werden vorbereitet",
-                           detail  = "Wegnetz wird vorbereitet...")
-        giveUp <- function(){
+        #the slot the result goes into, and its icon pulses until the run ends
+        slot <- if(!is.null(hw)) hw$bin else "normal"
+        pendingIcon <<- list(card = hwCard(pos), slot = slot)
+        sendSimIcons()
+
+        failed <- function(){
           simRunning <<- FALSE
-          vftProviderLendBar(session, "network", NULL)
-          try(bar$close(), silent = TRUE)
+          pendingIcon <<- NULL
+          sendSimIcons()
+          if(is.function(onFail)) onFail()
         }
 
-        vftScenarioNetworkThen(r, pos,
-                               enable = "launchSim",
-                               onFail = giveUp,
-                               then = function(scenario){
-
-        vftProviderLendBar(session, "network", NULL)
-
-        #Read from the SCENARIO rather than from r$selectedNetwork_r(), which is
-        #the older copy taken when the card was clicked.
-        network <- scenario$network
-        parking <- scenario$parking
-
-        #TWO BARS OVER ONE QUEUE POSITION. The first covers everything that is
-        #DATA - the AOI letters, the parking, the twenty-one weight columns, the
-        #population, the adjacency lists and the agents' goals. The second covers
-        #the ABM, and is not created until the ABM sends its first message, so
-        #there is one bar on screen at a time. See vftProgressPair() in
-        #R/async_helpers.R. The first is the bar made above, carried on from
-        #where the network's load left it.
-        #
-        #vftProgressPair, not ipc::AsyncProgress: the latter was the worst site
-        #in the app - 385 MB of session state serialised into the ABM worker,
-        #against 3.6 MB for the `network` the job actually needs.
-        progress <- vftProgressPair(message  = "Daten werden vorbereitet",
-                                    detail   = vftMsg("Dies sollte weniger als %d Sekunden dauern", 30),
-                                    message2 = "Simulation läuft",
-                                    bar      = bar,
-                                    from     = tryCatch(bar$getValue(), error = function(e) 0))
-        progPrep <- progress$prep
-        progSim  <- progress$sim
-        #a heatwave run's map, packed (terra::wrap) because a SpatRaster does not
-        #survive the trip into the worker; NULL for a normal run. Locals, so that
-        #vftFuture() finds and ships them with the rest.
-        heatPacked <- hw$packed
-        heatParams <- VFT_HEATWAVE
-
-        #LAUNCH PROMISE####
-        vftFuture({
-          vftSimulateScenario(network, finalPolygons, minThresh,
-                              parking          = parking,
-                              residentDivision = CONST_residentDivision,
-                              progPrep         = progPrep,
-                              progSim          = progSim,
-                              heat             = heatPacked,
-                              heatParams       = heatParams)
-        }, seed = TRUE, progress = progress)%...>%(function(out){
+        vftRunScenarioSim(session, r, pos, hw = hw,
+                          finalPolygons = finalPolygons, minThresh = minThresh,
+                          residentDivision = CONST_residentDivision,
+                          enable = "launchSim", onFail = failed,
+                          onDone = function(out){
 
         ## TREAT PROMISE RESULT ####
 
         simRunning <<- FALSE
+        pendingIcon <<- NULL
         #the list can have changed under a long run (the newVersions page
         #deletes scenarios); a result with no scenario left to hold it is dropped
         if(pos > length(r$networkList)){
           vftDbg(paste0("RESULTS DROPPED: no scenario ", pos, " any more"))
           shinyjs::enable("launchSim")
+          if(is.function(onFail)) onFail()
           return(invisible(NULL))
         }
         #a heatwave result belongs to the card whose map it ran on: if another
@@ -1749,50 +1800,32 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
         if(!is.null(hw) && !identical(hwCard(pos), hw$card)){
           vftDbg(paste0("RESULTS DROPPED: card ", hw$card, " is no longer at ", pos))
           shinyjs::enable("launchSim")
+          sendSimIcons()
+          if(is.function(onFail)) onFail()
           return(invisible(NULL))
         }
         #the map shows this result only if its scenario is still the one shown
         shown <- isTRUE(pos == selectedNetwork_position)
 
-        #The prepared network and its parking table - but only when THIS run
-        #prepared them. A re-run of an already-prepared card gets NULL for both
-        #and the graph never makes the return trip. Written first, because
-        #everything below reads r$networkList.
-        if(!is.null(out$network))
-          r$networkList[[pos]]$network <- out$network
-        if(!is.null(out$parking))
-          r$networkList[[pos]]$parking <- out$parking
-
-        #insert result into networkList
-        r$networkList[[pos]]$pathUsage <- out$results$pathUsage
-        r$networkList[[pos]]$dayPop <- out$results$dayPop
-        #a conflict search describes the simulation it ran on, not this one
-        r$networkList[[pos]]$conflicts <- NULL
-        #what this result is: a heatwave run says which map it ran on and with
-        #which parameters - plain values, so the save file keeps them. A normal
-        #run clears it. Read through vftScenarioHeatwave().
-        r$networkList[[pos]]$heatwave <- if(!is.null(hw))
-          list(bin = hw$bin, rev = hw$rev, base = hw$base, card = hw$card,
-               params = heatParams, summary = out$results$heatwave)
+        #the prepared network and parking (when this run prepared them), then
+        #the result into its slot - see vftStoreSimResult()
+        r$networkList[[pos]] <- vftStoreSimResult(r$networkList[[pos]], out, hw)
 
         #update button to reflect presence of pathUsage
         inputid <- r$versionsUI[[pos]]$inputId_select
 
-        vftDbg(paste0("inputId: ", inputid))
-
-        shinyjs::removeClass(inputid, "noSim")
-        shinyjs::addClass(inputid, "withSim")
-        #...and whether it is a heatwave result, with that time of day's sun
-        shinyjs::toggleClass(inputid, "vftHw", condition = !is.null(hw))
-        shinyjs::removeClass(inputid, "vftHwStale")
-        shinyjs::html(paste0(inputid, "-hw"), if(!is.null(hw)) heatBinIconSVG(hw$bin) else "")
-        shinyjs::runjs(sprintf("$('#%s').attr('title', %s);", session$ns(paste0(inputid, "-hw")),
-                               jsonlite::toJSON(if(!is.null(hw)) shiny::isolate(vftHeatwaveTag(i18n(), hw$bin))
-                                                else "", auto_unbox = TRUE)))
+        #the card's classes describe its NORMAL slot (the tests read .withSim);
+        #the icon strip, re-sent below or by the draw, says the rest
+        if(identical(slot, "normal")){
+          shinyjs::removeClass(inputid, "noSim")
+          shinyjs::addClass(inputid, "withSim")
+        }
 
         vftDbg("RESULTS DONE")
 
         if(shown){
+          #the map shows what has just been run
+          shownSlot <<- slot
           r$selectedNetwork_r(list(
             shiny::isolate(r$networkList[[pos]]$network)))
 
@@ -1802,22 +1835,15 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
           r$startingPointsSf <- NULL
 
           #PLOT OUTPUT####
-          vftDbg("Trying to plot:")
           plotPathUsage()
+        }else{
+          sendSimIcons()
         }
 
         #enable launch sim button
         shinyjs::enable("launchSim")
-
-        #vftAsyncError() closes BOTH bars of the pair - a job that dies during
-        #preparation must not leave the ABM bar armed for the rest of the
-        #session. See R/async_helpers.R.
-        })%...!%(function(e){
-          simRunning <<- FALSE
-          vftAsyncError(progress, "Agent-Based Model", "launchSim")(e)
+        if(is.function(onDone)) onDone(pos)
         })
-
-        })  #end vftScenarioNetworkThen(then = ...)
         invisible(NULL)
       }
 
@@ -1825,6 +1851,36 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
       #which the user is told about rather than given a normal run instead
       obsEvent_sim <- shiny::observeEvent(input$launchSim, {
         hw <- heatwaveRequest()
+        if(isFALSE(hw)) return(invisible(NULL))
+        launchSimulation(hw)
+      }, ignoreInit = TRUE)
+
+      #A click on one of a card's three icons (step5SimIconsTag()): select the
+      #card with that slot on the map, and - when the card has no result there
+      #yet - launch it. A sun's run needs a valid heat map, as from the launch
+      #button; without one the user is told and nothing runs.
+      obsSimIcon <- shiny::observeEvent(input$simIconClick, {
+        msg  <- input$simIconClick
+        slot <- msg$slot
+        if(!isTRUE(slot %in% VFT_SIM_SLOTS)) return(invisible(NULL))
+        pos <- NULL
+        for(i in seq_along(r$versionsUI))
+          if(identical(r$versionsUI[[i]]$inputId_select, msg$card)) pos <- i
+        if(is.null(pos) || pos > length(r$networkList)) return(invisible(NULL))
+
+        #the radio follows a sun, so the launch button re-runs what is shown
+        if(slot != "normal" && !identical(input$heatwaveBin, slot))
+          shiny::updateRadioButtons(session, "heatwaveBin", selected = slot)
+
+        selectCard(msg$card, slot)
+
+        if(!is.null(vftScenarioSim(r$networkList[[pos]], slot))) return(invisible(NULL))
+        if(simRunning){
+          shiny::showNotification(vftTrText(i18n(), "Es läuft bereits eine Simulation"),
+                                  type = "message", duration = 5)
+          return(invisible(NULL))
+        }
+        hw <- if(slot != "normal") heatwaveRequest(bin = slot, force = TRUE)
         if(isFALSE(hw)) return(invisible(NULL))
         launchSimulation(hw)
       }, ignoreInit = TRUE)
@@ -1839,6 +1895,185 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
       obsAutoLaunch <- shiny::observeEvent(autoLaunch(), {
         if(autoLaunch() > 0) launchSimulation()
       })
+
+      #### the heat mitigation search ####
+      #
+      #"Bereiche mit Hitzeminderungsbedarf erkennen", under the heatwave switch:
+      #where usage falls most from the card's normal run to its heatwave run(s)
+      #(vftHeatNeedHotspots(), R/heat_need_helpers.R). Stored on the card as
+      #sc$heatNeed, which nothing clears - it is guidance for painting, and the
+      #Hitzeminderung page shows it too. Nothing stored: a modal asks which time
+      #of day and lists what the search still needs, and runs it - the
+      #simulations here, one after the other; a missing heat map sends the
+      #user to the Hitzeminderung page, which computes it and does the rest
+      #(heatCreate()$detect). Stored: the button is a show/hide toggle, and
+      #the small one beside it asks again once the search is stale.
+      #
+      #`heatNeedOn` is the toggle. The circles are shapes, so plotPathUsage()'s
+      #clearShapes() takes them and heatNeedOnto() puts them back - which is
+      #what keeps them up across the tick and the suns.
+      heatNeedOn  <- FALSE
+      #the run in flight: an environment, so the cancel button can reach it
+      heatNeedJob <- NULL
+
+      heatNeedScenario <- function(pos = selectedNetwork_position) shiny::isolate({
+        nl <- r$networkList
+        if(is.null(pos) || pos > length(nl)) NULL else nl[[pos]]
+      })
+      #what is stored for the selected card, and whether it still describes it
+      heatNeedState <- function() shiny::isolate({
+        sc  <- heatNeedScenario()
+        rec <- sc$heatNeed
+        if(!is.list(rec) || is.null(rec$hotspots)) return(list(has = FALSE, stale = FALSE))
+        list(has = TRUE, rec = rec,
+             stale = isFALSE(vftHeatNeedFresh(sc, heatStoreRev(heatStore, hwCard()))))
+      })
+      heatNeedSync <- function() shiny::isolate({
+        st <- heatNeedState()
+        shinyjs::toggleClass("heatNeedRow", "vftHnHas",   condition = st$has)
+        shinyjs::toggleClass("heatNeedRow", "vftHnShown", condition = st$has && heatNeedOn)
+        shinyjs::toggleClass("heatNeedRow", "vftHnStale", condition = isTRUE(st$stale))
+        invisible(NULL)
+      })
+      #the circles onto `map` - a widget being built or a proxy - or off it
+      heatNeedOnto <- function(map) shiny::isolate({
+        map <- vftHeatNeedClear(map)
+        st  <- heatNeedState()
+        if(heatNeedOn && st$has && nrow(st$rec$hotspots))
+          map <- vftHeatNeedDraw(map, st$rec$hotspots, i18n(), stale = st$stale,
+                                 interactive = TRUE, pane = "layer3")
+        map
+      })
+
+      #what a search for `bins` still needs on the selected card
+      heatNeedPlanFor <- function(bins) shiny::isolate({
+        card <- hwCard()
+        vftHeatNeedPlan(heatNeedScenario(), bins,
+                        function(b) !is.null(card) && !is.null(heatStoreGet(heatStore, card, b, hwAoiKey())),
+                        heatStoreRev(heatStore, card))
+      })
+
+      heatNeedAsk <- function() shiny::isolate({
+        if(is.null(heatNeedScenario())) return(invisible(NULL))
+        rec <- heatNeedState()$rec
+        #asked again: what was asked last time; else the time of day chosen
+        choice <- if(!is.null(rec$bins)){
+          if(length(rec$bins) > 1) "both" else rec$bins
+        }else input$heatwaveBin
+        shiny::showModal(vftHeatNeedModal(session$ns, i18n(), choice))
+        invisible(NULL)
+      })
+
+      output$heatNeedPlan <- shiny::renderUI({
+        bins <- vftHeatNeedBins(input$heatNeedChoice)
+        shiny::req(length(bins))
+        vftHeatNeedPlanUI(heatNeedPlanFor(bins), bins, session$ns, shiny::isolate(i18n()), here = FALSE)
+      })
+
+      obsHeatNeedBtn <- shiny::observeEvent(input$heatNeedBtn, {
+        if(!heatNeedState()$has) return(heatNeedAsk())
+        heatNeedOn <<- !heatNeedOn
+        if(isTRUE(r$mapPresent)) heatNeedOnto(leaflet::leafletProxy("mapAreaLeaflet"))
+        heatNeedSync()
+      }, ignoreInit = TRUE)
+      obsHeatNeedRedo <- shiny::observeEvent(input$heatNeedRedo, heatNeedAsk(), ignoreInit = TRUE)
+      obsHeatNeedCancel <- shiny::observeEvent(input$heatNeedCancel, {
+        if(is.environment(heatNeedJob)) heatNeedJob$cancel <- TRUE
+      }, ignoreInit = TRUE)
+
+      #' The search itself, on what the card holds now. Stored even when it
+      #' finds nothing, so the next click is a toggle rather than another run.
+      heatNeedDetect <- function(pos, bins) shiny::isolate({
+        sc     <- r$networkList[[pos]]
+        normal <- vftSimEdges(vftScenarioSim(sc, "normal")$pathUsage)
+        heat   <- stats::setNames(lapply(bins, function(b) vftSimEdges(vftScenarioSim(sc, b)$pathUsage)), bins)
+        if(is.null(normal) || any(vapply(heat, is.null, logical(1)))) return(FALSE)
+        h <- vftTime("heatNeed:search", vftHeatNeedHotspots(normal, heat))
+        vftDbg(sprintf("heat need: %d circle(s) for %s", nrow(h), paste(bins, collapse = "+")))
+        r$networkList[[pos]]$heatNeed <- list(hotspots = h, bins = bins, key = vftHeatNeedKey(sc, bins))
+        heatNeedOn <<- TRUE
+        #deferred like plotPathUsage()'s proxy calls, so the two arrive in order
+        if(isTRUE(r$mapPresent) && pos == selectedNetwork_position)
+          heatNeedOnto(leaflet::leafletProxy("mapAreaLeaflet"))
+        heatNeedSync()
+        if(!nrow(h))
+          shiny::showNotification(vftTrText(i18n(), "Keine deutlichen Nutzungsrückgänge bei Hitze gefunden"),
+                                  type = "message", duration = 8)
+        TRUE
+      })
+
+      #' Run what the plan says is missing, one stage after the other, behind a
+      #' modal that cannot be dismissed (the card must not change under it),
+      #' then search. The cancel takes effect after the stage running.
+      heatNeedRun <- function(bins, plan) shiny::isolate({
+        pos <- selectedNetwork_position
+        binName <- function(b) vftTrText(i18n(), HEAT_BIN_KEYS[[b]])
+        steps <- list(); labels <- character(0)
+        if(plan$normal){
+          labels <- c(labels, vftTrText(i18n(), "Normale Simulation"))
+          steps  <- c(steps, list(function(nxt, fail) launchSimulation(NULL, onDone = function(p) nxt(), onFail = fail)))
+        }
+        for(b in plan$heatSims){
+          labels <- c(labels, sprintf(vftTrText(i18n(), "Hitzewellen-Simulation (%s)"), binName(b)))
+          steps  <- c(steps, list(local({ bb <- b; function(nxt, fail){
+            hw <- heatwaveRequest(bin = bb, force = TRUE)
+            if(!is.list(hw)) return(fail())
+            launchSimulation(hw, onDone = function(p) nxt(), onFail = fail)
+          }})))
+        }
+        labels <- c(labels, vftTrText(i18n(), "Unterschiede berechnen"))
+        steps  <- c(steps, list(function(nxt, fail) if(isTRUE(heatNeedDetect(pos, bins))) nxt() else fail()))
+
+        job <- new.env(); job$cancel <- FALSE; job$i <- 0L
+        heatNeedJob <<- job
+        shiny::showModal(vftHeatNeedRunModal(labels, session$ns, i18n()))
+        finish <- function(){
+          heatNeedJob <<- NULL
+          shiny::removeModal()
+          heatNeedSync()
+        }
+        fail <- function(){
+          finish()
+          shiny::showNotification(vftTrText(i18n(), "Die Erkennung wurde abgebrochen"),
+                                  type = "warning", duration = 8)
+        }
+        nxt <- function(){
+          vftHeatNeedStage(job$i)
+          if(isTRUE(job$cancel)) return(fail())
+          job$i <- job$i + 1L
+          if(job$i > length(steps)) return(finish())
+          steps[[job$i]](nxt, fail)
+        }
+        nxt()
+      })
+
+      obsHeatNeedGo <- shiny::observeEvent(input$heatNeedGo, {
+        choice <- input$heatNeedChoice
+        bins   <- vftHeatNeedBins(choice)
+        if(!length(bins) || is.null(heatNeedScenario())) return(invisible(NULL))
+        if(simRunning || isTRUE(session$userData$vftSimBusy) || is.environment(heatNeedJob)){
+          shiny::showNotification(vftTrText(i18n(), "Es läuft bereits eine Simulation"),
+                                  type = "message", duration = 5)
+          return(invisible(NULL))
+        }
+        if(is.null(finalPolygons)){
+          shiny::showNotification(vftTrText(i18n(), "Zielgebiete fehlen - zuerst Schritt 3"),
+                                  type = "warning", duration = 8)
+          return(invisible(NULL))
+        }
+        plan <- heatNeedPlanFor(bins)
+        shiny::removeModal()
+        #a heat map is missing: only the Hitzeminderung page can make it, and it
+        #runs the rest of the search there
+        if(length(plan$heatMaps)){
+          vu <- r$versionsUI
+          heatCreate(list(n = shiny::isolate(heatCreate()$n) + 1L,
+                          name = vu[[selectedNetwork_position]]$name,
+                          bin = plan$heatMaps[[1]], detect = choice))
+          return(invisible(NULL))
+        }
+        heatNeedRun(bins, plan)
+      }, ignoreInit = TRUE)
 
 
 #observe usage ####
@@ -2085,6 +2320,8 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
         sm    <- if(inherits(SM_pres, "SpatRaster")) terra::wrap(SM_pres) else SM_pres
         gen   <- conflictGen
         pos   <- selectedNetwork_position
+        #the result searched: the conflicts are kept in ITS slot
+        slot  <- shownSlot
         #what the stored result will be checked against on the newVersions page
         smKey <- vftConflictKey(SM_pres)
 
@@ -2121,7 +2358,11 @@ step5_server <- function(id, networkList, SM_pres, SMcolors, shape, i18n, curren
           #searched" if it ever needs to. The generation check above is what
           #makes `pos` safe: nothing has redrawn, so nothing has re-selected or
           #re-simulated. See vftScenarioConflicts() for when it stops counting.
-          r$networkList[[pos]]$conflicts <- list(hotspots = hotspots, smKey = smKey)
+          sim <- vftScenarioSim(r$networkList[[pos]], slot)
+          if(!is.null(sim)){
+            sim$conflicts <- list(hotspots = hotspots, smKey = smKey)
+            r$networkList[[pos]] <- vftScenarioSetSim(r$networkList[[pos]], slot, sim)
+          }
 
           #deferUntilFlush = FALSE: a promise callback is not an observer, nothing
           #here invalidates a reactive an output reads, so a deferred proxy call
@@ -2963,8 +3204,11 @@ vftDbgCat("FINISHED TIFF\n")
       r$selectedVersion <- r$versionsUI[[pos]]$name
 
       r$selectedNetwork_r( list(r$networkList[[pos]]$network) )
-      r$result$pathUsage <- r$networkList[[pos]]$pathUsage
-      r$result$dayPop    <- r$networkList[[pos]]$dayPop
+      #the slot the card opens on: the one shown last time if it has it
+      shownSlot <<- pickSlot(r$networkList[[pos]])
+      sim <- shownSim(pos)
+      r$result$pathUsage <- sim$pathUsage
+      r$result$dayPop    <- sim$dayPop
       #pathUsage (re)assigned: invalidate cached passageTable + starting points
       r$passageTable <- NULL
       r$startingPointsSf <- NULL
@@ -3046,7 +3290,8 @@ vftDbgCat("FINISHED TIFF\n")
       #--- 4. this visit's state. networkList and versionsUI are the point of the
       #whole exercise: newVersions writes them back into the app's `r`, and this
       #is where step 5 picks them up.
-      r$networkList        <- networkList
+      #saves from before the slots kept a heatwave result in the normal one
+      r$networkList        <- if(length(networkList)) lapply(networkList, vftScenarioMigrate) else networkList
       r$versionsUI         <- versionsUI
       #the scenario card to open on. Picked up from the app the same way as the
       #two lists above, because the newVersions page may have changed it since
@@ -3067,6 +3312,8 @@ vftDbgCat("FINISHED TIFF\n")
       #been cleared with r$result above
       r$agentCheckboxIsDisabled <- TRUE
       selectedNetwork_position <<- 1
+      #the heat mitigation circles start hidden on every visit
+      heatNeedOn <<- FALSE
 
       #--- 5. the protected areas, only when the perimeter actually changed.
       #Display-only geometry handed straight to leaflet, and a pure function of
